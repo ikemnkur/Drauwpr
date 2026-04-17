@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand: #f97316;
+  --color-brand-dark: #ea580c;
+  --color-brand-light: #fdba74;
+  --color-surface: #1e1e2e;
+  --color-surface-2: #2a2a3e;
+  --color-surface-3: #35354d;
+  --color-text: #e2e8f0;
+  --color-text-muted: #94a3b8;
+  --color-accent: #f97316;
+  --color-success: #22c55e;
+  --color-danger: #ef4444;
+}
+
+html {
+  background-color: #111827;
+  color: #e2e8f0;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #1e1e2e;
+}
+::-webkit-scrollbar-thumb {
+  background: #4a4a6a;
+  border-radius: 4px;
+}
+
+@keyframes flicker {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.8; transform: scale(1.05); }
+}
+.flame-flicker {
+  animation: flicker 0.4s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 5px rgba(249, 115, 22, 0.3); }
+  50% { box-shadow: 0 0 20px rgba(249, 115, 22, 0.6); }
+}
+.pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
