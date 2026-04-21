@@ -1,0 +1,28 @@
+name: Deploy DrauwperAppServer
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: Staging
+   
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+   
+    - name: Deploy to Digital Ocean
+      env:
+        SSH_PRIVATE_KEY: ${{ secrets.DO_SSH_KEY }}
+        DO_HOST: ${{ secrets.DO_HOST }}
+        DO_USER: ${{ secrets.DO_USER }}
+      run: |
+        mkdir -p ~/.ssh
+        echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+        chmod 600 ~/.ssh/deploy_key
+        ssh-keyscan -H $DO_HOST >> ~/.ssh/known_hosts
+        ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no $DO_USER@$DO_HOST \
+          'bash /root/DrauwperAppServer/deploy.sh'

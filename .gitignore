@@ -24,3 +24,9 @@ dist-ssr
 *.sw?
 server/service-account.json
 server/.env
+server/drop-files/*
+server/uploads/*
+server/logs/*
+
+
+.env
