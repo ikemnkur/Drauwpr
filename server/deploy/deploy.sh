@@ -2,9 +2,8 @@
 set -e
 
 PROJECT_ROOT="/root/DrauwperAppServer"
-PYTHON_APP_PATH="$PROJECT_ROOT/python"
+# PYTHON_APP_PATH="$PROJECT_ROOT/python"
 NODE_APP_NAME="drauwper-node"
-PYTHON_APP_NAME="python-ext-drauwper"
 
 echo "🚀 Starting deployment for DrauwperAppServer..."
 echo "=================================================="
@@ -36,34 +35,34 @@ else
     pm2 start server.cjs --name $NODE_APP_NAME
 fi
 
-# ============================================
-# Deploy Python Flask App
-# ============================================
-echo ""
-echo "🐍 Deploying Python Flask app..."
-echo "----------------------------"
+# # ============================================
+# # Deploy Python Flask App
+# # ============================================
+# echo ""
+# echo "🐍 Deploying Python Flask app..."
+# echo "----------------------------"
 
-cd $PYTHON_APP_PATH
+# cd $PYTHON_APP_PATH
 
-# Check if venv exists, create if not
-if [ ! -d "venv" ]; then
-    echo "⚠️  Virtual environment not found. Creating new venv..."
-    python3 -m venv venv
-    source venv/bin/activate
-    pip install --upgrade pip
-    echo "✅ Virtual environment created"
-else
-    echo "✅ Virtual environment found"
-    source venv/bin/activate
-fi
+# # Check if venv exists, create if not
+# if [ ! -d "venv" ]; then
+#     echo "⚠️  Virtual environment not found. Creating new venv..."
+#     python3 -m venv venv
+#     source venv/bin/activate
+#     pip install --upgrade pip
+#     echo "✅ Virtual environment created"
+# else
+#     echo "✅ Virtual environment found"
+#     source venv/bin/activate
+# fi
 
-# Install/update Python dependencies
-echo "📦 Installing Python dependencies..."
-pip install -r requirements.txt
+# # Install/update Python dependencies
+# echo "📦 Installing Python dependencies..."
+# pip install -r requirements.txt
 
-# Restart Python app with PM2
-echo "🔄 Restarting Python app: $PYTHON_APP_NAME"
-pm2 restart $PYTHON_APP_NAME
+# # Restart Python app with PM2
+# echo "🔄 Restarting Python app: $PYTHON_APP_NAME"
+# pm2 restart $PYTHON_APP_NAME
 
 # ============================================
 # Finalize
@@ -79,9 +78,9 @@ echo ""
 echo "🌐 Updating Nginx configuration..."
 echo "----------------------------"
 
-NGINX_CONF="$PROJECT_ROOT/deploy/nginx-drauwper.conf"
-NGINX_DEST="/etc/nginx/sites-available/drauwper"
-NGINX_LINK="/etc/nginx/sites-enabled/drauwper"
+NGINX_CONF="$PROJECT_ROOT/deploy/nginx-server.conf"
+NGINX_DEST="/etc/nginx/sites-available/default"
+NGINX_LINK="/etc/nginx/sites-enabled/default"
 
 if [ -f "$NGINX_CONF" ]; then
     cp "$NGINX_CONF" "$NGINX_DEST"
@@ -113,10 +112,6 @@ echo "📝 Recent logs (Node.js):"
 pm2 logs $NODE_APP_NAME --lines 5 --nostream
 
 echo ""
-echo "📝 Recent logs (Python):"
-pm2 logs $PYTHON_APP_NAME --lines 5 --nostream
-
-echo ""
 echo "🌐 Application URLs:"
 echo "   Node.js: http://142.93.82.161"
-echo "   Python:  http://142.93.82.161 (your configured route)"
+echo "   Python route (if enabled): https://server.scramblurr.com/py"

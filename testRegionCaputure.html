@@ -1,0 +1,752 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Source Link Setup</title>
+  <style>
+    :root {
+      --bg: #f7f9ff;
+      --surface: #ffffff;
+      --text: #17223b;
+      --muted: #5c6680;
+      --line: #dbe2f1;
+      --primary: #0d9488;
+      --primary-strong: #0f766e;
+      --danger: #b42318;
+      --danger-soft: #fde7e4;
+      --radius: 16px;
+      --shadow: 0 20px 40px rgba(23, 34, 59, 0.14);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "DM Sans", "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 8% 10%, #cffafe 0, transparent 35%),
+        radial-gradient(circle at 88% 90%, #ede9fe 0, transparent 28%),
+        var(--bg);
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    .shell {
+      width: min(920px, 100%);
+      display: grid;
+      grid-template-columns: 1.05fr 0.95fr;
+      gap: 20px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .panel {
+      padding: 26px;
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--muted);
+      letter-spacing: 0.12em;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(24px, 4vw, 34px);
+      line-height: 1.1;
+    }
+
+    .intro {
+      margin: 0 0 24px;
+      color: var(--muted);
+    }
+
+    .tiny {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    form {
+      display: grid;
+      gap: 14px;
+    }
+
+    label {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text);
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    input,
+    textarea,
+    select,
+    button {
+      font: inherit;
+    }
+
+    .field {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      padding: 11px 12px;
+      color: var(--text);
+      background: #fff;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .field:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.15);
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .actions {
+      margin-top: 6px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .btn {
+      border: 0;
+      border-radius: 12px;
+      padding: 12px 16px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: #fff;
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-strong);
+    }
+
+    .btn-ghost {
+      background: #edf2ff;
+      color: #2c3870;
+    }
+
+    .msg {
+      min-height: 20px;
+      margin: 2px 0 0;
+      font-size: 13px;
+      color: var(--danger);
+    }
+
+    .msg.ok {
+      color: #027a48;
+    }
+
+    .msg.info {
+      color: #075985;
+    }
+
+    .preview-header {
+      border-bottom: 1px solid var(--line);
+      padding: 14px 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .chip {
+      background: #e0f2fe;
+      color: #0c4a6e;
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .preview-wrap {
+      padding: 14px;
+      height: 420px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(180deg, #f8fbff, #f3f7ff);
+    }
+
+    .preview-target {
+      width: 100%;
+      height: 100%;
+      display: grid;
+      place-items: center;
+      overflow: auto;
+      border-radius: 12px;
+      background: #fff;
+      border: 1px solid var(--line);
+      padding: 6px;
+    }
+
+    iframe {
+      width: 100%;
+      height: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+    }
+
+    .empty {
+      width: 100%;
+      height: 100%;
+      border: 2px dashed #c6d4ef;
+      border-radius: 12px;
+      display: grid;
+      place-items: center;
+      color: #42516f;
+      text-align: center;
+      padding: 16px;
+    }
+
+    .embed-host {
+      width: 100%;
+      height: 100%;
+      display: grid;
+      place-items: center;
+      padding: 8px;
+    }
+
+    .capture-tools {
+      margin-top: 14px;
+      border-top: 1px solid var(--line);
+      padding-top: 14px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .canvas-wrap {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      padding: 8px;
+      min-height: 120px;
+      display: grid;
+      place-items: center;
+    }
+
+    #captureCanvas {
+      max-width: 100%;
+      border-radius: 8px;
+      display: none;
+    }
+
+    .warn {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: var(--danger-soft);
+      color: #7a271a;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    @media (max-width: 860px) {
+      .shell {
+        grid-template-columns: 1fr;
+      }
+
+      .preview-wrap {
+        height: 320px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="card panel">
+      <p class="eyebrow">Source Setup</p>
+      <h1>Attach a Link Source</h1>
+      <p class="intro">Use either a direct URL or a full embed snippet. The preview panel updates so you can capture it to canvas and apply filters.</p>
+
+      <form id="sourceForm" novalidate>
+        <div>
+          <label for="sourceUrl">Source URL</label>
+          <input id="sourceUrl" class="field" type="url" placeholder="https://example.com/content" />
+          <p class="tiny">Use this for normal links. If embed code is provided below, embed code is prioritized.</p>
+        </div>
+
+        <div>
+          <label for="embedCode">Embed Code (optional)</label>
+          <textarea id="embedCode" class="field" rows="6" placeholder="Paste iframe or blockquote embed code here"></textarea>
+          <p class="tiny">Supports common iframe embeds, Twitter blockquotes, and Instagram blockquotes.</p>
+        </div>
+
+        <div class="row">
+          <div>
+            <label for="sourceName">Source Label</label>
+            <input id="sourceName" class="field" type="text" maxlength="50" placeholder="Campaign page" />
+          </div>
+          <div>
+            <label for="sourceType">Source Type</label>
+            <select id="sourceType" class="field">
+              <option value="Web Link">Web Link</option>
+              <option value="Embed">Embed</option>
+              <option value="Media">Media</option>
+            </select>
+          </div>
+        </div>
+
+        <p id="message" class="msg" role="status" aria-live="polite"></p>
+
+        <div class="actions">
+          <button type="submit" class="btn btn-primary">Use This Source</button>
+          <button type="button" id="captureBtn" class="btn btn-ghost">Capture Preview to Canvas</button>
+          <button type="button" id="clearBtn" class="btn btn-ghost">Clear</button>
+        </div>
+
+        <section class="capture-tools">
+          <div>
+            <label for="captureMode">Capture Mode</label>
+            <select id="captureMode" class="field">
+              <option value="region">Region Capture API (target preview only)</option>
+              <option value="screen">Screen Capture API (full selected tab/window)</option>
+              <option value="dom">DOM Snapshot (html2canvas fallback)</option>
+            </select>
+            <p class="tiny">For best results choose "This Tab" when prompted. Localhost is allowed because it is a secure context.</p>
+          </div>
+          <div>
+            <label for="filterSelect">Canvas Filter</label>
+            <select id="filterSelect" class="field">
+              <option value="none">None</option>
+              <option value="grayscale(100%)">Grayscale</option>
+              <option value="contrast(130%)">High Contrast</option>
+              <option value="saturate(160%)">Vivid</option>
+              <option value="sepia(80%)">Sepia</option>
+              <option value="blur(2px)">Soft Blur</option>
+            </select>
+          </div>
+          <div class="canvas-wrap">
+            <canvas id="captureCanvas" width="640" height="360" aria-label="Captured preview canvas"></canvas>
+            <p id="canvasHint" class="tiny">Captured canvas appears here after clicking "Capture Preview to Canvas".</p>
+          </div>
+        </section>
+      </form>
+    </section>
+
+    <section class="card">
+      <div class="preview-header">
+        <span id="previewTitle">No source selected</span>
+        <span id="previewType" class="chip">Web Link</span>
+      </div>
+
+      <div class="preview-wrap" id="previewWrap">
+        <div class="preview-target" id="previewTarget">
+          <div class="empty">Enter a valid URL or embed code to load a preview here.</div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script>
+    const form = document.getElementById('sourceForm');
+    const sourceUrl = document.getElementById('sourceUrl');
+    const embedCode = document.getElementById('embedCode');
+    const sourceName = document.getElementById('sourceName');
+    const sourceType = document.getElementById('sourceType');
+    const message = document.getElementById('message');
+    const previewTarget = document.getElementById('previewTarget');
+    const previewTitle = document.getElementById('previewTitle');
+    const previewType = document.getElementById('previewType');
+    const clearBtn = document.getElementById('clearBtn');
+    const captureBtn = document.getElementById('captureBtn');
+    const captureMode = document.getElementById('captureMode');
+    const filterSelect = document.getElementById('filterSelect');
+    const captureCanvas = document.getElementById('captureCanvas');
+    const canvasHint = document.getElementById('canvasHint');
+    const captureCtx = captureCanvas.getContext('2d', { willReadFrequently: true });
+    let captureBaseCanvas = null;
+
+    function setMessage(text, mode) {
+      message.textContent = text;
+      message.classList.remove('ok', 'info');
+      if (mode === 'ok' || mode === 'info') {
+        message.classList.add(mode);
+      }
+    }
+
+    function getSafeUrl(value) {
+      try {
+        const parsed = new URL(value.trim());
+        if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+          return parsed;
+        }
+      } catch {
+        return null;
+      }
+      return null;
+    }
+
+    function setPreview(url) {
+      const iframe = document.createElement('iframe');
+      iframe.loading = 'lazy';
+      iframe.referrerPolicy = 'strict-origin-when-cross-origin';
+      iframe.src = url;
+
+      const host = document.createElement('div');
+      host.className = 'embed-host';
+      host.appendChild(iframe);
+
+      previewTarget.innerHTML = '';
+      previewTarget.appendChild(host);
+    }
+
+    function isSafeHttpUrl(value) {
+      const parsed = getSafeUrl(value);
+      return parsed ? parsed.toString() : null;
+    }
+
+    function injectTwitterWidgetScriptIfNeeded() {
+      if (document.querySelector('script[data-twitter-widget="true"]')) {
+        if (window.twttr && window.twttr.widgets) {
+          window.twttr.widgets.load(previewTarget);
+        }
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.async = true;
+      script.src = 'https://platform.twitter.com/widgets.js';
+      script.charset = 'utf-8';
+      script.dataset.twitterWidget = 'true';
+      script.onload = () => {
+        if (window.twttr && window.twttr.widgets) {
+          window.twttr.widgets.load(previewTarget);
+        }
+      };
+      document.body.appendChild(script);
+    }
+
+    function injectInstagramWidgetScriptIfNeeded() {
+      if (document.querySelector('script[data-instagram-widget="true"]')) {
+        if (window.instgrm && window.instgrm.Embeds) {
+          window.instgrm.Embeds.process();
+        }
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.async = true;
+      script.src = 'https://www.instagram.com/embed.js';
+      script.dataset.instagramWidget = 'true';
+      script.onload = () => {
+        if (window.instgrm && window.instgrm.Embeds) {
+          window.instgrm.Embeds.process();
+        }
+      };
+      document.body.appendChild(script);
+    }
+
+    function renderEmbedFromCode(rawEmbed) {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(rawEmbed, 'text/html');
+      const iframe = doc.querySelector('iframe');
+      const twitterBlockquote = doc.querySelector('blockquote.twitter-tweet');
+      const instagramBlockquote = doc.querySelector('blockquote.instagram-media');
+
+      previewTarget.innerHTML = '';
+      const host = document.createElement('div');
+      host.className = 'embed-host';
+
+      if (iframe) {
+        const src = isSafeHttpUrl(iframe.getAttribute('src') || '');
+        if (!src) {
+          return { ok: false, reason: 'Embed iframe has an invalid src URL.' };
+        }
+
+        const sanitized = document.createElement('iframe');
+        sanitized.src = src;
+        sanitized.loading = 'lazy';
+        sanitized.referrerPolicy = iframe.getAttribute('referrerpolicy') || 'strict-origin-when-cross-origin';
+        sanitized.title = iframe.getAttribute('title') || 'Embedded content';
+        sanitized.allow = iframe.getAttribute('allow') || '';
+        if (iframe.hasAttribute('allowfullscreen')) {
+          sanitized.setAttribute('allowfullscreen', '');
+        }
+        host.appendChild(sanitized);
+        previewTarget.appendChild(host);
+        return { ok: true, labelHint: new URL(src).hostname };
+      }
+
+      if (twitterBlockquote) {
+        const sanitizedBlockquote = document.createElement('blockquote');
+        sanitizedBlockquote.className = 'twitter-tweet';
+        const dataMediaMaxWidth = twitterBlockquote.getAttribute('data-media-max-width');
+        if (dataMediaMaxWidth) {
+          sanitizedBlockquote.setAttribute('data-media-max-width', dataMediaMaxWidth);
+        }
+        sanitizedBlockquote.innerHTML = twitterBlockquote.innerHTML;
+        host.appendChild(sanitizedBlockquote);
+        previewTarget.appendChild(host);
+        injectTwitterWidgetScriptIfNeeded();
+        return { ok: true, labelHint: 'Twitter Embed' };
+      }
+
+      if (instagramBlockquote) {
+        const permalinkFromData = instagramBlockquote.getAttribute('data-instgrm-permalink') || '';
+        const fallbackAnchor = instagramBlockquote.querySelector('a[href]');
+        const permalink = isSafeHttpUrl(permalinkFromData) || isSafeHttpUrl((fallbackAnchor && fallbackAnchor.getAttribute('href')) || '');
+        if (!permalink) {
+          return { ok: false, reason: 'Instagram embed is missing a valid permalink URL.' };
+        }
+
+        const sanitizedBlockquote = document.createElement('blockquote');
+        sanitizedBlockquote.className = 'instagram-media';
+        sanitizedBlockquote.setAttribute('data-instgrm-permalink', permalink);
+        sanitizedBlockquote.setAttribute('data-instgrm-version', instagramBlockquote.getAttribute('data-instgrm-version') || '14');
+        if (instagramBlockquote.hasAttribute('data-instgrm-captioned')) {
+          sanitizedBlockquote.setAttribute('data-instgrm-captioned', '');
+        }
+
+        const fallbackLink = document.createElement('a');
+        fallbackLink.href = permalink;
+        fallbackLink.target = '_blank';
+        fallbackLink.rel = 'noopener noreferrer';
+        fallbackLink.textContent = 'View this post on Instagram';
+        sanitizedBlockquote.appendChild(fallbackLink);
+
+        host.appendChild(sanitizedBlockquote);
+        previewTarget.appendChild(host);
+        injectInstagramWidgetScriptIfNeeded();
+        return { ok: true, labelHint: 'Instagram Embed' };
+      }
+
+      return { ok: false, reason: 'Unsupported embed code. Paste an iframe, twitter-tweet blockquote, or instagram-media blockquote snippet.' };
+    }
+
+    function applyFilterToCanvas() {
+      if (!captureBaseCanvas) {
+        setMessage('Capture a frame first, then apply a filter.', 'info');
+        return;
+      }
+      captureCanvas.width = captureBaseCanvas.width;
+      captureCanvas.height = captureBaseCanvas.height;
+      captureCtx.clearRect(0, 0, captureCanvas.width, captureCanvas.height);
+      captureCtx.filter = filterSelect.value;
+      captureCtx.drawImage(captureBaseCanvas, 0, 0);
+      captureCtx.filter = 'none';
+      captureCanvas.style.display = 'block';
+      canvasHint.textContent = 'Canvas captured. Change filter to preview processing.';
+    }
+
+    function isSecureContextForCapture() {
+      return window.isSecureContext || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    }
+
+    function createBaseCanvasFromSource(sourceCanvas) {
+      captureBaseCanvas = document.createElement('canvas');
+      captureBaseCanvas.width = sourceCanvas.width;
+      captureBaseCanvas.height = sourceCanvas.height;
+      const baseCtx = captureBaseCanvas.getContext('2d', { willReadFrequently: true });
+      baseCtx.drawImage(sourceCanvas, 0, 0);
+    }
+
+    function createBaseCanvasFromVideo(video, maxWidth) {
+      const sourceWidth = video.videoWidth;
+      const sourceHeight = video.videoHeight;
+      const scale = sourceWidth > maxWidth ? maxWidth / sourceWidth : 1;
+      const width = Math.max(1, Math.round(sourceWidth * scale));
+      const height = Math.max(1, Math.round(sourceHeight * scale));
+      captureBaseCanvas = document.createElement('canvas');
+      captureBaseCanvas.width = width;
+      captureBaseCanvas.height = height;
+      const baseCtx = captureBaseCanvas.getContext('2d', { willReadFrequently: true });
+      baseCtx.drawImage(video, 0, 0, width, height);
+    }
+
+    async function captureWithHtml2Canvas() {
+      if (!window.html2canvas) {
+        setMessage('Capture library did not load. Check your network and try again.', '');
+        return;
+      }
+
+      try {
+        const snapshot = await window.html2canvas(previewTarget, {
+          backgroundColor: '#ffffff',
+          useCORS: true,
+          allowTaint: false,
+          logging: false
+        });
+        createBaseCanvasFromSource(snapshot);
+        applyFilterToCanvas();
+        setMessage('DOM snapshot captured. If blank, switch to Screen or Region capture mode.', 'ok');
+      } catch (error) {
+        setMessage('DOM snapshot failed. Third-party embeds often block pixel readback. Try Screen or Region mode.', '');
+      }
+    }
+
+    async function captureWithDisplayApi(useRegionCrop) {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+        setMessage('Display capture is not supported in this browser.', '');
+        return;
+      }
+
+      if (!isSecureContextForCapture()) {
+        setMessage('Screen/Region capture requires a secure context (https or localhost).', '');
+        return;
+      }
+
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          preferCurrentTab: true,
+          video: { displaySurface: 'browser' },
+          audio: false
+        });
+
+        const [videoTrack] = stream.getVideoTracks();
+        if (!videoTrack) {
+          setMessage('No video track available from display capture.', '');
+          return;
+        }
+
+        if (useRegionCrop) {
+          if (!window.CropTarget || typeof window.CropTarget.fromElement !== 'function' || typeof videoTrack.cropTo !== 'function') {
+            setMessage('Region Capture API is unavailable here. Switch to Screen Capture mode.', '');
+            return;
+          }
+          try {
+            const cropTarget = await window.CropTarget.fromElement(previewTarget);
+            await videoTrack.cropTo(cropTarget);
+          } catch (error) {
+            setMessage('Region crop failed. Make sure you selected "This Tab" and try again.', '');
+            return;
+          }
+        }
+
+        const video = document.createElement('video');
+        video.muted = true;
+        video.playsInline = true;
+        video.srcObject = stream;
+        await video.play();
+
+        if (!video.videoWidth || !video.videoHeight) {
+          await new Promise((resolve) => {
+            video.onloadedmetadata = () => resolve();
+          });
+        }
+
+        createBaseCanvasFromVideo(video, 1600);
+        applyFilterToCanvas();
+        setMessage(useRegionCrop
+          ? 'Region capture complete. If result is wrong, re-run and choose "This Tab".'
+          : 'Screen capture complete. Captured the selected display surface frame.', 'ok');
+      } catch (error) {
+        if (error && error.name === 'NotAllowedError') {
+          setMessage('Capture was cancelled or permission was denied.', '');
+        } else {
+          setMessage('Display capture failed. Try again and choose a share source.', '');
+        }
+      } finally {
+        if (stream) {
+          stream.getTracks().forEach((track) => track.stop());
+        }
+      }
+    }
+
+    async function capturePreviewToCanvas() {
+      if (!previewTarget.firstElementChild || previewTarget.querySelector('.empty')) {
+        setMessage('Load a source preview before capturing.', '');
+        return;
+      }
+
+      const mode = captureMode.value;
+      if (mode === 'dom') {
+        await captureWithHtml2Canvas();
+        return;
+      }
+
+      if (mode === 'screen') {
+        await captureWithDisplayApi(false);
+        return;
+      }
+
+      await captureWithDisplayApi(true);
+    }
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+
+      const embedRaw = embedCode.value.trim();
+      if (embedRaw) {
+        const result = renderEmbedFromCode(embedRaw);
+        if (!result.ok) {
+          setMessage(result.reason, '');
+          return;
+        }
+        const label = sourceName.value.trim() || result.labelHint || 'Embed Source';
+        previewTitle.textContent = label;
+        previewType.textContent = 'Embed';
+        sourceType.value = 'Embed';
+        setMessage('Embed accepted and preview updated.', 'ok');
+        return;
+      }
+
+      const parsed = getSafeUrl(sourceUrl.value);
+      if (!parsed) {
+        setMessage('Please enter a valid http or https URL, or paste embed code.', '');
+        return;
+      }
+
+      const label = sourceName.value.trim() || parsed.hostname;
+      previewTitle.textContent = label;
+      previewType.textContent = sourceType.value;
+
+      setPreview(parsed.toString());
+
+      setMessage('Source link accepted and preview updated.', 'ok');
+    });
+
+    captureBtn.addEventListener('click', () => {
+      capturePreviewToCanvas();
+    });
+
+    filterSelect.addEventListener('change', () => {
+      applyFilterToCanvas();
+    });
+
+    clearBtn.addEventListener('click', () => {
+      form.reset();
+      captureMode.value = 'region';
+      previewType.textContent = 'Web Link';
+      previewTitle.textContent = 'No source selected';
+      setMessage('', '');
+      previewTarget.innerHTML = '<div class="empty">Enter a valid URL or embed code to load a preview here.</div>';
+      captureBaseCanvas = null;
+      captureCanvas.style.display = 'none';
+      canvasHint.textContent = 'Captured canvas appears here after clicking "Capture Preview to Canvas".';
+    });
+  </script>
+</body>
+</html>
