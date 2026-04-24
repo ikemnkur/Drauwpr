@@ -291,7 +291,91 @@ server.use((req, res, next) => {
 
 // Root route
 server.get('/', (req, res) => {
-  res.sendFile(__dirname + '/public/index.html');
+  const initialUptimeSeconds = Math.max(0, Math.floor((Date.now() - analytics.startTime) / 1000));
+  res.type('html').send(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Drauwper Server</title>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      font-family: Arial, sans-serif;
+      background: #f4f6f8;
+      color: #1f2937;
+    }
+    .card {
+      width: min(92vw, 560px);
+      background: #ffffff;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      padding: 28px;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.08);
+      text-align: center;
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: 1.6rem;
+    }
+    p {
+      margin: 8px 0;
+      line-height: 1.4;
+    }
+    .uptime {
+      margin: 12px 0 20px;
+      font-weight: 700;
+      color: #111827;
+    }
+    .btn {
+      display: inline-block;
+      text-decoration: none;
+      color: #ffffff;
+      background: #2563eb;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Welcome to Drauwper Server</h1>
+    <p>Backend service is running.</p>
+    <p class="uptime">Uptime: <span id="uptime">0s</span></p>
+    <a class="btn" href="/admin/login">Go to Admin Login</a>
+  </main>
+  <script>
+    const startedAtSeconds = ${initialUptimeSeconds};
+    const startNow = Date.now();
+
+    function formatDuration(totalSeconds) {
+      const days = Math.floor(totalSeconds / 86400);
+      const hours = Math.floor((totalSeconds % 86400) / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      const parts = [];
+      if (days) parts.push(days + 'd');
+      if (hours || days) parts.push(hours + 'h');
+      if (minutes || hours || days) parts.push(minutes + 'm');
+      parts.push(seconds + 's');
+      return parts.join(' ');
+    }
+
+    function renderUptime() {
+      const elapsed = Math.floor((Date.now() - startNow) / 1000);
+      const total = startedAtSeconds + elapsed;
+      document.getElementById('uptime').textContent = formatDuration(total);
+    }
+
+    renderUptime();
+    setInterval(renderUptime, 1000);
+  </script>
+</body>
+</html>`);
 });
 
 // test hello world route
@@ -5526,9 +5610,12 @@ server.post(PROXY + '/api/verify-stripe-payment', async (req, res) => {
     });
   }
 
-  const pkg = packageData;
-  const timeRangeStart = timeRange.start;   // unix ms
-  const timeRangeEnd   = timeRange.end;     // unix ms
+  // fetchRecentStripePayments(20, true).then(result => {
+
+  const pkg = Math.ceil(packageData/1000)*1000; // round to nearest 100 to account for the promotial discount and avoid mismatch with Stripe amounts (e.g. $9.85 -> 985 cents, but we store as 100)
+  const timeOffsetMs = 3 * 60 * 1000; // 3 minutes buffer on either side
+  const timeRangeStart = timeRange.start - timeOffsetMs;   // unix ms
+  const timeRangeEnd   = timeRange.end + timeOffsetMs;     // unix ms
 
   // Normalise user identity fields for soft-matching.
   const userEmail = (user.email || '').toLowerCase().trim();
@@ -5687,18 +5774,18 @@ server.post(PROXY + '/api/verify-stripe-payment', async (req, res) => {
 
     // ── Step 3: Package lookup ─────────────────────────────────────────────
     const PACKAGES = [
-      { credits: 5000,   dollars: 5,   label: '$5.00',   color: '#2196f3', priceId: 'price_1SR9lZEViYxfJNd20x2uwukQ' },
-      { credits: 10000,  dollars: 10,  label: '$10.00',  color: '#9c27b0', popular: true, priceId: 'price_1SR9kzEViYxfJNd27aLA7kFW' },
-      { credits: 20000,  dollars: 20,  label: '$20.00',  color: '#f57c00', priceId: 'price_1SR9mrEViYxfJNd2dD5NHFoL' },
-      { credits: 25000,  dollars: 25,  label: '$25.00',  color: '#e91e63' },
-      { credits: 50000,  dollars: 50,  label: '$50.00',  color: '#ff5722' },
-      { credits: 100000, dollars: 100, label: '$100.00', color: '#795548' },
+      { credits: 5000,   dollars: 5.25,   label: '$5.00',   color: '#2196f3', priceId: 'price_1SR9lZEViYxfJNd20x2uwukQ' },
+      { credits: 10000,  dollars: 9.85,  label: '$10.00',  color: '#9c27b0', popular: true, priceId: 'price_1SR9kzEViYxfJNd27aLA7kFW' },
+      // { credits: 20000,  dollars: 20,  label: '$20.00',  color: '#f57c00', priceId: 'price_1SR9mrEViYxfJNd2dD5NHFoL' },
+      { credits: 25000,  dollars: 24.50,  label: '$25.00',  color: '#e91e63' },
+      { credits: 50000,  dollars: 48.50,  label: '$50.00',  color: '#ff5722' },
+      { credits: 100000, dollars: 95, label: '$100.00', color: '#795548' },
     ];
 
-    const matchedPackage = PACKAGES.find(p => p.dollars === potentialVerifiedPayment.amount / 100);
+    const matchedPackage = PACKAGES.find(p => Math.round(p.dollars) === Math.round(potentialVerifiedPayment.amount / 100)); //round to nearest dollar to avoid minor discrepancies (e.g. $9.85 stored as 985 but package = 1000).
 
     if (!matchedPackage) {
-      console.error(`[ERROR] No package for amount $${potentialVerifiedPayment.amount / 100}`);
+      console.error(`[ERROR] No package for amount $${Math.round(potentialVerifiedPayment.amount / 100)}`);
       return res.status(400).json({ error: 'Unrecognized payment amount — package not found', status: 'invalid_amount' });
     }
 
@@ -5749,7 +5836,7 @@ async function stripeCreditPurchases(data) {
       transactionId,
       blockExplorerLink,
       currency,
-      amount,
+      // amount,
       cryptoAmount,
       rate,
       session_id,
@@ -5759,6 +5846,8 @@ async function stripeCreditPurchases(data) {
       dollars,
       credits
     } = data;
+
+    const amount = Math.round((data.amount || 0)/ 100)*100; // Store amount in cents to avoid floating point issues. round to nearest 100 cents to tolerate small promotional discounts (e.g. $9.85 stored as 985 but package = 1000).
 
     console.log('💰 Logging Stripe purchase for user:', username);
 
@@ -5783,16 +5872,16 @@ async function stripeCreditPurchases(data) {
       console.log('✅ Logging purchase for user:', username);
 
       const PACKAGES = [
-        { credits: 2500, dollars: 2.5, label: "$2.50 Package", color: '#4caf50', priceId: 'price_1SR9nNEViYxfJNd2pijdhiBM' },
-        { credits: 5000, dollars: 5, label: "$5.00 Package", color: '#2196f3', priceId: 'price_1SR9lZEViYxfJNd20x2uwukQ' },
-        { credits: 10000, dollars: 10, label: "$10.00 Package", color: '#9c27b0', popular: true, priceId: 'price_1SR9kzEViYxfJNd27aLA7kFW' },
-        { credits: 20000, dollars: 20, label: "$20.00 Package", color: '#f57c00', priceId: 'price_1SR9mrEViYxfJNd2dD5NHFoL' },
-        { credits: 25000, dollars: 25, label: "$25.00 Package", color: '#e91e63' },
-        { credits: 50000, dollars: 50, label: "$50.00 Package", color: '#ff5722' },
-        { credits: 100000, dollars: 100, label: "$100.00 Package", color: '#795548' },
+        // { credits: 2500, dollars: 2.5, label: "$2.50 Package", color: '#4caf50', priceId: 'price_1SR9nNEViYxfJNd2pijdhiBM' },
+        { credits: 5000, dollars: 5.25, label: "$5.00 Package", color: '#2196f3', priceId: 'price_1SR9lZEViYxfJNd20x2uwukQ' },
+        { credits: 10000, dollars: 9.85, label: "$10.00 Package", color: '#9c27b0', popular: true, priceId: 'price_1SR9kzEViYxfJNd27aLA7kFW' },
+        // { credits: 20000, dollars: 20, label: "$20.00 Package", color: '#f57c00', priceId: 'price_1SR9mrEViYxfJNd2dD5NHFoL' },
+        { credits: 25000, dollars: 24.50, label: "$25.00 Package", color: '#e91e63' },
+        { credits: 50000, dollars: 48.50, label: "$50.00 Package", color: '#ff5722' },
+        { credits: 100000, dollars: 95, label: "$100.00 Package", color: '#795548' },
       ];
 
-      const packageData = PACKAGES.find(pkg => pkg.dollars === amount / 100);
+      const packageData = PACKAGES.find(pkg => Math.round(pkg.dollars) === Math.round(amount / 100)); //round to nearest dollar to avoid minor discrepancies (e.g. $9.85 stored as 985 but package = 1000).
 
       if (!packageData) {
         console.error(`[ERROR] stripeCreditPurchases: No package matched amount $${amount / 100}`);
@@ -5811,11 +5900,11 @@ async function stripeCreditPurchases(data) {
         amount,
         cryptoAmount,
         package: packageData.label,
-        rate,
+        // rate,
         date: Date.now(),
         time: new Date().toISOString(),
         session_id,
-        orderLoggingEnabled,
+        // orderLoggingEnabled,
         userAgent,
         ip,
         credits: packageData.credits,
@@ -5826,7 +5915,7 @@ async function stripeCreditPurchases(data) {
       await CreateNotification(
         'credits_purchased',
         'Credits Purchased',
-        `You have purchased ${amount} credits for $${dollars}.`,
+        `You have purchased ${amount*10} credits for $${dollars}.`,
         'purchase',
         username || 'anonymous'
       );
@@ -6404,7 +6493,7 @@ server.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 4000;
 server.listen(PORT, async () => {
   try {
     // Test database connection
