@@ -2,7 +2,7 @@
 
 # --- CONFIGURATION ---
 DOMAIN="drauwper.com"      # Replace with your domain or IP
-NODE_PORT=3000            # The port your Node.js app is running on
+NODE_PORT=4000            # The port your Node.js app is running on
 CONFIG_NAME="drauwper_app"    # Name for the Nginx config file
 
 # 1. Update system and install Nginx

@@ -60,7 +60,7 @@ export default function BuyStripe() {
     setIsVerifying(true);
     setVerifyResult(null);
     try {
-      const response = await api.post<{ status?: string }>('/api/5', {
+      const response = await api.post<{ status?: string }>('/api/verify-stripe-payment', {
         timeRange: { start: startTimestamp, end: Date.now() },
         user: { id: user.id, username: user.username, email: user.email },
         packageData: { credits: pendingPack.credits, amount: pendingPack.dollars * 100, dollars: pendingPack.dollars },

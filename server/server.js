@@ -5519,171 +5519,215 @@ server.post(PROXY + '/api/verify-stripe-payment', async (req, res) => {
 
   const { timeRange, user, packageData } = req.body;
 
-  const paymentData = {
-    timeRange,
-    package: packageData,
-    user
-  };
+  if (!packageData || !timeRange || !user) {
+    return res.status(400).json({
+      error: 'Missing required fields: packageData, timeRange, and user are required',
+      status: 'invalid_input'
+    });
+  }
+
+  const pkg = packageData;
+  const timeRangeStart = timeRange.start;   // unix ms
+  const timeRangeEnd   = timeRange.end;     // unix ms
+
+  // Normalise user identity fields for soft-matching.
+  const userEmail = (user.email || '').toLowerCase().trim();
+  const userPhone = (user.phone || '').replace(/\D/g, '');
+  const userNameFull = ((user.name || '') + ' ' + (user.username || '')).toLowerCase().trim();
+
+  console.log(`[INFO] verify-stripe-payment: pkg=${JSON.stringify(pkg)}, timeRange=${JSON.stringify(timeRange)}, user=${userEmail || user.username}`);
+
+  // ─── Scoring helper ────────────────────────────────────────────────────
+  // Returns a score 0-4 for a candidate record.
+  // Decisive: time window (required) + amount (required).
+  // Soft signals: email, phone, name each add +1 but blank/missing fields do NOT penalise.
+  function scoreBillingMatch(billing, rawAmount, createdUnixSec) {
+    // Time check (decisive — ms boundaries)
+    const createdMs = createdUnixSec * 1000;
+    if (timeRangeStart && createdMs < timeRangeStart) return -1;
+    if (timeRangeEnd   && createdMs > timeRangeEnd)   return -1;
+
+    // Amount check (decisive)
+    if (rawAmount !== pkg.amount) return -1;
+
+    let score = 0;
+
+    // Email: only count when both sides are non-empty
+    const bEmail = (billing.email || '').toLowerCase().trim();
+    if (userEmail && bEmail && bEmail === userEmail) score += 2;  // email is primary soft signal — weight 2
+
+    // Phone: strip non-digits for loose comparison
+    const bPhone = (billing.phone || '').replace(/\D/g, '');
+    if (userPhone && bPhone && bPhone === userPhone) score += 1;
+
+    // Name: check if user name string appears anywhere in billing name
+    const bName = (billing.name || '').toLowerCase().trim();
+    if (userNameFull && bName && (bName.includes(userNameFull) || userNameFull.includes(bName))) score += 1;
+
+    return score;
+  }
+  // ───────────────────────────────────────────────────────────────────────
 
   try {
-    // post to a local flask server for verification
-    // const flaskResponse = await axios.post('http://0.0.0.0:5005/verify-payment-data', paymentData, async (req, res) => {
-    //   return paymentData;
-    // }, {
-    //   headers: { 'Content-Type': 'application/json' },
-    //   timeout: 30000
-    // });
+    // ── Step 1: Check stripeTransactions DB (rawPayload contains full Stripe object) ──
+    console.log('[INFO] Checking stripeTransactions table...');
 
-    const { package: pkg, timeRange, user } = paymentData;
+    // Pull rows that are in the right time window and amount, with rawPayload present.
+    // stripeCreatedAt is a DATETIME stored as seconds-precision; convert boundary to MySQL DATETIME.
+    const startDT = timeRangeStart ? new Date(timeRangeStart).toISOString().slice(0, 19).replace('T', ' ') : null;
+    const endDT   = timeRangeEnd   ? new Date(timeRangeEnd).toISOString().slice(0, 19).replace('T', ' ') : null;
 
-    if (!pkg || !timeRange || !user) {
-      return res.status(400).json({
-        error: 'Missing required fields: package, timeRange, and user are required',
-        status: 'invalid_input'
-      });
-    }
+    let dbQuery = knex('stripeTransactions')
+      .whereNotNull('rawPayload')
+      .where('amount', pkg.amount)
+      .orderBy('stripeCreatedAt', 'desc')
+      .limit(50);
 
-    console.log(`[INFO] Verifying payment data for package: ${JSON.stringify(pkg)}, timeRange: ${JSON.stringify(timeRange)}, user: ${JSON.stringify(user)}`);
+    if (startDT) dbQuery = dbQuery.where('stripeCreatedAt', '>=', startDT);
+    if (endDT)   dbQuery = dbQuery.where('stripeCreatedAt', '<=', endDT);
 
-    const timeRangeStart = timeRange.start;
-    const timeRangeEnd = timeRange.end;
+    const dbRows = await dbQuery.select('*');
+    console.log(`[INFO] stripeTransactions candidates in time+amount window: ${dbRows.length}`);
 
+    let bestDbRow    = null;
+    let bestDbScore  = -1;
 
+    for (const row of dbRows) {
+      let raw = null;
+      try { raw = typeof row.rawPayload === 'string' ? JSON.parse(row.rawPayload) : row.rawPayload; } catch (_) {}
+      if (!raw) continue;
 
-    // Fetch recent payments to search through
-    const details = await getRecentPayments(20, true);
+      // Extract billing details from the rawPayload (PaymentIntent expanded shape)
+      const charge  = raw.latest_charge && typeof raw.latest_charge === 'object' ? raw.latest_charge : null;
+      const billing = charge?.billing_details || {};
+      const customer = raw.customer && typeof raw.customer === 'object' ? raw.customer : {};
 
-    // console.log("Recent payments fetched:", details.payments);
+      // Merge billing sources: charge billing_details takes priority, then customer object
+      const mergedBilling = {
+        email: billing.email || customer.email || row.customerEmail || raw.receipt_email || '',
+        phone: billing.phone || customer.phone || '',
+        name:  billing.name  || customer.name  || row.customerName  || '',
+      };
 
-    if (details.error) {
-      console.error('[ERROR] Could not fetch recent payments:', details.error);
-      const statusCode = details.status === 'server_error' ? 500 : 404;
-      return res.status(statusCode).json(details);
-    }
+      // stripeCreatedAt is DATETIME string; convert to unix seconds for the scorer
+      const createdSec = raw.created || Math.floor(new Date(row.stripeCreatedAt || 0).getTime() / 1000);
+      const score = scoreBillingMatch(mergedBilling, row.amount, createdSec);
 
+      console.log(`[DEBUG] DB row ${row.stripePaymentIntentId || row.id}: score=${score}, email=${mergedBilling.email}`);
 
-
-    let possiblePaymentFound = false;
-    const possibleMatchingPayments = [];
-
-    console.log(`[INFO] Searching through ${details.payments.length} recent payments for matches.`);
-
-    // Verify creation time and amount
-    for (const payment of details.payments || []) {
-      const created = payment.created * 1000; // convert to ms
-
-      console.log(`[DEBUG] Checking payment ${payment.id}: created=${created}, amount=${payment.amount}`);
-
-      // Check time range
-      if (timeRangeStart && created < timeRangeStart) {
-        continue;
+      if (score > bestDbScore) {
+        bestDbScore = score;
+        bestDbRow   = { row, raw, mergedBilling };
       }
-      if (timeRangeEnd && created > timeRangeEnd) {
-        continue;
-      }
-
-      // Check payment amount
-      if (payment.amount !== pkg.amount) {
-        continue;
-      }
-
-      console.log(`[DEBUG] Possible matching payment found: ${payment.id}`);
-
-      possiblePaymentFound = true;
-      possibleMatchingPayments.push(payment);
     }
 
-
-    console.log(' Is there a possibleMatchingPayment?: ', possiblePaymentFound);
-    if (!possiblePaymentFound) {
-      console.log('[INFO] No possible matching payments found in the specified time range.');
-      return res.status(404).json({
-        error: 'No PaymentIntent found in the specified time range',
-        status: 'not_found'
-      });
-    }
-
+    // ── Step 2: Fall back to live Stripe API if DB had no match ──────────
     let potentialVerifiedPayment = null;
+    let matchSource = 'db';
 
-    // If multiple possible payments found, verify customer details
-    if (possibleMatchingPayments.length > 1) {
-      for (const payment of possibleMatchingPayments) {
-        const customerData = payment.customer || {};
-        const email = customerData.email || '';
-        const name = customerData.name || '';
-        const phone = customerData.phone || '';
-
-        if (email !== user.email) {
-          continue;
-        }
-        if (name !== user.name) {
-          continue;
-        }
-        if (phone !== user.phone) {
-          continue;
-        }
-
-        potentialVerifiedPayment = payment;
-        break;
-      }
+    if (bestDbRow && bestDbScore >= 0) {
+      // Reconstruct a normalised payment object from the DB row + raw payload
+      const { row, raw, mergedBilling } = bestDbRow;
+      potentialVerifiedPayment = {
+        id:       row.stripePaymentIntentId || raw.id,
+        status:   row.status || raw.status,
+        amount:   row.amount,
+        currency: row.currency || raw.currency,
+        created:  raw.created,
+        customer: mergedBilling,
+        _matchScore: bestDbScore,
+        _matchSource: 'stripeTransactions_db',
+      };
+      console.log(`[INFO] DB match found: ${potentialVerifiedPayment.id} (score=${bestDbScore})`);
     } else {
-      potentialVerifiedPayment = possibleMatchingPayments[0];
+      // No DB row matched — query live Stripe API
+      matchSource = 'stripe_live';
+      console.log('[INFO] No DB match, falling back to live Stripe API...');
+      const details = await getRecentPayments(20, true);
+
+      if (details.error) {
+        console.error('[ERROR] Could not fetch recent payments:', details.error);
+        const statusCode = details.status === 'server_error' ? 500 : 404;
+        return res.status(statusCode).json(details);
+      }
+
+      let bestLiveScore = -1;
+      let bestLivePayment = null;
+
+      for (const payment of details.payments || []) {
+        const billing = {
+          email: payment.customer?.email || '',
+          phone: payment.customer?.phone || '',
+          name:  payment.customer?.name  || '',
+        };
+        const score = scoreBillingMatch(billing, payment.amount, payment.created);
+
+        console.log(`[DEBUG] Live PI ${payment.id}: score=${score}, amount=${payment.amount}`);
+
+        if (score > bestLiveScore) {
+          bestLiveScore   = score;
+          bestLivePayment = { ...payment, _matchScore: score, _matchSource: 'stripe_live' };
+        }
+      }
+
+      if (bestLiveScore >= 0) {
+        potentialVerifiedPayment = bestLivePayment;
+        console.log(`[INFO] Live API match: ${potentialVerifiedPayment.id} (score=${bestLiveScore})`);
+      }
     }
 
     if (!potentialVerifiedPayment) {
+      console.log('[INFO] No payment matched time window + amount.');
       return res.status(404).json({
-        error: 'No matching PaymentIntent found after verification',
-        status: 'not_found'
+        error: 'No PaymentIntent found matching the time range and amount',
+        status: 'not_found',
+        matchSource,
       });
     }
 
-    console.log(`[INFO] Verified PaymentIntent: ${potentialVerifiedPayment.id}`);
-
+    // ── Step 3: Package lookup ─────────────────────────────────────────────
     const PACKAGES = [
-      // { credits: 2500, dollars: 2.5, label: "$2.50", color: '#4caf50', priceId: 'price_1SR9nNEViYxfJNd2pijdhiBM' },
-      { credits: 5000, dollars: 5, label: "$5.00", color: '#2196f3', priceId: 'price_1SR9lZEViYxfJNd20x2uwukQ' },
-      { credits: 10000, dollars: 10, label: "$10.00", color: '#9c27b0', popular: true, priceId: 'price_1SR9kzEViYxfJNd27aLA7kFW' },
-      { credits: 20000, dollars: 20, label: "$20.00", color: '#f57c00', priceId: 'price_1SR9mrEViYxfJNd2dD5NHFoL' },
-      { credits: 25000, dollars: 25, label: "$25.00", color: '#e91e63' },
-      { credits: 50000, dollars: 50, label: "$50.00", color: '#ff5722' },
-      { credits: 100000, dollars: 100, label: "$100.00", color: '#795548' },
+      { credits: 5000,   dollars: 5,   label: '$5.00',   color: '#2196f3', priceId: 'price_1SR9lZEViYxfJNd20x2uwukQ' },
+      { credits: 10000,  dollars: 10,  label: '$10.00',  color: '#9c27b0', popular: true, priceId: 'price_1SR9kzEViYxfJNd27aLA7kFW' },
+      { credits: 20000,  dollars: 20,  label: '$20.00',  color: '#f57c00', priceId: 'price_1SR9mrEViYxfJNd2dD5NHFoL' },
+      { credits: 25000,  dollars: 25,  label: '$25.00',  color: '#e91e63' },
+      { credits: 50000,  dollars: 50,  label: '$50.00',  color: '#ff5722' },
+      { credits: 100000, dollars: 100, label: '$100.00', color: '#795548' },
     ];
 
-    const packageData = PACKAGES.find(pkg => pkg.dollars === potentialVerifiedPayment.amount / 100);
+    const matchedPackage = PACKAGES.find(p => p.dollars === potentialVerifiedPayment.amount / 100);
 
-    if (!packageData) {
-      console.error(`[ERROR] No package found for amount: $${potentialVerifiedPayment.amount / 100}`);
+    if (!matchedPackage) {
+      console.error(`[ERROR] No package for amount $${potentialVerifiedPayment.amount / 100}`);
       return res.status(400).json({ error: 'Unrecognized payment amount — package not found', status: 'invalid_amount' });
     }
 
-    if (potentialVerifiedPayment.status == 'succeeded') {
-      // Log the purchase in the database
-      const data = {
-        username: user.username,
-        userId: user.id,
-        name: user.name,
-        email: user.email,
-        walletAddress: "Stripe",
-        transactionId: potentialVerifiedPayment.id,
+    // ── Step 4: Log purchase if payment succeeded ──────────────────────────
+    if (potentialVerifiedPayment.status === 'succeeded') {
+      const purchaseData = {
+        username:          user.username,
+        userId:            user.id,
+        name:              user.name,
+        email:             user.email,
+        walletAddress:     'Stripe',
+        transactionId:     potentialVerifiedPayment.id,
         blockExplorerLink: 'Stripe Payment',
-        currency: 'USD',
-        amount: potentialVerifiedPayment.amount,
-        cryptoAmount: packageData.dollars,
-        rate: null,
-        session_id: user.id, // this is a useless metric here but i am keep it for reference and to maintain similar data structure
+        currency:          'USD',
+        amount:            potentialVerifiedPayment.amount,
+        cryptoAmount:      matchedPackage.dollars,
+        rate:              null,
+        session_id:        user.id,
         orderLoggingEnabled: false,
-        userAgent: user.userAgent,
-        ip: user.ip,
-        dollars: packageData.dollars,
-        credits: packageData.credits
+        userAgent:         user.userAgent,
+        ip:                user.ip,
+        dollars:           matchedPackage.dollars,
+        credits:           matchedPackage.credits,
+      };
 
-      }
-
-      await stripeCreditPurchases(data);
+      await stripeCreditPurchases(purchaseData);
     }
 
-    console.log('Payment verification completed successfully.');
-
+    console.log(`[INFO] Payment verification complete. status=${potentialVerifiedPayment.status}, source=${potentialVerifiedPayment._matchSource}, score=${potentialVerifiedPayment._matchScore}`);
     return res.json(potentialVerifiedPayment);
 
   } catch (error) {

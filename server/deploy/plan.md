@@ -49,3 +49,7 @@ Domain map is fixed as provided, with future changes expected later.
 Legacy proxy paths removed except scramblurr /py.
 Redis is not exposed publicly via Nginx.
 Plan is saved in /memories/session/plan.md and ready for handoff. If you want, I can revise this once more to include a zero-downtime cutover sequence (staged enable, canary host test, then full switch).
+
+sudo certbot --nginx -d drauwper.com -d www.drauwper.com
+sudo certbot --nginx -d server.drauwper.com    
+sudo certbot --nginx -d mail.drauwper.com
