@@ -14,9 +14,12 @@ export default function Account() {
   if (!user) {
     navigate('/login');
     return null;
+  } else {
+    console.log('User data:', user);
   }
 
   const isVerified = user.verification === 'true';
+  const avatarFallback = `https://picsum.photos/seed/user-account-${user.id}/240/240`;
 
   const membership = (user.accountType ?? 'free').toLowerCase() as 'free' | 'standard' | 'premium';
 
@@ -38,8 +41,16 @@ export default function Account() {
       <div className="bg-surface-2 rounded-2xl p-6 space-y-6">
         {/* Avatar + info */}
         <div className="flex items-center gap-4">
-          <div className="w-16 h-16 rounded-full bg-surface-3 flex items-center justify-center text-2xl font-bold text-brand">
-            {user.username[0].toUpperCase()}
+          <div className="w-16 h-16 rounded-full bg-surface-3 overflow-hidden flex items-center justify-center text-2xl font-bold text-brand">
+            <img
+              src={(user.avatar || '').trim() || avatarFallback}
+              alt={user.username}
+              className="w-full h-full object-cover rounded-full"
+              onError={(e) => {
+                const img = e.currentTarget;
+                if (img.src !== avatarFallback) img.src = avatarFallback;
+              }}
+            />
           </div>
           <div>
             <p className="text-lg font-semibold text-text">{user.username}</p>

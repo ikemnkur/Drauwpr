@@ -7,10 +7,9 @@ import {
   HelpCircle,
   History,
   LogIn,
-  Zap,
   Megaphone,
   Compass,
-  LayoutDashboard,
+  ArrowBigDownDash,
   Bell,
   X,
 } from 'lucide-react';
@@ -28,6 +27,21 @@ interface Notif {
   createdAt: string;
 }
 
+interface SponsoredPromo {
+  id: string;
+  username: string | null;
+  title: string;
+  description: string | null;
+  targetDropId: string;
+  ctaText: string | null;
+  mediaUrl: string | null;
+  assetPath: string | null;
+}
+
+interface SponsoredResponse {
+  sponsored: SponsoredPromo[];
+}
+
 const PRIORITY_DOT: Record<string, string> = {
   success: 'bg-success',
   info: 'bg-brand',
@@ -37,11 +51,13 @@ const PRIORITY_DOT: Record<string, string> = {
 
 const NAV = [
   { to: '/explore', label: 'Explore', icon: Compass },
-  { to: '/dashboard', label: 'My Drops', icon: LayoutDashboard },
-  { to: '/promo', label: 'Ads/Promo', icon: Megaphone },
-  { to: '/contributions', label: 'Active', icon: Zap },
+  // { to: '/dashboard', label: 'My Drops', icon: LayoutDashboard },
+  { to: '/dashboard', label: 'Drops', icon: ArrowBigDownDash },
+  { to: '/promo', label: 'Promo', icon: Megaphone },
+  // { to: '/contributions', label: 'Active', icon: Zap },
   { to: '/buy-credits', label: 'Credits', icon: CreditCard },
   { to: '/history', label: 'History', icon: History },
+  // { to: '/notifications', label: 'Notifications', icon: Bell },
   { to: '/account', label: 'Account', icon: User },
   { to: '/help', label: 'Help', icon: HelpCircle },
 ];
@@ -50,10 +66,31 @@ export default function Layout() {
   const { user, isAuthenticated, refreshUser } = useAuth();
   const { pathname } = useLocation();
   const navigate = useNavigate();
+  const API_BASE = import.meta.env.VITE_API_URL || '';
   const [notifs, setNotifs] = useState<Notif[]>([]);
   const [showBell, setShowBell] = useState(false);
+  const [sponsoredAds, setSponsoredAds] = useState<SponsoredPromo[]>([]);
+  const [showAdModal, setShowAdModal] = useState(false);
+  const [activeAd, setActiveAd] = useState<SponsoredPromo | null>(null);
   const bellRef = useRef<HTMLDivElement>(null);
   const unreadCount = (notifs ?? []).filter((n) => !n.isRead).length;
+
+  function resolveAssetUrl(pathOrUrl: string | null, fallbackUrl: string | null): string {
+    const raw = (pathOrUrl || fallbackUrl || '').trim();
+    if (!raw) return 'https://picsum.photos/seed/sponsored-modal/600/300';
+    if (/^https?:\/\//i.test(raw)) return raw;
+    if (raw.startsWith('/')) return `${API_BASE}${raw}`;
+    return `${API_BASE}/${raw}`;
+  }
+
+  function resolveTarget(targetDropId: string): string {
+    const t = String(targetDropId || '').trim();
+    if (!t) return '/explore';
+    if (/^https?:\/\//i.test(t)) return t;
+    if (t.startsWith('/')) return t;
+    if (t.includes('/drop/')) return t;
+    return `/drop/${t}`;
+  }
 
   // Fetch notifications
   function fetchNotifs() {
@@ -92,6 +129,59 @@ export default function Layout() {
     return () => document.removeEventListener('mousedown', handler);
   }, [showBell]);
 
+  useEffect(() => {
+    let cancelled = false;
+    api.get<SponsoredResponse>('/api/promotions/sponsored?limit=10')
+      .then((res) => {
+        if (!cancelled) setSponsoredAds(res.sponsored || []);
+      })
+      .catch(() => {
+        if (!cancelled) setSponsoredAds([]);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    const isExplore = pathname === '/explore';
+    const isAccount = pathname === '/account';
+    const isDropFeature = /^\/drop\/[^/]+$/.test(pathname);
+    const shouldShowOnRoute = isExplore || isAccount || isDropFeature;
+
+    if (!shouldShowOnRoute || sponsoredAds.length === 0) {
+      setShowAdModal(false);
+      setActiveAd(null);
+      return;
+    }
+
+    const next = sponsoredAds[Math.floor(Math.random() * sponsoredAds.length)];
+    setActiveAd(next);
+
+    // Show modal after a random delay between 0 and 10 seconds.
+    setShowAdModal(false);
+    const delayMs = Math.floor(Math.random() * 10_001);
+    const timer = window.setTimeout(() => {
+      setShowAdModal(true);
+    }, delayMs);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [pathname, sponsoredAds]);
+
+  useEffect(() => {
+    if (!showAdModal) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setShowAdModal(false);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [showAdModal]);
+
+  useEffect(() => {
+    if (!showAdModal || !activeAd) return;
+    void api.post(`/api/promotions/${activeAd.id}/impression`, {}).catch(() => {});
+  }, [showAdModal, activeAd]);
+
   async function markAllRead() {
     await api.patch('/api/notifications/read-all', {}).catch(() => {});
     setNotifs((prev) => prev.map((n) => ({ ...n, isRead: 1 })));
@@ -109,13 +199,97 @@ export default function Layout() {
   }
 
   function handleNotifClick(n: Notif) {
-    markRead(n.id);
+    void markRead(n.id);
     setShowBell(false);
-    if (n.actionUrl) navigate(n.actionUrl);
+    navigate('/notifications');
+  }
+
+  function openSponsoredTarget() {
+    if (!activeAd) return;
+    const target = resolveTarget(activeAd.targetDropId);
+    const isExternal = /^https?:\/\//i.test(target);
+    void api.post(`/api/promotions/${activeAd.id}/click`, {}).catch(() => {});
+    setShowAdModal(false);
+    if (isExternal) {
+      window.location.href = target;
+    } else {
+      navigate(target);
+    }
+  }
+
+  function reactToAd(reaction: 'like' | 'neutral' | 'dislike') {
+    if (!activeAd) return;
+    void api.post(`/api/promotions/${activeAd.id}/reaction`, { reaction }).catch(() => {});
   }
 
   return (
     <div className="min-h-screen flex flex-col">
+      {showAdModal && activeAd && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <button
+            className="absolute inset-0 bg-black/65"
+            onClick={() => setShowAdModal(false)}
+            aria-label="Close ad"
+          />
+          <div className="relative w-full max-w-xl bg-surface border border-surface-3 rounded-2xl overflow-hidden shadow-2xl">
+            <button
+              onClick={() => setShowAdModal(false)}
+              className="absolute top-3 right-3 w-8 h-8 flex items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70"
+              aria-label="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <div className="aspect-[16/7] bg-surface-2 overflow-hidden">
+              <img
+                src={resolveAssetUrl(activeAd.assetPath, activeAd.mediaUrl)}
+                alt={activeAd.title}
+                className="w-full h-full object-cover"
+              />
+            </div>
+            <div className="p-5">
+              <p className="text-[10px] uppercase tracking-wider font-bold text-brand/80">Sponsored</p>
+              <h3 className="text-lg font-bold text-text mt-1">{activeAd.title}</h3>
+              <p className="text-xs text-text-muted mt-1 line-clamp-3">{activeAd.description || 'Sponsored content'}</p>
+              <p className="text-[11px] text-text-muted mt-2">By {activeAd.username || 'Sponsor'}</p>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  onClick={() => reactToAd('like')}
+                  className="px-2.5 py-1 text-xs rounded-lg bg-surface-2 text-text-muted hover:text-text"
+                >
+                  Like
+                </button>
+                <button
+                  onClick={() => reactToAd('neutral')}
+                  className="px-2.5 py-1 text-xs rounded-lg bg-surface-2 text-text-muted hover:text-text"
+                >
+                  Neutral
+                </button>
+                <button
+                  onClick={() => reactToAd('dislike')}
+                  className="px-2.5 py-1 text-xs rounded-lg bg-surface-2 text-text-muted hover:text-text"
+                >
+                  Dislike
+                </button>
+              </div>
+              <div className="mt-4 flex gap-2">
+                <button
+                  onClick={openSponsoredTarget}
+                  className="px-4 py-2 text-sm font-semibold rounded-lg bg-brand text-white hover:bg-brand-dark transition"
+                >
+                  {activeAd.ctaText || 'Learn more'}
+                </button>
+                <button
+                  onClick={() => setShowAdModal(false)}
+                  className="px-4 py-2 text-sm font-semibold rounded-lg bg-surface-2 text-text-muted hover:text-text"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Top navbar */}
       <header className="bg-surface border-b border-surface-3 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto flex items-center justify-between px-4 h-14">
@@ -144,9 +318,9 @@ export default function Layout() {
           <div className="flex items-center gap-3">
             {isAuthenticated && user ? (
               <>
-                <span className="text-sm text-text-muted">
+                {/* <span className="text-sm text-text-muted">
                   <span className="text-brand font-semibold">{user.creditBalance.toLocaleString()}</span> credits
-                </span>
+                </span> */}
 
                 {/* Notification bell */}
                 <div ref={bellRef} className="relative">
@@ -212,6 +386,17 @@ export default function Layout() {
                             </div>
                           ))
                         )}
+                      </div>
+
+                      {/* Footer */}
+                      <div className="px-4 py-2 border-t border-surface-3 bg-surface-2/40">
+                        <Link
+                          to="/notifications"
+                          onClick={() => setShowBell(false)}
+                          className="text-xs text-brand hover:underline"
+                        >
+                          View all notifications
+                        </Link>
                       </div>
                     </div>
                   )}

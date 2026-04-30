@@ -44,6 +44,7 @@ function mapServerUser(u: {
   username: string;
   email: string;
   credits: number;
+  profilePicture?: string;
   avatar?: string;
   joined?: string;
   dateCreated?: string;
@@ -55,7 +56,7 @@ function mapServerUser(u: {
     id: u.id,
     username: u.username,
     email: u.email,
-    avatar: u.avatar || `https://i.pravatar.cc/150?u=${u.id}`,
+    avatar: u.profilePicture || u.avatar || `https://i.pravatar.cc/150?u=${u.id}`,
     creditBalance: u.credits,
     joined: u.joined ? new Date(u.joined).getTime() : u.dateCreated ? new Date(u.dateCreated).getTime() : Date.now(),
     verification: u.verification || 'none',

@@ -410,7 +410,7 @@ export default function CreateDrop() {
               <input
                 type="number"
                 min="1000"
-                step="1000"
+                step="100"
                 value={goalAmount}
                 onChange={(e) => setGoalAmount(e.target.value)}
                 placeholder="e.g. 50000"

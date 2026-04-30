@@ -114,6 +114,7 @@ module.exports = function createAdminRouter(deps = {}) {
       { href: '/review/verifications', icon: '🪪', label: 'ID Review' },
       { href: '/review/promos', icon: '📣', label: 'Ads' },
       { href: '/review/drops', icon: '🔥', label: 'Drops' },
+      { href: '/review/purchases', icon: '💰', label: 'Purchases' },
       { href: '/review/stripe', icon: '💳', label: 'Stripe' },
       { href: '/review/crypto', icon: '🪙', label: 'Crypto' },
       { href: '/review/redeems', icon: '💸', label: 'Redeems' },
@@ -425,6 +426,14 @@ module.exports = function createAdminRouter(deps = {}) {
         assetPath VARCHAR(255) DEFAULT NULL,
         status VARCHAR(40) NOT NULL DEFAULT 'pending',
         adminNotes TEXT,
+        clicks INT DEFAULT 0,
+        dislikes INT DEFAULT 0,
+        likes INT DEFAULT 0,
+        neutrals INT DEFAULT 0,
+        impressions INT DEFAULT 0,
+        billedImpressions INT DEFAULT 0,
+        billedClicks INT DEFAULT 0,
+        tags TINYTEXT,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY (id),
@@ -432,6 +441,26 @@ module.exports = function createAdminRouter(deps = {}) {
         KEY idx_promo_user (userId)
       ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci
     `);
+
+    const cols = await knex('information_schema.COLUMNS')
+      .select('COLUMN_NAME')
+      .whereRaw('TABLE_SCHEMA = DATABASE()')
+      .andWhere('TABLE_NAME', 'promoSubmissions')
+      .whereIn('COLUMN_NAME', ['clicks', 'dislikes', 'likes', 'neutrals', 'impressions', 'billedImpressions', 'billedClicks', 'tags']);
+
+    const existing = new Set((cols || []).map((c) => c.COLUMN_NAME));
+    const alters = [];
+    if (!existing.has('clicks')) alters.push('ADD COLUMN clicks INT DEFAULT 0');
+    if (!existing.has('dislikes')) alters.push('ADD COLUMN dislikes INT DEFAULT 0');
+    if (!existing.has('likes')) alters.push('ADD COLUMN likes INT DEFAULT 0');
+    if (!existing.has('neutrals')) alters.push('ADD COLUMN neutrals INT DEFAULT 0');
+    if (!existing.has('impressions')) alters.push('ADD COLUMN impressions INT DEFAULT 0');
+    if (!existing.has('billedImpressions')) alters.push('ADD COLUMN billedImpressions INT DEFAULT 0');
+    if (!existing.has('billedClicks')) alters.push('ADD COLUMN billedClicks INT DEFAULT 0');
+    if (!existing.has('tags')) alters.push('ADD COLUMN tags TINYTEXT');
+    if (alters.length > 0) {
+      await knex.raw(`ALTER TABLE promoSubmissions ${alters.join(', ')}`);
+    }
   }
 
   async function ensureAdminReviewTables() {
@@ -2223,6 +2252,189 @@ module.exports = function createAdminRouter(deps = {}) {
   });
 
   // ══════════════════════════════════════════════
+  //  PAGE: Credit Purchases Review
+  // ══════════════════════════════════════════════
+
+  router.get('/review/purchases', async (req, res) => {
+    try {
+      const status = String(req.query.status || '');
+      const paymentMethod = String(req.query.paymentMethod || '');
+
+      let q = knex('CreditPurchases').select('*');
+      if (status) q = q.where('status', status);
+      if (paymentMethod) q = q.where('paymentMethod', paymentMethod);
+      const rows = await q.orderBy('created_at', 'desc').limit(100);
+
+      const all = await knex('CreditPurchases').select('status', 'paymentMethod');
+
+      const counts = {
+        total: all.length,
+        pending: all.filter((r) => String(r.status || '') === 'processing').length,
+        completed: all.filter((r) => String(r.status || '') === 'completed').length,
+        failed: all.filter((r) => ['failed', 'refunded'].includes(String(r.status || ''))).length,
+        stripe: all.filter((r) => String(r.paymentMethod || '') === 'stripe').length,
+        crypto: all.filter((r) => ['btc', 'eth', 'ltc', 'sol'].includes(String(r.paymentMethod || ''))).length,
+      };
+
+      const filterBtn = (label, value, param) => {
+        const url = new URLSearchParams(req.query);
+        if (value) url.set(param, value); else url.delete(param);
+        const active = value === (param === 'status' ? status : paymentMethod);
+        return `<a href="{{BASE}}/review/purchases?${url.toString()}" class="btn ${active ? 'btn-primary' : 'btn-outline'}" style="font-size:0.78em;padding:5px 10px;">${escapeHtml(label)}</a>`;
+      };
+
+      const bodyRows = rows.map((row) => {
+        const isStripe = row.paymentMethod === 'stripe';
+        const identifierText = isStripe 
+          ? `<div style="font-family:monospace;font-size:0.78em;">${escapeHtml(String(row.stripeCheckoutSessionId || row.stripePaymentIntentId || '—').slice(0, 24))}</div>
+             <div style="font-size:0.72em;color:var(--text2);">${row.stripeCheckoutSessionId ? 'checkout_session' : 'payment_intent'}</div>`
+          : `<div style="font-family:monospace;font-size:0.78em;">${escapeHtml(String(row.txHash || '—').slice(0, 20))}</div>
+             <div style="font-size:0.72em;color:var(--text2);">tx_hash</div>`;
+        
+        return `<tr>
+          <td style="font-family:monospace;font-size:0.78em;">${escapeHtml(row.id || '—')}</td>
+          <td>${escapeHtml(row.username || row.userId || '—')}</td>
+          <td>${escapeHtml(String(row.paymentMethod || '').toUpperCase())}</td>
+          <td>${identifierText}</td>
+          <td>${statusChip(row.status)}</td>
+          <td>${Number(row.credits || 0).toLocaleString()}</td>
+          <td>$${Number(row.amountPaid || 0).toFixed(2)}</td>
+          <td style="font-size:0.82em;color:var(--text2);">${fmtDate(row.created_at)}</td>
+          <td>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <button class="btn btn-primary" style="font-size:0.75em;padding:5px 9px;" onclick="purchaseAction('${escapeHtml(String(row.id || ''))}', 'approve')">Approve</button>
+              <button class="btn btn-outline" style="font-size:0.75em;padding:5px 9px;" onclick="purchaseAction('${escapeHtml(String(row.id || ''))}', 'processing')">Hold</button>
+              <button class="btn btn-danger" style="font-size:0.75em;padding:5px 9px;" onclick="purchaseAction('${escapeHtml(String(row.id || ''))}', 'reject')">Reject</button>
+            </div>
+          </td>
+        </tr>`;
+      }).join('');
+
+      const body = `
+        <h1 class="page-title">💰 Credit Purchases Review</h1>
+
+        <div class="grid-4">
+          <div class="card"><h3>Total Purchases</h3><div class="big-value">${counts.total}</div><div class="sub-label">All payment methods</div></div>
+          <div class="card"><h3>Pending</h3><div class="big-value">${counts.pending}</div><div class="sub-label">Awaiting approval</div></div>
+          <div class="card"><h3>Completed</h3><div class="big-value">${counts.completed}</div><div class="sub-label">Credits applied</div></div>
+          <div class="card"><h3>Failed</h3><div class="big-value">${counts.failed}</div><div class="sub-label">Rejected or refunded</div></div>
+        </div>
+
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;">
+            <h3 style="margin-bottom:0;">All Credit Purchases</h3>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <div style="display:flex;gap:6px;border-right:1px solid var(--border);padding-right:8px;margin-right:2px;">
+                ${filterBtn('All Status', '', 'status')}
+                ${filterBtn('Pending', 'processing', 'status')}
+                ${filterBtn('Completed', 'completed', 'status')}
+                ${filterBtn('Failed', 'failed', 'status')}
+              </div>
+              <div style="display:flex;gap:6px;">
+                ${filterBtn('All Methods', '', 'paymentMethod')}
+                ${filterBtn('Stripe', 'stripe', 'paymentMethod')}
+                ${filterBtn('Crypto', 'btc', 'paymentMethod')}
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;gap:12px;margin-top:12px;flex-wrap:wrap;">
+            <input type="text" id="purchaseSearch" placeholder="Search by ID, user, or tx..." style="flex:1;min-width:250px;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:0.9em;" oninput="filterPurchaseTable()">
+            <select id="purchaseSort" style="padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:0.9em;" onchange="sortPurchaseTable()">
+              <option value="date-desc">Date (Newest First)</option>
+              <option value="date-asc">Date (Oldest First)</option>
+              <option value="amount-desc">Amount (High to Low)</option>
+              <option value="amount-asc">Amount (Low to High)</option>
+              <option value="credits-desc">Credits (High to Low)</option>
+              <option value="credits-asc">Credits (Low to High)</option>
+              <option value="user-asc">User (A-Z)</option>
+            </select>
+          </div>
+          <div style="overflow:auto;margin-top:12px;">
+            <table id="purchaseTable">
+              <thead><tr><th>ID</th><th>User</th><th>Method</th><th>Transaction ID</th><th>Status</th><th>Credits</th><th>USD</th><th>Created</th><th>Actions</th></tr></thead>
+              <tbody>${rows.length ? bodyRows : '<tr><td colspan="9" style="text-align:center;color:var(--text2);padding:24px;">No purchases found</td></tr>'}</tbody>
+            </table>
+          </div>
+        </div>
+
+        <script>
+          async function purchaseAction(id, action) {
+            if (!confirm('Proceed with ' + action + ' for this purchase?')) return;
+            try {
+              const res = await fetch('{{BASE}}/api/review/purchases/' + encodeURIComponent(id) + '/' + action, { method: 'POST' });
+              const data = await res.json();
+              if (data.ok) location.reload();
+              else alert(data.error || 'Update failed');
+            } catch (err) {
+              alert('Request failed: ' + err.message);
+            }
+          }
+
+          function filterPurchaseTable() {
+            const searchTerm = document.getElementById('purchaseSearch').value.toLowerCase();
+            const table = document.getElementById('purchaseTable');
+            const rows = table.getElementsByTagName('tbody')[0].getElementsByTagName('tr');
+            
+            for (let row of rows) {
+              if (row.cells.length === 1) continue;
+              const text = row.textContent.toLowerCase();
+              if (text.includes(searchTerm)) {
+                row.style.display = '';
+              } else {
+                row.style.display = 'none';
+              }
+            }
+          }
+
+          function sortPurchaseTable() {
+            const sortValue = document.getElementById('purchaseSort').value;
+            const table = document.getElementById('purchaseTable');
+            const tbody = table.getElementsByTagName('tbody')[0];
+            const rows = Array.from(tbody.getElementsByTagName('tr'));
+            
+            if (rows.length <= 1 || rows[0].cells.length === 1) return;
+            
+            rows.sort((a, b) => {
+              const [field, direction] = sortValue.split('-');
+              let aVal, bVal;
+              
+              switch(field) {
+                case 'date':
+                  aVal = a.cells[7].textContent;
+                  bVal = b.cells[7].textContent;
+                  break;
+                case 'amount':
+                  aVal = parseFloat(a.cells[6].textContent.replace(/[^0-9.]/g, ''));
+                  bVal = parseFloat(b.cells[6].textContent.replace(/[^0-9.]/g, ''));
+                  break;
+                case 'credits':
+                  aVal = parseFloat(a.cells[5].textContent.replace(/[^0-9]/g, ''));
+                  bVal = parseFloat(b.cells[5].textContent.replace(/[^0-9]/g, ''));
+                  break;
+                case 'user':
+                  aVal = a.cells[1].textContent.toLowerCase();
+                  bVal = b.cells[1].textContent.toLowerCase();
+                  break;
+              }
+              
+              if (direction === 'asc') {
+                return aVal > bVal ? 1 : -1;
+              } else {
+                return aVal < bVal ? 1 : -1;
+              }
+            });
+            
+            rows.forEach(row => tbody.appendChild(row));
+          }
+        </script>`;
+
+      render(req, res, 'Credit Purchases', '/review/purchases', body);
+    } catch (err) {
+      render(req, res, 'Credit Purchases', '/review/purchases', `<div class="card"><h3 style="color:var(--red);">Error</h3><p>${escapeHtml(err.message || String(err))}</p></div>`);
+    }
+  });
+
+  // ══════════════════════════════════════════════
   //  PAGE: Stripe Review — Payments + Subscriptions
   // ══════════════════════════════════════════════
 
@@ -2281,7 +2493,6 @@ module.exports = function createAdminRouter(deps = {}) {
       const paymentRows = payments.map((row) => {
         const linked = purchaseMap.get(row.stripePaymentIntentId);
         const primaryId = row.stripeBalanceTransactionId || row.stripePaymentIntentId || row.stripeChargeId || row.stripeSourceId || '—';
-        const reviewId = row.stripePaymentIntentId || row.stripeBalanceTransactionId || row.stripeChargeId || row.stripeSourceId || '';
         const objectType = row.stripeObjectType || 'payment_intent';
         const amountText = `${escapeHtml(String(row.currency || 'USD').toUpperCase())} $${(Number(row.amount || 0) / 100).toFixed(2)}`;
         const netText = row.net != null ? `$${(Number(row.net || 0) / 100).toFixed(2)}` : '—';
@@ -2297,15 +2508,8 @@ module.exports = function createAdminRouter(deps = {}) {
           <td>${amountText}</td>
           <td style="font-family:monospace;font-size:0.78em;">${escapeHtml(String(row.stripeSourceId || row.stripeChargeId || '—').slice(0, 24))}</td>
           <td>${netText}</td>
-          <td>${linked ? statusChip(linked.status) : '<span style="color:var(--text2);">—</span>'}</td>
+          <td>${linked ? `<a href="{{BASE}}/review/purchases?status=${linked.status}" style="color:var(--accent);text-decoration:none;">${statusChip(linked.status)}</a>` : '<span style="color:var(--text2);">—</span>'}</td>
           <td style="font-size:0.82em;color:var(--text2);">${createdText}</td>
-          <td>
-            <div style="display:flex;gap:6px;flex-wrap:wrap;">
-              <button class="btn btn-primary" style="font-size:0.75em;padding:5px 9px;" onclick="stripeAction('payment', '${escapeHtml(String(reviewId))}', 'approve')">Approve</button>
-              <button class="btn btn-outline" style="font-size:0.75em;padding:5px 9px;" onclick="stripeAction('payment', '${escapeHtml(String(reviewId))}', 'processing')">Hold</button>
-              <button class="btn btn-danger" style="font-size:0.75em;padding:5px 9px;" onclick="stripeAction('payment', '${escapeHtml(String(reviewId))}', 'reject')">Reject</button>
-            </div>
-          </td>
         </tr>`;
       }).join('');
 
@@ -2315,17 +2519,11 @@ module.exports = function createAdminRouter(deps = {}) {
         <td>${escapeHtml(row.plan_name || row.plan_id || '—')}</td>
         <td>${statusChip(row.status)}</td>
         <td style="font-size:0.82em;color:var(--text2);">${fmtDate(row.current_period_end)}</td>
-        <td>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;">
-            <button class="btn btn-primary" style="font-size:0.75em;padding:5px 9px;" onclick="stripeAction('subscription', '${escapeHtml(String(row.stripe_subscription_id || ''))}', 'approve')">Approve</button>
-            <button class="btn btn-outline" style="font-size:0.75em;padding:5px 9px;" onclick="stripeAction('subscription', '${escapeHtml(String(row.stripe_subscription_id || ''))}', 'processing')">Hold</button>
-            <button class="btn btn-danger" style="font-size:0.75em;padding:5px 9px;" onclick="stripeAction('subscription', '${escapeHtml(String(row.stripe_subscription_id || ''))}', 'reject')">Reject</button>
-          </div>
-        </td>
       </tr>`).join('');
 
       const body = `
-        <h1 class="page-title">💳 Stripe Payments & Subscriptions</h1>
+        <h1 class="page-title">💳 Stripe Data Reference</h1>
+        <p style="color:var(--text2);margin-bottom:20px;">View Stripe payment intents and subscriptions pulled from Stripe API. For payment approval/review, see the <a href="{{BASE}}/review/purchases" style="color:var(--accent);">Purchases</a> page.</p>
 
         <div class="grid-4">
           <div class="card"><h3>Stripe Payments</h3><div class="big-value">${paymentCounts.total}</div><div class="sub-label">Tracked payment intents</div></div>
@@ -2358,8 +2556,8 @@ module.exports = function createAdminRouter(deps = {}) {
           </div>
           <div style="overflow:auto;margin-top:12px;">
             <table id="stripePaymentTable">
-              <thead><tr><th>Stripe ID</th><th>Status</th><th>Customer</th><th>Amount</th><th>Source</th><th>Net</th><th>Purchase Row</th><th>Created</th><th>Actions</th></tr></thead>
-              <tbody>${payments.length ? paymentRows : '<tr><td colspan="9" style="text-align:center;color:var(--text2);padding:24px;">No Stripe payments found</td></tr>'}</tbody>
+              <thead><tr><th>Stripe ID</th><th>Status</th><th>Customer</th><th>Amount</th><th>Source</th><th>Net</th><th>Purchase Row</th><th>Created</th></tr></thead>
+              <tbody>${payments.length ? paymentRows : '<tr><td colspan="8" style="text-align:center;color:var(--text2);padding:24px;">No Stripe payments found</td></tr>'}</tbody>
             </table>
           </div>`}
         </div>
@@ -2385,25 +2583,13 @@ module.exports = function createAdminRouter(deps = {}) {
           </div>
           <div style="overflow:auto;margin-top:12px;">
             <table id="stripeSubTable">
-              <thead><tr><th>Subscription</th><th>User</th><th>Plan</th><th>Status</th><th>Period End</th><th>Actions</th></tr></thead>
-              <tbody>${subscriptions.length ? subscriptionRows : '<tr><td colspan="6" style="text-align:center;color:var(--text2);padding:24px;">No subscriptions found yet</td></tr>'}</tbody>
+              <thead><tr><th>Subscription</th><th>User</th><th>Plan</th><th>Status</th><th>Period End</th></tr></thead>
+              <tbody>${subscriptions.length ? subscriptionRows : '<tr><td colspan="5" style="text-align:center;color:var(--text2);padding:24px;">No subscriptions found yet</td></tr>'}</tbody>
             </table>
           </div>
         </div>
 
         <script>
-          async function stripeAction(kind, id, action) {
-            if (!id) return alert('Missing record id');
-            if (!confirm('Proceed with ' + action + ' for this ' + kind + '?')) return;
-            try {
-              const res = await fetch('{{BASE}}/api/review/stripe/' + encodeURIComponent(kind) + '/' + encodeURIComponent(id) + '/' + action, { method: 'POST' });
-              const data = await res.json();
-              if (data.ok) location.reload();
-              else alert(data.error || 'Update failed');
-            } catch (err) {
-              alert('Request failed: ' + err.message);
-            }
-          }
           async function syncStripeNow() {
             try {
               const btns = document.querySelectorAll('button');
@@ -2572,22 +2758,16 @@ module.exports = function createAdminRouter(deps = {}) {
         <td>$${Number(row.amountPaid || 0).toFixed(2)}</td>
         <td style="font-family:monospace;font-size:0.78em;">${escapeHtml(String(row.txHash || '').slice(0, 20) || '—')}</td>
         <td style="font-size:0.82em;color:var(--text2);">${fmtDate(row.created_at)}</td>
-        <td>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;">
-            <button class="btn btn-primary" style="font-size:0.75em;padding:5px 9px;" onclick="cryptoAction('${escapeHtml(String(row.id || ''))}', 'approve')">Approve</button>
-            <button class="btn btn-outline" style="font-size:0.75em;padding:5px 9px;" onclick="cryptoAction('${escapeHtml(String(row.id || ''))}', 'processing')">Hold</button>
-            <button class="btn btn-danger" style="font-size:0.75em;padding:5px 9px;" onclick="cryptoAction('${escapeHtml(String(row.id || ''))}', 'reject')">Reject</button>
-          </div>
-        </td>
       </tr>`).join('');
 
       const body = `
-        <h1 class="page-title">🪙 Crypto Payment Review</h1>
+        <h1 class="page-title">🪙 Crypto Purchases Reference</h1>
+        <p style="color:var(--text2);margin-bottom:20px;">View crypto purchases from CreditPurchases table. For payment approval/review, see the <a href="{{BASE}}/review/purchases" style="color:var(--accent);">Purchases</a> page.</p>
 
         <div class="grid-4">
           <div class="card"><h3>Total Requests</h3><div class="big-value">${counts.total}</div><div class="sub-label">BTC, ETH, LTC, SOL combined</div></div>
-          <div class="card"><h3>Pending</h3><div class="big-value">${counts.pending}</div><div class="sub-label">Awaiting manual review</div></div>
-          <div class="card"><h3>Completed</h3><div class="big-value">${counts.completed}</div><div class="sub-label">Credits already approved</div></div>
+          <div class="card"><h3>Pending</h3><div class="big-value">${counts.pending}</div><div class="sub-label">Awaiting approval</div></div>
+          <div class="card"><h3>Completed</h3><div class="big-value">${counts.completed}</div><div class="sub-label">Credits already applied</div></div>
           <div class="card"><h3>Failed</h3><div class="big-value">${counts.failed}</div><div class="sub-label">Rejected or refunded</div></div>
         </div>
 
@@ -2615,25 +2795,13 @@ module.exports = function createAdminRouter(deps = {}) {
           </div>
           <div style="overflow:auto;margin-top:12px;">
             <table id="cryptoTable">
-              <thead><tr><th>ID</th><th>User</th><th>Chain</th><th>Status</th><th>Credits</th><th>USD</th><th>Tx Hash</th><th>Created</th><th>Actions</th></tr></thead>
-              <tbody>${rows.length ? bodyRows : '<tr><td colspan="9" style="text-align:center;color:var(--text2);padding:24px;">No crypto purchases found</td></tr>'}</tbody>
+              <thead><tr><th>ID</th><th>User</th><th>Chain</th><th>Status</th><th>Credits</th><th>USD</th><th>Tx Hash</th><th>Created</th></tr></thead>
+              <tbody>${rows.length ? bodyRows : '<tr><td colspan="8" style="text-align:center;color:var(--text2);padding:24px;">No crypto purchases found</td></tr>'}</tbody>
             </table>
           </div>
         </div>
 
         <script>
-          async function cryptoAction(id, action) {
-            if (!confirm('Proceed with ' + action + ' for this crypto purchase?')) return;
-            try {
-              const res = await fetch('{{BASE}}/api/review/crypto/' + encodeURIComponent(id) + '/' + action, { method: 'POST' });
-              const data = await res.json();
-              if (data.ok) location.reload();
-              else alert(data.error || 'Update failed');
-            } catch (err) {
-              alert('Request failed: ' + err.message);
-            }
-          }
-
           function filterCryptoTable() {
             const searchTerm = document.getElementById('cryptoSearch').value.toLowerCase();
             const table = document.getElementById('cryptoTable');
@@ -2912,6 +3080,99 @@ module.exports = function createAdminRouter(deps = {}) {
       });
     } catch (err) {
       return res.status(500).json({ ok: false, error: err.message || 'Failed to update submission' });
+    }
+  });
+
+  // ══════════════════════════════════════════════
+  //  API: Credit Purchases Review Actions
+  // ══════════════════════════════════════════════
+
+  router.post('/api/review/purchases/:id/:action', express.json(), async (req, res) => {
+    const { id, action } = req.params;
+    const statusMap = { approve: 'completed', reject: 'failed', processing: 'processing' };
+    if (!statusMap[action]) return res.status(400).json({ ok: false, error: 'Invalid action' });
+
+    const trx = await knex.transaction();
+    try {
+      const purchase = await trx('CreditPurchases').where('id', id).first();
+      if (!purchase) {
+        await trx.rollback();
+        return res.status(404).json({ ok: false, error: 'Purchase not found' });
+      }
+
+      // Prevent double-approval of already completed purchases
+      if (action === 'approve' && purchase.status === 'completed') {
+        await trx.rollback();
+        return res.status(400).json({ ok: false, error: 'This purchase has already been approved' });
+      }
+
+      // Update purchase status
+      await trx('CreditPurchases').where('id', id).update({ status: statusMap[action] });
+
+      let notify = null;
+
+      // If approving, credit the user and create wallet transaction
+      if (action === 'approve' && purchase.status !== 'completed' && Number(purchase.credits || 0) > 0 && purchase.userId) {
+        await trx('userData').where('id', purchase.userId).increment('credits', Number(purchase.credits || 0));
+        
+        const userRow = await trx('userData').select('credits').where('id', purchase.userId).first();
+        
+        // Create wallet transaction
+        await trx('walletTransactions').insert({
+          id: crypto.randomUUID(),
+          userId: purchase.userId,
+          type: 'credit_purchase',
+          amount: Number(purchase.credits || 0),
+          balanceAfter: Number(userRow?.credits || 0),
+          relatedPurchaseId: purchase.id,
+          description: `Admin approved ${String(purchase.paymentMethod || '').toUpperCase()} payment`,
+          created_at: trx.fn.now(),
+        }).catch(() => {
+          // Fallback if walletTransactions table doesn't exist or insert fails
+          console.warn('[WARN] Could not create wallet transaction for purchase approval');
+        });
+
+        notify = {
+          userId: purchase.userId,
+          type: 'credit_purchase',
+          title: 'Payment approved',
+          message: `Your ${String(purchase.paymentMethod || '').toUpperCase()} payment for ${Number(purchase.credits || 0).toLocaleString()} credits has been approved.`,
+          priority: 'success',
+          category: 'buyer'
+        };
+      } else if (action === 'reject' && purchase.userId) {
+        notify = {
+          userId: purchase.userId,
+          type: 'payment_rejected',
+          title: 'Payment rejected',
+          message: `Your ${String(purchase.paymentMethod || '').toUpperCase()} payment was rejected during admin review.`,
+          priority: 'warning',
+          category: 'buyer'
+        };
+      }
+
+      await trx.commit();
+
+      // Send notification after commit
+      if (notify) {
+        await knex('notifications').insert({
+          id: crypto.randomUUID(),
+          userId: notify.userId,
+          type: notify.type,
+          title: notify.title,
+          message: notify.message,
+          priority: notify.priority,
+          category: notify.category,
+          createdAt: knex.fn.now(),  // ✅ Fixed: Database column is 'createdAt' not 'created_at'
+        }).catch(err => {
+          console.warn('[WARN] Could not create notification:', err.message);
+        });
+      }
+
+      res.json({ ok: true });
+    } catch (err) {
+      await trx.rollback();
+      res.status(500).json({ ok: false, error: err.message || String(err) });
     }
   });
 

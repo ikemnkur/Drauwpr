@@ -17,6 +17,8 @@ const fs = require('fs');
 // ── Burn-rate engine (matches frontend src/engine/burnRate.ts) ──
 const ENGINE_C = parseFloat(process.env.BURN_C || '0.999'); // Decay constant — admin-configurable
 const ENGINE_K = parseInt(process.env.BURN_K || '5', 10);   // Loop interval minutes — admin-configurable
+const DOWNLOAD_TIME_DECAY_CONSTANT = parseFloat(process.env.DOWNLOAD_TIME_DECAY_CONSTANT || '1');
+const DOWNLOAD_SITE_POPULARITY_CONSTANT = parseFloat(process.env.DOWNLOAD_SITE_POPULARITY_CONSTANT || '1');
 
 /** Sensitivity: 1 at creation, approaches 0 at expiry. Floored at 0.01. */
 function engineSensitivity(nowMs, createdAtMs, expiresAtMs) {
@@ -33,6 +35,64 @@ function engineTickDecay(burnRate, sensitivity, C = ENGINE_C) {
 /** Contribution boost: BurnRate += contribution / goalAmount */
 function engineApplyContribution(burnRate, contribution, goalAmount) {
   return burnRate + (goalAmount > 0 ? contribution / goalAmount : 0);
+}
+
+function computeDownloadPricing({
+  basePrice,
+  goalAmount,
+  contributedAmount,
+  actualDropTime,
+  totalDownloads,
+  timeConstant = DOWNLOAD_TIME_DECAY_CONSTANT,
+  sitePopularityConstant = DOWNLOAD_SITE_POPULARITY_CONSTANT,
+}) {
+  const safeBasePrice = Math.max(0, Number(basePrice) || 0);
+  const safeGoalAmount = Math.max(0, Number(goalAmount) || 0);
+  const safeContributedAmount = Math.max(0, Number(contributedAmount) || 0);
+  const safeDownloads = Math.max(0, Number(totalDownloads) || 0);
+
+  const contributionRatio = safeGoalAmount > 0
+    ? safeContributedAmount / safeGoalAmount
+    : 0;
+  const contributionFactor = Math.pow(Math.max(0, contributionRatio), 0.75);
+  const contributorDiscountPct = Math.max(0, contributionFactor * 100);
+
+  const daysSinceDrop = actualDropTime
+    ? Math.max(0, (Date.now() - new Date(actualDropTime).getTime()) / 86_400_000)
+    : 0;
+
+  const timeDecayFraction = 1 - Math.pow(0.99, Math.max(0, timeConstant) * daysSinceDrop);
+  const volumeDecayFraction = 1 - Math.pow(0.99, Math.max(0, sitePopularityConstant) * (safeDownloads / 100));
+
+  let contributorDiscountAmount = safeBasePrice * (contributorDiscountPct / 100);
+  let timeDecayDiscountAmount = safeBasePrice * Math.max(0, timeDecayFraction);
+  let volumeDecayDiscountAmount = safeBasePrice * Math.max(0, volumeDecayFraction);
+
+  const maxDiscountAmount = safeBasePrice * 0.95;
+  const rawDiscountAmount = contributorDiscountAmount + timeDecayDiscountAmount + volumeDecayDiscountAmount;
+  if (rawDiscountAmount > maxDiscountAmount && rawDiscountAmount > 0) {
+    const scale = maxDiscountAmount / rawDiscountAmount;
+    contributorDiscountAmount *= scale;
+    timeDecayDiscountAmount *= scale;
+    volumeDecayDiscountAmount *= scale;
+  }
+
+  const finalPrice = safeBasePrice === 0
+    ? 0
+    : Math.max(1, Math.floor(safeBasePrice - (contributorDiscountAmount + timeDecayDiscountAmount + volumeDecayDiscountAmount)));
+
+  const contributorDiscountPctOut = safeBasePrice > 0 ? (contributorDiscountAmount / safeBasePrice) * 100 : 0;
+  const timeDecayDiscountPct = safeBasePrice > 0 ? (timeDecayDiscountAmount / safeBasePrice) * 100 : 0;
+  const volumeDecayDiscountPct = safeBasePrice > 0 ? (volumeDecayDiscountAmount / safeBasePrice) * 100 : 0;
+  const totalDiscountPct = contributorDiscountPctOut + timeDecayDiscountPct + volumeDecayDiscountPct;
+
+  return {
+    contributorDiscountPct: +contributorDiscountPctOut.toFixed(2),
+    timeDecayDiscountPct: +timeDecayDiscountPct.toFixed(2),
+    volumeDecayDiscountPct: +volumeDecayDiscountPct.toFixed(2),
+    totalDiscountPct: +totalDiscountPct.toFixed(2),
+    finalPrice,
+  };
 }
 
 // ── Notification helper (pool-based, mirrors notifications table schema) ──
@@ -134,6 +194,33 @@ async function insertWalletTransaction(db, tx) {
     params[2] = fallbackType;
     await db.query(insertSql, params);
     return { id, typeUsed: fallbackType, downgraded: true };
+  }
+}
+
+async function ensurePromoSubmissionMetricsColumns(db) {
+  try {
+    const [cols] = await db.query(
+      `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'promoSubmissions'
+         AND COLUMN_NAME IN ('clicks','dislikes','likes','neutrals','impressions','tags')`
+    );
+    const existing = new Set((cols || []).map((col) => col.COLUMN_NAME));
+    const alters = [];
+    if (!existing.has('clicks')) alters.push('ADD COLUMN clicks INT DEFAULT 0');
+    if (!existing.has('dislikes')) alters.push('ADD COLUMN dislikes INT DEFAULT 0');
+    if (!existing.has('likes')) alters.push('ADD COLUMN likes INT DEFAULT 0');
+    if (!existing.has('neutrals')) alters.push('ADD COLUMN neutrals INT DEFAULT 0');
+    if (!existing.has('impressions')) alters.push('ADD COLUMN impressions INT DEFAULT 0');
+    if (!existing.has('tags')) alters.push('ADD COLUMN tags TINYTEXT');
+
+    if (alters.length > 0) {
+      await db.query(`ALTER TABLE promoSubmissions ${alters.join(', ')}`);
+    }
+  } catch (err) {
+    // Ignore if table does not yet exist. Explore should stay operational.
+    if (err && (err.code === 'ER_NO_SUCH_TABLE' || err.errno === 1146)) return;
+    throw err;
   }
 }
 
@@ -243,6 +330,105 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
     } catch (err) {
       console.error('GET /api/drops/featured error:', err);
       res.status(500).json({ error: 'Failed to fetch featured drops' });
+    }
+  });
+
+  /**
+   * GET /api/promotions/sponsored
+   * Returns approved sponsored promos for the Explore page.
+   */
+  server.get(PROXY + '/api/promotions/sponsored', async (req, res) => {
+    try {
+      await ensurePromoSubmissionMetricsColumns(pool);
+      const limit = Math.min(20, Math.max(1, Number(req.query.limit || 6)));
+      const tag = String(req.query.tag || '').trim();
+      const hasTag = !!tag;
+      const [rows] = await pool.query(
+        `SELECT id, userId, username, submissionType, mediaType, title, description,
+                targetDropId, mediaUrl, ctaText, budgetUsd, assetPath, status,
+                clicks, impressions, likes, neutrals, dislikes, tags,
+                created_at, updated_at
+         FROM promoSubmissions
+         WHERE status = 'approved'
+           AND targetDropId IS NOT NULL
+           AND targetDropId <> ''
+           ${hasTag ? 'AND tags IS NOT NULL AND LOWER(tags) LIKE LOWER(?)' : ''}
+         ORDER BY updated_at DESC
+         LIMIT ?`,
+        hasTag ? [`%${tag}%`, limit] : [limit]
+      );
+
+      res.json({ sponsored: rows });
+    } catch (err) {
+      // If promoSubmissions does not exist yet, return an empty list instead of failing Explore.
+      if (err && (err.code === 'ER_NO_SUCH_TABLE' || err.errno === 1146)) {
+        return res.json({ sponsored: [] });
+      }
+      console.error('GET /api/promotions/sponsored error:', err);
+      res.status(500).json({ error: 'Failed to fetch sponsored promotions' });
+    }
+  });
+
+  server.post(PROXY + '/api/promotions/:id/impression', async (req, res) => {
+    try {
+      await ensurePromoSubmissionMetricsColumns(pool);
+      const id = String(req.params.id || '');
+      const [result] = await pool.query(
+        `UPDATE promoSubmissions
+         SET impressions = COALESCE(impressions, 0) + 1
+         WHERE id = ? AND status = 'approved'`,
+        [id]
+      );
+      if (!result.affectedRows) return res.status(404).json({ error: 'Promo not found' });
+      res.json({ success: true });
+    } catch (err) {
+      console.error('POST /api/promotions/:id/impression error:', err);
+      res.status(500).json({ error: 'Failed to track impression' });
+    }
+  });
+
+  server.post(PROXY + '/api/promotions/:id/click', async (req, res) => {
+    try {
+      await ensurePromoSubmissionMetricsColumns(pool);
+      const id = String(req.params.id || '');
+      const [result] = await pool.query(
+        `UPDATE promoSubmissions
+         SET clicks = COALESCE(clicks, 0) + 1
+         WHERE id = ? AND status = 'approved'`,
+        [id]
+      );
+      if (!result.affectedRows) return res.status(404).json({ error: 'Promo not found' });
+      res.json({ success: true });
+    } catch (err) {
+      console.error('POST /api/promotions/:id/click error:', err);
+      res.status(500).json({ error: 'Failed to track click' });
+    }
+  });
+
+  server.post(PROXY + '/api/promotions/:id/reaction', async (req, res) => {
+    try {
+      await ensurePromoSubmissionMetricsColumns(pool);
+      const id = String(req.params.id || '');
+      const reaction = String(req.body?.reaction || '').toLowerCase();
+      const columnByReaction = {
+        like: 'likes',
+        neutral: 'neutrals',
+        dislike: 'dislikes',
+      };
+      const col = columnByReaction[reaction];
+      if (!col) return res.status(400).json({ error: 'reaction must be like, neutral, or dislike' });
+
+      const [result] = await pool.query(
+        `UPDATE promoSubmissions
+         SET ${col} = COALESCE(${col}, 0) + 1
+         WHERE id = ? AND status = 'approved'`,
+        [id]
+      );
+      if (!result.affectedRows) return res.status(404).json({ error: 'Promo not found' });
+      res.json({ success: true, reaction });
+    } catch (err) {
+      console.error('POST /api/promotions/:id/reaction error:', err);
+      res.status(500).json({ error: 'Failed to track reaction' });
     }
   });
 
@@ -624,7 +810,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
 
       const [[drop]] = await pool.query(
         `SELECT id, creatorId, basePrice, goalAmount, actualDropTime, totalDownloads,
-                dailyPriceDecayPct, volumeDecayStep, volumeDecayPct, status
+                status
          FROM drops WHERE id = ?`,
         [dropId]
       );
@@ -642,37 +828,55 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
         contributedAmount = Number(c.contributed) || 0;
 
         const [[dl]] = await pool.query(
-          `SELECT id FROM dropDownloads WHERE dropId = ? AND userId = ?`, [dropId, userId]
+          `SELECT id, basePrice, pricePaid, contributorDiscount, timeDecayDiscount, volumeDecayDiscount 
+           FROM dropDownloads WHERE dropId = ? AND userId = ?`, [dropId, userId]
         );
         alreadyDownloaded = !!dl;
+
+        // If already downloaded, use the stored discount values from the download record
+        if (alreadyDownloaded) {
+          const storedBasePrice = Number(dl.basePrice) || drop.basePrice;
+          const storedContributorDiscount = Number(dl.contributorDiscount) || 0;
+          const storedTimeDecayDiscount = Number(dl.timeDecayDiscount) || 0;
+          const storedVolumeDecayDiscount = Number(dl.volumeDecayDiscount) || 0;
+          const storedTotalDiscount = storedContributorDiscount + storedTimeDecayDiscount + storedVolumeDecayDiscount;
+          const storedFinalPrice = Number(dl.pricePaid) || 0;
+
+          return res.json({
+            basePrice: storedBasePrice,
+            contributedAmount,
+            contributorDiscountPct: +storedContributorDiscount.toFixed(2),
+            timeDecayDiscountPct: +storedTimeDecayDiscount.toFixed(2),
+            volumeDecayDiscountPct: +storedVolumeDecayDiscount.toFixed(2),
+            totalDiscountPct: +storedTotalDiscount.toFixed(2),
+            finalPrice: storedFinalPrice,
+            alreadyDownloaded: true,
+            isCreator,
+            isFree: isCreator || storedFinalPrice === 0,
+          });
+        }
       }
 
+      // Calculate preview for users who haven't downloaded yet
       const basePrice = drop.basePrice;
-      const contribPct = drop.goalAmount > 0 ? Math.min(100, (contributedAmount / drop.goalAmount) * 100) : 0;
-      const contributorDiscountPct = Math.min(50, contribPct);
-
-      const hoursSinceDrop = drop.actualDropTime
-        ? (Date.now() - new Date(drop.actualDropTime).getTime()) / 3_600_000
-        : 0;
-      const daysSinceDrop = hoursSinceDrop / 24;
-      const timeDecayDiscountPct = Math.min(80, daysSinceDrop * (drop.dailyPriceDecayPct || 5));
-
-      const volumeDecayDiscountPct = drop.volumeDecayStep
-        ? Math.min(80, Math.floor(drop.totalDownloads / drop.volumeDecayStep) * (drop.volumeDecayPct || 5))
-        : 0;
-
-      const totalDiscountPct = Math.min(90, contributorDiscountPct + timeDecayDiscountPct + volumeDecayDiscountPct);
-      const finalPrice = isCreator ? 0 : Math.max(1, Math.floor(basePrice * (1 - totalDiscountPct / 100)));
+      const pricing = computeDownloadPricing({
+        basePrice,
+        goalAmount: drop.goalAmount,
+        contributedAmount,
+        actualDropTime: drop.actualDropTime,
+        totalDownloads: drop.totalDownloads,
+      });
+      const finalPrice = isCreator ? 0 : pricing.finalPrice;
 
       res.json({
         basePrice,
         contributedAmount,
-        contributorDiscountPct: +contributorDiscountPct.toFixed(2),
-        timeDecayDiscountPct: +timeDecayDiscountPct.toFixed(2),
-        volumeDecayDiscountPct: +volumeDecayDiscountPct.toFixed(2),
-        totalDiscountPct: +totalDiscountPct.toFixed(2),
+        contributorDiscountPct: pricing.contributorDiscountPct,
+        timeDecayDiscountPct: pricing.timeDecayDiscountPct,
+        volumeDecayDiscountPct: pricing.volumeDecayDiscountPct,
+        totalDiscountPct: pricing.totalDiscountPct,
         finalPrice,
-        alreadyDownloaded,
+        alreadyDownloaded: false,
         isCreator,
         isFree: isCreator || basePrice === 0,
       });
@@ -750,29 +954,23 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       // Calculate price with discounts
       let price = drop.basePrice;
 
-      // Contributor discount (proportional to contribution vs goal)
+      // Contributor discount + time + volume discount from unified pricing model
       const [[contrib]] = await conn.query(
         'SELECT COALESCE(SUM(amount),0) AS contributed FROM contributions WHERE dropId = ? AND userId = ? AND isRefunded = 0',
         [dropId, userId]
       );
-      const contribPct = Math.min(100, (contrib.contributed / drop.goalAmount) * 100);
-      const contributorDiscount = Math.min(50, contribPct); // max 50% off
+      const pricing = computeDownloadPricing({
+        basePrice: drop.basePrice,
+        goalAmount: drop.goalAmount,
+        contributedAmount: contrib.contributed,
+        actualDropTime: drop.actualDropTime,
+        totalDownloads: drop.totalDownloads,
+      });
 
-      // Time decay discount
-      const hoursSinceDrop = drop.actualDropTime
-        ? (Date.now() - new Date(drop.actualDropTime).getTime()) / 3_600_000
-        : 0;
-      const daysSinceDrop = hoursSinceDrop / 24;
-      const timeDecayDiscount = Math.min(80, daysSinceDrop * (drop.dailyPriceDecayPct || 5));
-
-      // Volume decay discount
-      const volumeDecayDiscount = drop.volumeDecayStep
-        ? Math.min(80, Math.floor(drop.totalDownloads / drop.volumeDecayStep) * (drop.volumeDecayPct || 5))
-        : 0;
-
-      // Combine discounts (capped at 90% total)
-      const totalDiscountPct = Math.min(90, contributorDiscount + timeDecayDiscount + volumeDecayDiscount);
-      price = Math.max(1, Math.floor(price * (1 - totalDiscountPct / 100)));
+      const contributorDiscount = pricing.contributorDiscountPct;
+      const timeDecayDiscount = pricing.timeDecayDiscountPct;
+      const volumeDecayDiscount = pricing.volumeDecayDiscountPct;
+      price = pricing.finalPrice;
 
       // Creator gets free download
       if (drop.creatorId === userId) price = 0;
@@ -847,7 +1045,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
             priority: 'success',
             category: 'download_available',
             relatedDropId: dropId,
-            actionUrl: `/download/${dropId}`,
+            actionUrl: `/drop/${dropId}/download`,
           }))
           .catch((e) => console.error('Download notif error:', e.message));
       }
@@ -1311,7 +1509,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
               priority: 'success',
               category: 'drop_released',
               relatedDropId: drop.id,
-              actionUrl: `/download/${drop.id}`,
+              actionUrl: `/drop/${drop.id}/download`,
             }))))
             .catch((e) => console.error('Drop-released notif error:', e.message));
         }
@@ -1479,7 +1677,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
             priority: 'success',
             category: 'system',
             relatedDropId: drop.id,
-            actionUrl: `/download/${drop.id}`,
+            actionUrl: `/drop/${drop.id}/download`,
           });
         }
         rewardedDrops++;
@@ -1908,6 +2106,58 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
     } catch (err) {
       console.error('GET /api/history/memberships error:', err);
       res.status(500).json({ error: 'Failed to fetch membership history' });
+    }
+  });
+
+  /**
+   * GET /api/history/earnings
+   * Returns the authenticated user's creator earnings from downloads.
+   */
+  server.get(PROXY + '/api/history/earnings', authenticateToken, async (req, res) => {
+    try {
+      const [rows] = await pool.query(
+        `SELECT wt.id, wt.amount, wt.balanceAfter, wt.relatedDropId, wt.description, wt.created_at,
+                d.title AS dropTitle
+         FROM walletTransactions wt
+         LEFT JOIN drops d ON d.id = wt.relatedDropId
+         WHERE wt.userId = ? AND wt.type = 'creator_earning'
+         ORDER BY wt.created_at DESC
+         LIMIT 200`,
+        [req.user.id]
+      );
+      
+      // Calculate total earnings
+      const totalEarned = rows.reduce((sum, row) => sum + (row.amount || 0), 0);
+      
+      res.json({ earnings: rows, totalEarned });
+    } catch (err) {
+      console.error('GET /api/history/earnings error:', err);
+      res.status(500).json({ error: 'Failed to fetch earnings history' });
+    }
+  });
+
+  /**
+   * GET /api/history/promo-charges
+   * Returns promo deployment charges billed to the authenticated user.
+   */
+  server.get(PROXY + '/api/history/promo-charges', authenticateToken, async (req, res) => {
+    try {
+      const [rows] = await pool.query(
+        `SELECT wt.id, wt.amount, wt.balanceAfter, wt.description, wt.created_at
+         FROM walletTransactions wt
+         WHERE wt.userId = ?
+           AND wt.amount < 0
+           AND wt.description LIKE 'Promo charge:%'
+         ORDER BY wt.created_at DESC
+         LIMIT 200`,
+        [req.user.id]
+      );
+
+      const totalCharged = rows.reduce((sum, row) => sum + Math.abs(Number(row.amount) || 0), 0);
+      res.json({ charges: rows, totalCharged });
+    } catch (err) {
+      console.error('GET /api/history/promo-charges error:', err);
+      res.status(500).json({ error: 'Failed to fetch promo charge history' });
     }
   });
 

@@ -30,6 +30,9 @@ import AdminPortal from './pages/AdminPortal';
 import ForgotPassword from './pages/ForgotPasswordPage';
 import ResetPassword from './pages/ResetPasswordPage';
 import AdsPromo from './pages/AdsPromo';
+import Notifications from './pages/Notifications';
+import PromoCreateAd from './pages/PromoCreateAd';
+import PromoSponsorDrop from './pages/PromoSponsorDrop';
 
 export default function App() {
   return (
@@ -72,7 +75,10 @@ export default function App() {
               <Route path="/buy-credits/crypto" element={<ProtectedRoute><BuyCrypto /></ProtectedRoute>} />
               <Route path="/redeem" element={<ProtectedRoute><Redeem /></ProtectedRoute>} />
               <Route path="/history" element={<ProtectedRoute><History /></ProtectedRoute>} />
+              <Route path="/notifications" element={<ProtectedRoute><Notifications /></ProtectedRoute>} />
               <Route path="/promo" element={<ProtectedRoute><AdsPromo /></ProtectedRoute>} />
+              <Route path="/promo/create-ad" element={<ProtectedRoute><PromoCreateAd /></ProtectedRoute>} />
+              <Route path="/promo/sponsor-drop" element={<ProtectedRoute><PromoSponsorDrop /></ProtectedRoute>} />
               <Route path="/create" element={<ProtectedRoute><CreateDrop /></ProtectedRoute>} />
               <Route path="/drop/:id/edit" element={<ProtectedRoute><EditDrop /></ProtectedRoute>} />
               <Route path="/plans" element={<ProtectedRoute><Plans /></ProtectedRoute>} />

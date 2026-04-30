@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowDownToLine, ArrowLeft, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../lib/api';
+import { DEFAULT_ECONOMY_SETTINGS, fetchEconomySettings } from '../lib/economySettings';
 
 const REDEEM_AMOUNTS = [5_000, 10_000, 25_000, 50_000, 100_000];
 type Chain = 'BTC' | 'ETH' | 'LTC' | 'SOL';
@@ -20,9 +21,18 @@ export default function Redeem() {
 
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [redemptionFeePct, setRedemptionFeePct] = useState(DEFAULT_ECONOMY_SETTINGS.redemptionFeePct);
+
+  useEffect(() => {
+    fetchEconomySettings().then((settings) => {
+      setRedemptionFeePct(Math.max(0, Number(settings.redemptionFeePct || 0)));
+    });
+  }, []);
 
   const isVerified = user?.verification === 'true';
   const balance = user?.creditBalance ?? 0;
+  const grossUsd = redeemAmount ? redeemAmount / 1000 : 0;
+  const netUsd = grossUsd * (1 - redemptionFeePct / 100);
 
   const availableAmounts = REDEEM_AMOUNTS.filter((a) => a <= balance);
 
@@ -70,7 +80,8 @@ export default function Redeem() {
         <ArrowDownToLine className="w-6 h-6 text-green-400" />
         Redeem Credits
       </h1>
-      <p className="text-sm text-text-muted mb-6">Cash out credits to your crypto wallet. 1,000 credits = $1.00</p>
+      <p className="text-sm text-text-muted mb-1">Cash out credits to your crypto wallet. 1,000 credits = $1.00</p>
+      <p className="text-xs text-text-muted mb-6">Redemption fee: {redemptionFeePct.toFixed(2)}%</p>
 
       {/* Verification gate */}
       {!isVerified ? (
@@ -123,7 +134,9 @@ export default function Redeem() {
                   >
                     <p className="text-xl font-bold font-mono text-text">{amt.toLocaleString()}</p>
                     <p className="text-sm text-text-muted">credits</p>
-                    <p className="text-lg font-semibold text-green-400 mt-1">${usdValue(amt)}</p>
+                    <p className="text-lg font-semibold text-green-400 mt-1">
+                      ${(amt / 1000 * (1 - redemptionFeePct / 100)).toFixed(2)}
+                    </p>
                   </button>
                 ))}
               </div>
@@ -166,7 +179,10 @@ export default function Redeem() {
             {redeemAmount > 0 && walletAddress.trim() && (
               <div className="bg-green-500/10 border border-green-500/20 rounded-xl p-3 text-sm">
                 <p className="text-text-muted mb-0.5">You will receive approximately</p>
-                <p className="text-xl font-bold text-green-300">${usdValue(redeemAmount)} USD</p>
+                <p className="text-xl font-bold text-green-300">${netUsd.toFixed(2)} USD</p>
+                <p className="text-xs text-text-muted mt-0.5">
+                  Gross ${grossUsd.toFixed(2)} - Fee ({redemptionFeePct.toFixed(2)}%) ${(grossUsd - netUsd).toFixed(2)}
+                </p>
                 <p className="text-xs text-text-muted mt-0.5">
                   in {chain} to <span className="font-mono text-text break-all">{walletAddress}</span>
                 </p>
@@ -210,7 +226,7 @@ export default function Redeem() {
                 Submitting...
               </>
             ) : redeemAmount ? (
-              `Redeem ${redeemAmount.toLocaleString()} Credits → $${usdValue(redeemAmount)}`
+              `Redeem ${redeemAmount.toLocaleString()} Credits → $${netUsd.toFixed(2)} net`
             ) : (
               'Select an amount to redeem'
             )}

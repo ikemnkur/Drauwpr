@@ -146,7 +146,8 @@ export default function Dashboard() {
                 >
                   <div className="w-11 h-11 bg-surface-3 rounded-lg flex items-center justify-center overflow-hidden shrink-0">
                     <img
-                      src={`https://picsum.photos/seed/${drop.id}/88/88`}
+                      // src={`https://picsum.photos/seed/${drop.id}/88/88`}
+                       src={drop.thumbnailUrl || `https://picsum.photos/seed/${drop.id}/400/200`}
                       alt={drop.title}
                       className="w-full h-full object-cover"
                     />

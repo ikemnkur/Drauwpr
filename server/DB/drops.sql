@@ -35,9 +35,6 @@ CREATE TABLE `drops` (
 
   -- Post-drop pricing
   `basePrice` int NOT NULL DEFAULT 0 COMMENT 'Credits charged after drop for download',
-  `dailyPriceDecayPct` decimal(4,2) DEFAULT 5.00 COMMENT 'Time-based decay % per 24h',
-  `volumeDecayStep` int DEFAULT 1000 COMMENT 'Volume-based: price drops every N downloads',
-  `volumeDecayPct` decimal(4,2) DEFAULT 5.00,
 
   -- Stats
   `totalDownloads` int NOT NULL DEFAULT 0,

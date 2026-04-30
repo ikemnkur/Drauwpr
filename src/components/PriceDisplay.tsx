@@ -2,12 +2,22 @@ import { contributorDiscount, timeDecayPrice, volumeDecayPrice } from '../engine
 import { DollarSign } from 'lucide-react';
 import type { Drop } from '../types';
 
+interface PricePreviewLike {
+  basePrice: number;
+  contributorDiscountPct: number;
+  timeDecayDiscountPct: number;
+  volumeDecayDiscountPct: number;
+  totalDiscountPct: number;
+  finalPrice: number;
+}
+
 interface Props {
   drop: Drop;
   userContribution?: number;
+  pricePreview?: PricePreviewLike | null;
 }
 
-export default function PriceDisplay({ drop, userContribution = 0 }: Props) {
+export default function PriceDisplay({ drop, userContribution = 0, pricePreview = null }: Props) {
   const hoursSinceRelease = Math.max(0, (Date.now() - drop.scheduledDropTime)) / 3_600_000;
   const basePrice = drop.basePrice;
 
@@ -15,8 +25,10 @@ export default function PriceDisplay({ drop, userContribution = 0 }: Props) {
   const timePrice = timeDecayPrice(basePrice, hoursSinceRelease);
   const volPrice = volumeDecayPrice(basePrice, drop.totalDownloads);
 
-  // Best price for user
-  const finalPrice = Math.round(Math.min(contribPrice, timePrice, volPrice));
+  // Fallback local estimate only when backend preview is not yet available
+  const estimatedFinalPrice = Math.round(Math.min(contribPrice, timePrice, volPrice));
+  const displayBasePrice = pricePreview?.basePrice ?? basePrice;
+  const finalPrice = pricePreview?.finalPrice ?? estimatedFinalPrice;
 
   const toUsd = (credits: number) => `$${(credits / 1000).toFixed(2)}`;
 
@@ -35,22 +47,49 @@ export default function PriceDisplay({ drop, userContribution = 0 }: Props) {
       <div className="space-y-1.5 text-xs text-text-muted">
         <div className="flex justify-between">
           <span>Base price</span>
-          <span className="font-mono">{basePrice.toLocaleString()}</span>
+          <span className="font-mono">{displayBasePrice.toLocaleString()}</span>
         </div>
-        {userContribution > 0 && (
+        {pricePreview ? (
+          <>
+            {pricePreview.contributorDiscountPct > 0 && (
+              <div className="flex justify-between text-brand">
+                <span>Contributor discount</span>
+                <span className="font-mono">-{pricePreview.contributorDiscountPct.toFixed(1)}%</span>
+              </div>
+            )}
+            {pricePreview.timeDecayDiscountPct > 0 && (
+              <div className="flex justify-between">
+                <span>Time discount</span>
+                <span className="font-mono">-{pricePreview.timeDecayDiscountPct.toFixed(1)}%</span>
+              </div>
+            )}
+            {pricePreview.volumeDecayDiscountPct > 0 && (
+              <div className="flex justify-between">
+                <span>Volume discount</span>
+                <span className="font-mono">-{pricePreview.volumeDecayDiscountPct.toFixed(1)}%</span>
+              </div>
+            )}
+            {pricePreview.totalDiscountPct > 0 && (
+              <div className="flex justify-between font-semibold text-text">
+                <span>Total discount</span>
+                <span className="font-mono">-{pricePreview.totalDiscountPct.toFixed(1)}%</span>
+              </div>
+            )}
+          </>
+        ) : userContribution > 0 && (
           <div className="flex justify-between text-brand">
             <span>Your contributor discount</span>
             <span className="font-mono">{Math.round(contribPrice).toLocaleString()}</span>
           </div>
         )}
-        <div className="flex justify-between">
+        {/* <div className="flex justify-between">
           <span>Time decay ({hoursSinceRelease.toFixed(0)}h)</span>
           <span className="font-mono">{Math.round(timePrice).toLocaleString()}</span>
         </div>
         <div className="flex justify-between">
           <span>Volume decay ({drop.totalDownloads.toLocaleString()} DLs)</span>
           <span className="font-mono">{Math.round(volPrice).toLocaleString()}</span>
-        </div>
+        </div> */}
       </div>
     </div>
   );

@@ -26,8 +26,8 @@ function DropCard({ drop, badge }: { drop: Drop; badge?: string }) {
       )}
       {/* Thumbnail */}
       <div className="h-32 bg-surface-3 rounded-xl mb-3 flex items-center justify-center overflow-hidden">
-        <img
-          src={`https://picsum.photos/seed/${drop.id}/400/200`}
+          <img
+            src={drop.thumbnailUrl || `https://picsum.photos/seed/${drop.id}/400/200`}
           alt={drop.title}
           className="w-full h-full object-cover"
         />
@@ -133,6 +133,28 @@ interface FeaturedResponse {
   topCreators: TopCreator[];
 }
 
+interface SponsoredPromo {
+  id: string;
+  userId: string;
+  username: string | null;
+  submissionType: string;
+  mediaType: string;
+  title: string;
+  description: string | null;
+  targetDropId: string;
+  mediaUrl: string | null;
+  ctaText: string | null;
+  budgetUsd: number;
+  assetPath: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface SponsoredResponse {
+  sponsored: SponsoredPromo[];
+}
+
 interface UserResult {
   id: string;
   username: string;
@@ -172,6 +194,7 @@ function UserResultCard({ user }: { user: UserResult }) {
 
 export default function Explore() {
   const { drops } = useApp();
+  const API_BASE = import.meta.env.VITE_API_URL || '';
   const [search, setSearch] = useState('');
   const [searchMode, setSearchMode] = useState<'drops' | 'users'>('drops');
   const [userResults, setUserResults] = useState<UserResult[]>([]);
@@ -181,9 +204,28 @@ export default function Explore() {
   const [hottest, setHottest] = useState<Drop[]>([]);
   const [newest, setNewest] = useState<Drop[]>([]);
   const [topCreators, setTopCreators] = useState<TopCreator[]>([]);
+  const [sponsoredPromos, setSponsoredPromos] = useState<SponsoredPromo[]>([]);
+
+  function resolveAssetUrl(pathOrUrl: string | null, fallbackUrl: string | null): string {
+    const raw = (pathOrUrl || fallbackUrl || '').trim();
+    if (!raw) return 'https://picsum.photos/seed/sponsored-default/160/160';
+    if (/^https?:\/\//i.test(raw)) return raw;
+    if (raw.startsWith('/')) return `${API_BASE}${raw}`;
+    return `${API_BASE}/${raw}`;
+  }
+
+  function resolveTarget(targetDropId: string): string {
+    const t = String(targetDropId || '').trim();
+    if (!t) return '/explore';
+    if (/^https?:\/\//i.test(t)) return t;
+    if (t.startsWith('/')) return t;
+    if (t.includes('/drop/')) return t;
+    return `/drop/${t}`;
+  }
 
   useEffect(() => {
     let cancelled = false;
+
     api.get<FeaturedResponse>('/api/drops/featured')
       .then((res) => {
         if (cancelled) return;
@@ -199,10 +241,23 @@ export default function Explore() {
         setHottest([...drops].sort((a, b) => b.momentum - a.momentum).slice(0, 3));
         setNewest([...drops].sort((a, b) => b.createdAt - a.createdAt).slice(0, 3));
       });
+
+    api.get<SponsoredResponse>('/api/promotions/sponsored?limit=6')
+      .then((res) => {
+        if (cancelled) return;
+        const promos = res.sponsored || [];
+        setSponsoredPromos(promos);
+        promos.slice(0, 2).forEach((p) => {
+          void api.post(`/api/promotions/${p.id}/impression`, {}).catch(() => {});
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setSponsoredPromos([]);
+      });
+
     return () => { cancelled = true; };
   }, [drops]);
 
-  const sponsored = featured.slice(0, 2);
   const recommended = [...drops].sort((a, b) => b.contributorCount - a.contributorCount);
 
   // Debounced user search
@@ -312,26 +367,56 @@ export default function Explore() {
           <section>
             <SectionHeader icon={Megaphone} title="Sponsored" />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {sponsored.map((d) => (
-                <Link
-                  key={d.id}
-                  to={`/drop/${d.id}`}
-                  className="bg-gradient-to-r from-brand/10 to-surface-2 rounded-2xl p-5 flex gap-4 items-center hover:from-brand/20 transition no-underline group border border-brand/20"
-                >
-                  <div className="w-20 h-20 bg-surface-3 rounded-xl flex items-center justify-center overflow-hidden shrink-0">
-                    <img
-                      src={`https://picsum.photos/seed/${d.id}-sp/160/160`}
-                      alt={d.title}
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <span className="text-[10px] uppercase font-bold text-brand/70 tracking-wider">Sponsored</span>
-                    <h3 className="text-base font-semibold text-text group-hover:text-brand transition truncate">{d.title}</h3>
-                    <p className="text-xs text-text-muted line-clamp-2 mt-0.5">{d.description}</p>
-                  </div>
-                </Link>
-              ))}
+              {sponsoredPromos.length === 0 ? (
+                <div className="bg-surface-2 rounded-2xl p-5 text-sm text-text-muted border border-surface-3">
+                  No sponsored drops right now.
+                </div>
+              ) : sponsoredPromos.slice(0, 2).map((p) => {
+                const target = resolveTarget(p.targetDropId);
+                const external = /^https?:\/\//i.test(target);
+                const imageSrc = resolveAssetUrl(p.assetPath, p.mediaUrl);
+                const cardClass = 'bg-gradient-to-r from-brand/10 to-surface-2 rounded-2xl p-5 flex gap-4 items-center hover:from-brand/20 transition no-underline group border border-brand/20';
+
+                const content = (
+                  <>
+                    <div className="w-20 h-20 bg-surface-3 rounded-xl flex items-center justify-center overflow-hidden shrink-0">
+                      <img
+                        src={imageSrc}
+                        alt={p.title}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-[10px] uppercase font-bold text-brand/70 tracking-wider">Sponsored</span>
+                      <h3 className="text-base font-semibold text-text group-hover:text-brand transition truncate">{p.title}</h3>
+                      <p className="text-xs text-text-muted line-clamp-2 mt-0.5">{p.description || 'Sponsored content'}</p>
+                      <p className="text-[11px] text-brand mt-1 font-semibold">{p.ctaText || 'Learn more'}</p>
+                      <p className="text-[10px] text-text-muted mt-1">by {p.username || 'Sponsor'}</p>
+                    </div>
+                  </>
+                );
+
+                return external ? (
+                  <a
+                    key={p.id}
+                    href={target}
+                    className={cardClass}
+                    rel="noopener noreferrer"
+                    onClick={() => { void api.post(`/api/promotions/${p.id}/click`, {}).catch(() => {}); }}
+                  >
+                    {content}
+                  </a>
+                ) : (
+                  <Link
+                    key={p.id}
+                    to={target}
+                    className={cardClass}
+                    onClick={() => { void api.post(`/api/promotions/${p.id}/click`, {}).catch(() => {}); }}
+                  >
+                    {content}
+                  </Link>
+                );
+              })}
             </div>
           </section>
 

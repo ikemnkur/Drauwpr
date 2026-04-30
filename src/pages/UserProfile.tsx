@@ -1,12 +1,6 @@
 import { useParams, Link } from 'react-router-dom';
-import { SocialIcon } from 'react-social-icons'
-
-const Twitter = <SocialIcon url="https://twitter.com" />
-const Instagram = <SocialIcon url="https://instagram.com" />
-const Youtube = <SocialIcon url="https://youtube.com" />
-const Github = <SocialIcon url="https://github.com" />
-
-import { Heart, Star, Users, Package, CreditCard, Calendar, ArrowLeft, Flame, Globe, ExternalLink, Pencil } from 'lucide-react';
+import { SocialIcon } from 'react-social-icons';
+import { Heart, Star, Users, Package, CreditCard, Calendar, ArrowLeft, Flame, Globe, Pencil } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { useAuth } from '../context/AuthContext';
@@ -121,6 +115,10 @@ export default function UserProfile() {
 
   const activeDrops = userDrops.filter((d) => d.status === 'active' || d.status === 'pending');
   const pastDrops = userDrops.filter((d) => d.status === 'dropped' || d.status === 'expired');
+  const avatarFallback = `https://picsum.photos/seed/user-avatar-${profile.id}/240/240`;
+  const bannerFallback = `https://picsum.photos/seed/user-banner-${profile.id}/1600/400`;
+  const avatarSrc = (profile.avatar || '').trim() || avatarFallback;
+  const bannerSrc = (profile.bannerUrl || '').trim() || bannerFallback;
 
   const joinedDate = new Date(profile.joined).toLocaleDateString('en-US', {
     year: 'numeric',
@@ -130,6 +128,7 @@ export default function UserProfile() {
 
   const ratingColor =
     profile.rating >= 80 ? 'text-green-500' : profile.rating >= 50 ? 'text-yellow-500' : 'text-red-500';
+  const reportHref = `/help?report=1&targetId=${encodeURIComponent(profile.id)}&targetUsername=${encodeURIComponent(profile.username)}`;
 
   return (
     <div className="max-w-4xl mx-auto py-8 px-4 space-y-6">
@@ -142,26 +141,35 @@ export default function UserProfile() {
       {/* Profile Header */}
       <div className="bg-surface rounded-2xl border border-surface-3 overflow-hidden">
         {/* Banner */}
-        {profile.bannerUrl ? (
-          <div
-            className="h-32 bg-cover bg-center"
-            style={{ backgroundImage: `url(${profile.bannerUrl})` }}
+        <div className="h-32 bg-surface-3 overflow-hidden">
+          <img
+            src={bannerSrc}
+            alt={`${profile.username} banner`}
+            className="w-full h-full object-cover"
+            onError={(e) => {
+              const img = e.currentTarget;
+              if (img.src !== bannerFallback) img.src = bannerFallback;
+            }}
           />
-        ) : (
-          <div className="h-32 bg-gradient-to-r from-orange-600/30 via-orange-500/10 to-transparent" />
-        )}
+        </div>
 
         <div className="px-6 pb-5 -mt-12">
           <div className="flex flex-col sm:flex-row items-start gap-5">
             {/* Avatar */}
             <div className="w-24 h-24 rounded-full bg-surface-3 border-4 border-surface flex items-center justify-center text-3xl font-bold text-brand shrink-0 overflow-hidden">
-              {profile.avatar
-                ? <img src={profile.avatar} alt={profile.username} className="w-full h-full object-cover" />
-                : profile.username[0].toUpperCase()
-              }
+              <img
+                src={avatarSrc}
+                alt={profile.username}
+                className="w-full h-full object-cover"
+                onError={(e) => {
+                  const img = e.currentTarget;
+                  if (img.src !== avatarFallback) img.src = avatarFallback;
+                }}
+              />
             </div>
 
             <div className="flex-1 pt-2 sm:pt-12">
+              <br></br>
               <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-wrap">
                 <h1 className="text-2xl font-bold text-text">{profile.username}</h1>
 
@@ -187,6 +195,15 @@ export default function UserProfile() {
                   <Heart className={`w-4 h-4 ${favorited ? 'fill-red-400' : ''}`} />
                   {favorited ? 'Following' : 'Follow'}
                 </button>
+
+                {authUser?.id !== profile.id && (
+                  <Link
+                    to={reportHref}
+                    className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-medium bg-surface-2 text-text-muted border border-surface-3 hover:border-red-500/50 hover:text-red-400 transition no-underline"
+                  >
+                    Report User
+                  </Link>
+                )}
               </div>
               <p className="text-text-muted mt-2 text-sm leading-relaxed max-w-xl">{profile.bio}</p>
               <p className="text-text-muted text-xs mt-2 flex items-center gap-1">
@@ -197,15 +214,15 @@ export default function UserProfile() {
               {/* Social links */}
               {profile.socialLinks && (
                 <div className="flex items-center gap-2 mt-3 flex-wrap">
-                  {([  
-                    { key: 'website',   Icon: Globe,        label: 'Website' },
-                    { key: 'twitter',   Icon: Twitter,      label: 'Twitter' },
-                    { key: 'instagram', Icon: Instagram,    label: 'Instagram' },
-                    { key: 'youtube',   Icon: Youtube,      label: 'YouTube' },
-                    { key: 'github',    Icon: Github,       label: 'GitHub' },
-                    { key: 'tiktok',    Icon: ExternalLink, label: 'TikTok' },
-                    { key: 'discord',   Icon: ExternalLink, label: 'Discord' },
-                  ] as { key: keyof SocialLinks; Icon: React.ElementType; label: string }[]).map(({ key, Icon, label }) => {
+                  {([
+                    { key: 'website',   network: null,        label: 'Website' },
+                    { key: 'twitter',   network: 'twitter',   label: 'Twitter' },
+                    { key: 'instagram', network: 'instagram', label: 'Instagram' },
+                    { key: 'youtube',   network: 'youtube',   label: 'YouTube' },
+                    { key: 'github',    network: 'github',    label: 'GitHub' },
+                    { key: 'tiktok',    network: 'tiktok',    label: 'TikTok' },
+                    { key: 'discord',   network: 'discord',   label: 'Discord' },
+                  ] as { key: keyof SocialLinks; network: string | null; label: string }[]).map(({ key, network, label }) => {
                     const href = profile.socialLinks?.[key];
                     if (!href) return null;
                     return (
@@ -217,7 +234,10 @@ export default function UserProfile() {
                         title={label}
                         className="w-8 h-8 rounded-lg bg-surface-2 border border-surface-3 flex items-center justify-center text-text-muted hover:text-brand hover:border-brand/50 transition"
                       >
-                        <Icon className="w-4 h-4" />
+                        {network
+                          ? <SocialIcon network={network} style={{ width: 24, height: 24 }} />
+                          : <Globe className="w-4 h-4" />
+                        }
                       </a>
                     );
                   })}

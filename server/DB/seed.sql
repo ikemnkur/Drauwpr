@@ -60,7 +60,6 @@ INSERT INTO `drops`
    `goalAmount`, `currentContributions`, `contributorCount`,
    `momentum`, `burnRate`, `lastMomentumUpdate`,
    `sensitivity`, `decayConstant`, `basePrice`,
-   `dailyPriceDecayPct`, `volumeDecayStep`, `volumeDecayPct`,
    `totalDownloads`, `totalRevenue`, `avgRating`, `reviewCount`, `likeCount`, `dislikeCount`,
    `status`, `isPublic`, `created_at`)
 VALUES
@@ -75,7 +74,6 @@ VALUES
     500000, 312500, 1247,
     2.4, 3.4, NOW(),
     5, 0.0003, 15000,
-    5.00, 1000, 5.00,
     0, 0, NULL, 0, 0, 0,
     'active', 1, NOW() - INTERVAL 2 DAY
   ),
@@ -91,7 +89,6 @@ VALUES
     200000, 210000, 843,
     4.1, 5.1, NOW(),
     5, 0.0003, 8000,
-    5.00, 500, 5.00,
     0, 0, NULL, 0, 0, 0,
     'active', 1, NOW() - INTERVAL 1 DAY
   ),
@@ -107,7 +104,6 @@ VALUES
     100000, 100000, 520,
     0, 1, NOW() - INTERVAL 6 HOUR,
     5, 0.0003, 5000,
-    5.00, 1000, 5.00,
     2340, 8424000, 78.33, 3, 2, 0,
     'dropped', 1, NOW() - INTERVAL 5 DAY
   ),
@@ -123,7 +119,6 @@ VALUES
     300000, 42000, 187,
     0.3, 1.3, NOW(),
     5, 0.0003, 3000,
-    5.00, 500, 5.00,
     0, 0, NULL, 0, 0, 0,
     'pending', 1, NOW() - INTERVAL 1 DAY
   );

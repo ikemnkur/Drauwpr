@@ -1,4 +1,4 @@
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useState, useEffect, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { api } from '../lib/api';
@@ -21,11 +21,29 @@ interface ServerContributor {
   lastContribution: string;
 }
 
+interface SponsoredPromo {
+  id: string;
+  username: string | null;
+  title: string;
+  description: string | null;
+  targetDropId: string;
+  ctaText: string | null;
+  mediaUrl: string | null;
+  assetPath: string | null;
+}
+
+interface SponsoredResponse {
+  sponsored: SponsoredPromo[];
+}
+
 export default function DropFeature() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const API_BASE = import.meta.env.VITE_API_URL || '';
   const { drops } = useApp();
   const [fetchedDrop, setFetchedDrop] = useState<Drop | null>(null);
   const [contributors, setContributors] = useState<Contributor[]>([]);
+  const [sponsoredAd, setSponsoredAd] = useState<SponsoredPromo | null>(null);
   const [loading, setLoading] = useState(false);
   const [notFound, setNotFound] = useState(false);
 
@@ -34,6 +52,54 @@ export default function DropFeature() {
 
   const localDrop = drops.find((d) => d.id === id);
   const drop = localDrop ?? fetchedDrop;
+
+  function resolveAssetUrl(pathOrUrl: string | null, fallbackUrl: string | null): string {
+    const raw = (pathOrUrl || fallbackUrl || '').trim();
+    if (!raw) return 'https://picsum.photos/seed/dropfeature-ad/800/420';
+    if (/^https?:\/\//i.test(raw)) return raw;
+    if (raw.startsWith('/')) return `${API_BASE}${raw}`;
+    return `${API_BASE}/${raw}`;
+  }
+
+  function resolveTarget(targetDropId: string): string {
+    const t = String(targetDropId || '').trim();
+    if (!t) return '/explore';
+    if (/^https?:\/\//i.test(t)) return t;
+    if (t.startsWith('/')) return t;
+    if (t.includes('/drop/')) return t;
+    return `/drop/${t}`;
+  }
+
+  useEffect(() => {
+    if (!id || !drop) return;
+
+    const windowClosed = Date.now() >= drop.scheduledDropTime;
+    const goalReached = drop.currentContributions >= drop.goalAmount;
+    const released = drop.status === 'dropped' || (goalReached && windowClosed);
+
+    if (released) {
+      navigate(`/drop/${id}/download`, { replace: true });
+    }
+  }, [drop, id, navigate]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.get<SponsoredResponse>('/api/promotions/sponsored?limit=8')
+      .then((res) => {
+        if (cancelled) return;
+        const ads = res.sponsored || [];
+        setSponsoredAd(ads.length ? ads[Math.floor(Math.random() * ads.length)] : null);
+      })
+      .catch(() => {
+        if (!cancelled) setSponsoredAd(null);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!sponsoredAd) return;
+    void api.post(`/api/promotions/${sponsoredAd.id}/impression`, {}).catch(() => {});
+  }, [sponsoredAd]);
 
   const fetchContributors = useCallback(() => {
     if (!id) return;
@@ -374,6 +440,54 @@ export default function DropFeature() {
         {/* Right: Contribute form */}
         <div className="space-y-4">
           <ContributeForm dropId={drop.id} onContributed={handleContributed} />
+
+          {sponsoredAd && (
+            (() => {
+              const target = resolveTarget(sponsoredAd.targetDropId);
+              const external = /^https?:\/\//i.test(target);
+              const classes = 'hidden lg:block bg-surface-2 rounded-xl border border-surface-3 overflow-hidden no-underline group';
+              const content = (
+                <>
+                  <div className="aspect-[16/10] overflow-hidden bg-surface-3">
+                    <img
+                      src={resolveAssetUrl(sponsoredAd.assetPath, sponsoredAd.mediaUrl)}
+                      alt={sponsoredAd.title}
+                      className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform"
+                    />
+                  </div>
+                  <div className="p-3">
+                    <p className="text-[10px] uppercase tracking-wider font-bold text-brand/80">Sponsored</p>
+                    <p className="text-sm font-semibold text-text mt-1 line-clamp-1">{sponsoredAd.title}</p>
+                    <p className="text-xs text-text-muted mt-0.5 line-clamp-2">{sponsoredAd.description || 'Sponsored content'}</p>
+                    <p className="text-xs text-brand font-semibold mt-2">{sponsoredAd.ctaText || 'Learn more'}</p>
+                    <p className="text-[10px] text-text-muted mt-1">by {sponsoredAd.username || 'Sponsor'}</p>
+                  </div>
+                </>
+              );
+
+              return external ? (
+                <a
+                  href={target}
+                  className={classes}
+                  onClick={() => { void api.post(`/api/promotions/${sponsoredAd.id}/click`, {}).catch(() => {}); }}
+                >
+                  {content}
+                </a>
+              ) : (
+                <Link
+                  to={target}
+                  className={classes}
+                  onClick={() => { void api.post(`/api/promotions/${sponsoredAd.id}/click`, {}).catch(() => {}); }}
+                >
+                  {content}
+                </Link>
+              );
+            })()
+          )}
+
+
+        
+            
         </div>
       </div>
     </div>

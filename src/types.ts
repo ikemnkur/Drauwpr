@@ -26,9 +26,9 @@ export interface Drop {
   sensitivity: number;          // tunable constant
   decayConstant: number;        // k — momentum decay rate
   basePrice: number;            // credits for post-drop purchase
-  dailyPriceDecayPct: number;   // % per 24h
-  volumeDecayStep: number;      // price drops every N downloads
-  volumeDecayPct: number;
+  dailyPriceDecayPct?: number;  // legacy field (deprecated)
+  volumeDecayStep?: number;     // legacy field (deprecated)
+  volumeDecayPct?: number;      // legacy field (deprecated)
   totalDownloads: number;
   totalRevenue: number;         // credits earned from post-drop sales
   avgRating: number | null;     // 0-100 community rating

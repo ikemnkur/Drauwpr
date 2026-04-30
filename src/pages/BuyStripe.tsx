@@ -1,15 +1,16 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CreditCard, CheckCircle, XCircle, Loader2, ArrowLeft } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../lib/api';
+import { DEFAULT_ECONOMY_SETTINGS, fetchEconomySettings } from '../lib/economySettings';
 
-const PACKS = [
-  { credits: 5_000,   price: '$5.00',   dollars: 5,   popular: false },
-  { credits: 10_000,  price: '$10.00',  dollars: 10,  popular: false },
-  { credits: 25_000,  price: '$25.00',  dollars: 25,  popular: true  },
-  { credits: 50_000,  price: '$50.00',  dollars: 50,  popular: false },
-  { credits: 100_000, price: '$100.00', dollars: 100, popular: false },
+const PACK_CONFIG = [
+  { credits: 5_000, key: 'creditPack5000' as const, popular: false },
+  { credits: 10_000, key: 'creditPack10000' as const, popular: false },
+  { credits: 25_000, key: 'creditPack25000' as const, popular: true },
+  { credits: 50_000, key: 'creditPack50000' as const, popular: false },
+  { credits: 100_000, key: 'creditPack100000' as const, popular: false },
 ];
 
 // Stripe test checkout payment link IDs
@@ -24,8 +25,25 @@ const STRIPE_IDS: Record<number, string> = {
 export default function BuyStripe() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const checkoutSessionId = searchParams.get('session_id');
 
   const [selected, setSelected] = useState(2); // default $25
+  const [economy, setEconomy] = useState(DEFAULT_ECONOMY_SETTINGS);
+
+  useEffect(() => {
+    fetchEconomySettings().then(setEconomy);
+  }, []);
+
+  const PACKS = PACK_CONFIG.map((pack) => {
+    const dollars = Number(economy[pack.key] ?? 0);
+    return {
+      credits: pack.credits,
+      dollars,
+      price: `$${dollars.toFixed(2)}`,
+      popular: pack.popular,
+    };
+  });
 
   const [showModal, setShowModal] = useState(false);
   const [pendingPack, setPendingPack] = useState<typeof PACKS[0] | null>(null);
@@ -33,6 +51,8 @@ export default function BuyStripe() {
   const [isWaitingForReturn, setIsWaitingForReturn] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  const SHOW_COMPLETE_PAYMENT_BOX = false;
 
   const getStripeUrl = (credits: number) => {
     const id = STRIPE_IDS[credits];
@@ -49,10 +69,61 @@ export default function BuyStripe() {
     if (!pendingPack) return;
     const url = getStripeUrl(pendingPack.credits);
     if (!url) return;
-    setStartTimestamp(Date.now());
-    window.open(url, '_blank', 'noopener,noreferrer');
+    const startedAt = Date.now();
+    setStartTimestamp(startedAt);
+    sessionStorage.setItem('stripe_pending_start', String(startedAt));
+    sessionStorage.setItem('stripe_pending_pack', JSON.stringify(pendingPack));
     setShowModal(false);
-    setIsWaitingForReturn(true);
+    window.location.assign(url);
+  };
+
+  const submitVerification = async (payload: {
+    checkoutSessionId?: string;
+    start: number;
+    end: number;
+    packageData?: { credits: number; amount: number; dollars: number };
+  }) => {
+    if (!user) return;
+
+    const response = await api.post<{ status?: string; pending?: boolean; message?: string }>('/api/verify-stripe-payment', {
+      checkoutSessionId: payload.checkoutSessionId,
+      timeRange: { start: payload.start, end: payload.end },
+      user: { id: user.id, username: user.username, email: user.email },
+      packageData: payload.packageData,
+    });
+
+    if (response.status === 'succeeded') {
+      const grantedCredits = payload.packageData?.credits;
+      setVerifyResult({
+        success: true,
+        message: grantedCredits
+          ? `${grantedCredits.toLocaleString()} credits have been added to your account!`
+          : 'Your payment was verified and credits have been added to your account!',
+      });
+      setIsWaitingForReturn(false);
+      setPendingPack(null);
+      setStartTimestamp(null);
+      sessionStorage.removeItem('stripe_pending_start');
+      sessionStorage.removeItem('stripe_pending_pack');
+      return;
+    }
+
+    if (response.pending || response.status === 'pending') {
+      setVerifyResult({
+        success: false,
+        message:
+          response.message ||
+          'This payment could not be auto-verified and has been submitted for manual review. Credits will be applied once approved.',
+      });
+      setIsWaitingForReturn(false);
+      setPendingPack(null);
+      setStartTimestamp(null);
+      sessionStorage.removeItem('stripe_pending_start');
+      sessionStorage.removeItem('stripe_pending_pack');
+      return;
+    }
+
+    setVerifyResult({ success: false, message: 'Payment not yet confirmed. Please wait a moment and try again.' });
   };
 
   const handleVerifyPayment = async () => {
@@ -60,32 +131,68 @@ export default function BuyStripe() {
     setIsVerifying(true);
     setVerifyResult(null);
     try {
-      const response = await api.post<{ status?: string }>('/api/verify-stripe-payment', {
-        timeRange: { start: startTimestamp, end: Date.now() },
-        user: { id: user.id, username: user.username, email: user.email },
+      await submitVerification({
+        start: startTimestamp,
+        end: Date.now(),
         packageData: { credits: pendingPack.credits, amount: pendingPack.dollars * 100, dollars: pendingPack.dollars },
       });
-      if (response.status === 'succeeded') {
-        setVerifyResult({
-          success: true,
-          message: `${pendingPack.credits.toLocaleString()} credits have been added to your account!`,
-        });
-        setIsWaitingForReturn(false);
-        setPendingPack(null);
-        setStartTimestamp(null);
-      } else {
-        setVerifyResult({ success: false, message: 'Payment not yet confirmed. Please wait a moment and try again.' });
-      }
     } catch (err: unknown) {
       const e = err as { data?: { error?: string }; message?: string };
       setVerifyResult({
         success: false,
-        message: e?.data?.error || e?.message || 'Verification failed. Please try again.',
+        message:
+          e?.data?.error ||
+          e?.message ||
+          'This payment could not be auto-verified and has been submitted for manual review. Credits will be applied once approved.',
       });
     } finally {
       setIsVerifying(false);
     }
   };
+
+  useEffect(() => {
+    if (!checkoutSessionId || !user) return;
+
+    const storedStart = Number(sessionStorage.getItem('stripe_pending_start') || 0);
+    const rawPack = sessionStorage.getItem('stripe_pending_pack');
+    let storedPack: { credits: number; dollars: number } | null = null;
+
+    if (rawPack) {
+      try {
+        const parsed = JSON.parse(rawPack);
+        if (parsed && Number(parsed.credits) > 0 && Number(parsed.dollars) > 0) {
+          storedPack = { credits: Number(parsed.credits), dollars: Number(parsed.dollars) };
+        }
+      } catch {
+        storedPack = null;
+      }
+    }
+
+    const start = Number.isFinite(storedStart) && storedStart > 0 ? storedStart : Date.now() - (20 * 60 * 1000);
+
+    setIsVerifying(true);
+    setVerifyResult(null);
+
+    void submitVerification({
+      checkoutSessionId,
+      start,
+      end: Date.now(),
+      packageData: storedPack
+        ? { credits: storedPack.credits, dollars: storedPack.dollars, amount: storedPack.dollars * 100 }
+        : undefined,
+    }).catch((err: unknown) => {
+      const e = err as { data?: { error?: string }; message?: string };
+      setVerifyResult({
+        success: false,
+        message:
+          e?.data?.error ||
+          e?.message ||
+          'This payment could not be auto-verified and has been submitted for manual review. Credits will be applied once approved.',
+      });
+    }).finally(() => {
+      setIsVerifying(false);
+    });
+  }, [checkoutSessionId, user]);
 
   const handleCancelWaiting = () => {
     setIsWaitingForReturn(false);
@@ -122,8 +229,7 @@ export default function BuyStripe() {
               for <span className="font-bold text-text">{pendingPack.price}</span>.
             </p>
             <div className="bg-surface-2 rounded-xl p-3 mb-5 text-sm text-text-muted">
-              A new payment window will open. Complete the payment there, then return here and click{' '}
-              <span className="font-medium text-text">"I've Completed Payment"</span> to verify and receive your credits.
+              You will be redirected to Stripe checkout. After payment, Stripe should return you here automatically for verification.
             </div>
             <div className="flex gap-3">
               <button
@@ -144,7 +250,7 @@ export default function BuyStripe() {
       )}
 
       {/* Complete Your Payment banner */}
-      {isWaitingForReturn && pendingPack && (
+      {SHOW_COMPLETE_PAYMENT_BOX && isWaitingForReturn && pendingPack && (
         <div className="mb-6 bg-surface-2 border border-brand/30 rounded-2xl p-5">
           <h3 className="text-base font-bold text-text mb-1">Complete Your Payment</h3>
           <p className="text-sm text-text-muted mb-4">
@@ -181,6 +287,16 @@ export default function BuyStripe() {
                 "I've Completed Payment"
               )}
             </button>
+          </div>
+        </div>
+      )}
+
+      {isVerifying && !verifyResult && (
+        <div className="mb-6 flex items-start gap-3 text-sm bg-surface-2 border border-surface-3 rounded-xl p-4">
+          <Loader2 className="w-5 h-5 mt-0.5 shrink-0 animate-spin text-brand" />
+          <div>
+            <p className="font-bold text-text">Verifying Stripe Payment</p>
+            <p className="text-text-muted mt-0.5">Please wait while we confirm your checkout session.</p>
           </div>
         </div>
       )}

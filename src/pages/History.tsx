@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import {
   History as HistoryIcon, Flame, ArrowUpRight, Undo2,
   Download, CreditCard, Crown, Search, Filter, FileDown,
-  FileText, ChevronDown,
+  FileText, ChevronDown, Megaphone,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import {
@@ -10,11 +10,13 @@ import {
   usePurchaseHistory,
   useDownloadHistory,
   useMembershipHistory,
+  useEarningsHistory,
+  usePromoChargeHistory,
 } from '../hooks/useData';
 
 // ── Types ──────────────────────────────────────────────────
 
-type Tab = 'contributions' | 'purchases' | 'downloads' | 'membership';
+type Tab = 'contributions' | 'purchases' | 'downloads' | 'membership' | 'earnings' | 'promo';
 type DateRange = 'all' | 'month' | '3months' | 'year';
 
 // ── Helpers ────────────────────────────────────────────────
@@ -93,11 +95,15 @@ export default function History() {
   const purchases = usePurchaseHistory();
   const downloads = useDownloadHistory();
   const memberships = useMembershipHistory();
+  const earnings = useEarningsHistory();
+  const promoCharges = usePromoChargeHistory();
 
   const loading =
     tab === 'contributions' ? contrib.loading :
     tab === 'purchases' ? purchases.loading :
     tab === 'downloads' ? downloads.loading :
+    tab === 'earnings' ? earnings.loading :
+    tab === 'promo' ? promoCharges.loading :
     memberships.loading;
 
   const cutoff = dateRangeCutoff(dateRange);
@@ -131,6 +137,18 @@ export default function History() {
     return !q || e.plan.toLowerCase().includes(q);
   }), [memberships.entries, cutoff, q, statusFilter]);
 
+  const filteredEarnings = useMemo(() => earnings.entries.filter(e => {
+    if (e.timestamp < cutoff) return false;
+    if (statusFilter !== 'all' && 'completed' !== statusFilter) return false;
+    return !q || (e.dropTitle ?? '').toLowerCase().includes(q);
+  }), [earnings.entries, cutoff, q, statusFilter]);
+
+  const filteredPromoCharges = useMemo(() => promoCharges.entries.filter(e => {
+    if (e.timestamp < cutoff) return false;
+    if (statusFilter !== 'all' && 'completed' !== statusFilter) return false;
+    return !q || (e.description ?? '').toLowerCase().includes(q);
+  }), [promoCharges.entries, cutoff, q, statusFilter]);
+
   // ── Export helpers ────────────────────────────────
   function exportCSV() {
     if (tab === 'contributions') {
@@ -150,6 +168,18 @@ export default function History() {
         ['Date', 'Time', 'Drop', 'Price Paid', 'Base Price', 'Contributor Disc.', 'Time Dec. Disc.', 'Volume Dec. Disc.', 'Download #'],
         filteredDownloads.map(e => [fmtDate(e.timestamp), fmtTime(e.timestamp), e.dropTitle, e.pricePaid, e.basePrice, `${e.contributorDiscount}%`, `${e.timeDecayDiscount}%`, `${e.volumeDecayDiscount}%`, e.downloadNumber]),
         'downloads.csv',
+      );
+    } else if (tab === 'earnings') {
+      downloadCSV(
+        ['Date', 'Time', 'Drop', 'Amount Earned', 'Balance After', 'Description'],
+        filteredEarnings.map(e => [fmtDate(e.timestamp), fmtTime(e.timestamp), e.dropTitle ?? 'Unknown', e.amount, e.balanceAfter, e.description ?? '']),
+        'creator-earnings.csv',
+      );
+    } else if (tab === 'promo') {
+      downloadCSV(
+        ['Date', 'Time', 'Charge', 'Balance After', 'Description'],
+        filteredPromoCharges.map(e => [fmtDate(e.timestamp), fmtTime(e.timestamp), Math.abs(e.amount), e.balanceAfter, e.description ?? '']),
+        'promo-charges.csv',
       );
     } else {
       downloadCSV(
@@ -173,6 +203,14 @@ export default function History() {
       await downloadPDF('Download History', ['Date', 'Time', 'Drop', 'Price Paid', 'Base Price', 'Contrib Disc', 'Time Disc', 'Vol Disc', 'DL #'],
         filteredDownloads.map(e => [fmtDate(e.timestamp), fmtTime(e.timestamp), e.dropTitle, e.pricePaid, e.basePrice, `${e.contributorDiscount}%`, `${e.timeDecayDiscount}%`, `${e.volumeDecayDiscount}%`, e.downloadNumber]),
         'downloads.pdf');
+    } else if (tab === 'earnings') {
+      await downloadPDF('Creator Earnings History', ['Date', 'Time', 'Drop', 'Amount Earned', 'Balance After', 'Description'],
+        filteredEarnings.map(e => [fmtDate(e.timestamp), fmtTime(e.timestamp), e.dropTitle ?? 'Unknown', e.amount, e.balanceAfter, e.description ?? '']),
+        'creator-earnings.pdf');
+    } else if (tab === 'promo') {
+      await downloadPDF('Promo Charges History', ['Date', 'Time', 'Charge', 'Balance After', 'Description'],
+        filteredPromoCharges.map(e => [fmtDate(e.timestamp), fmtTime(e.timestamp), Math.abs(e.amount), e.balanceAfter, e.description ?? '']),
+        'promo-charges.pdf');
     } else {
       await downloadPDF('Membership History', ['Date', 'Time', 'Plan', 'Amount', 'Billing', 'Status'],
         filteredMemberships.map(e => [fmtDate(e.timestamp), fmtTime(e.timestamp), e.plan, e.amount, e.billingPeriod, e.status]),
@@ -184,12 +222,16 @@ export default function History() {
   const totalCreditsBought = purchases.entries.filter(e => e.status === 'completed').reduce((s, e) => s + e.credits, 0);
   const totalSpentDownloads = downloads.entries.reduce((s, e) => s + e.pricePaid, 0);
   const totalSpentContribs = contrib.totalSpent;
+  const totalEarnings = earnings.totalEarned;
+  const totalPromoCharges = promoCharges.totalCharged;
 
   // ── Tab config ─────────────────────────────────────
   const tabs: { id: Tab; label: string; icon: React.ReactNode; count: number }[] = [
     { id: 'contributions', label: 'Contributions', icon: <Flame className="w-4 h-4" />, count: contrib.entries.length },
     { id: 'purchases', label: 'Credit Purchases', icon: <CreditCard className="w-4 h-4" />, count: purchases.entries.length },
     { id: 'downloads', label: 'Downloads', icon: <Download className="w-4 h-4" />, count: downloads.entries.length },
+    { id: 'earnings', label: 'Earnings', icon: <ArrowUpRight className="w-4 h-4" />, count: earnings.entries.length },
+    { id: 'promo', label: 'Promo Charges', icon: <Megaphone className="w-4 h-4" />, count: promoCharges.entries.length },
     { id: 'membership', label: 'Membership', icon: <Crown className="w-4 h-4" />, count: memberships.entries.length },
   ];
 
@@ -219,7 +261,7 @@ export default function History() {
       </div>
 
       {/* Summary bar */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-6 gap-3">
         <div className="bg-surface-2 rounded-xl p-3">
           <p className="text-xs text-text-muted mb-1">Credits spent (contributions)</p>
           <p className="text-lg font-bold text-brand">{totalSpentContribs.toLocaleString()}</p>
@@ -229,8 +271,16 @@ export default function History() {
           <p className="text-lg font-bold text-brand">{totalSpentDownloads.toLocaleString()}</p>
         </div>
         <div className="bg-surface-2 rounded-xl p-3">
+          <p className="text-xs text-text-muted mb-1">Credits earned</p>
+          <p className="text-lg font-bold text-green-400">{totalEarnings.toLocaleString()}</p>
+        </div>
+        <div className="bg-surface-2 rounded-xl p-3">
           <p className="text-xs text-text-muted mb-1">Credits bought</p>
           <p className="text-lg font-bold text-green-400">{totalCreditsBought.toLocaleString()}</p>
+        </div>
+        <div className="bg-surface-2 rounded-xl p-3">
+          <p className="text-xs text-text-muted mb-1">Promo charges</p>
+          <p className="text-lg font-bold text-brand">{totalPromoCharges.toLocaleString()}</p>
         </div>
         <div className="bg-surface-2 rounded-xl p-3">
           <p className="text-xs text-text-muted mb-1">Active plan</p>
@@ -272,6 +322,8 @@ export default function History() {
               tab === 'contributions' ? 'Search by drop title…' :
               tab === 'purchases' ? 'Search by method or TX hash…' :
               tab === 'downloads' ? 'Search by drop title…' :
+              tab === 'earnings' ? 'Search by drop title…' :
+              tab === 'promo' ? 'Search by charge description…' :
               'Search by plan…'
             }
             className="w-full pl-9 pr-3 py-2 bg-surface-2 border border-surface-3 rounded-lg text-sm text-text placeholder:text-text-muted focus:outline-none focus:border-brand"
@@ -293,7 +345,7 @@ export default function History() {
           <ChevronDown className="w-3.5 h-3.5 absolute right-2 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
         </div>
 
-        {tab !== 'downloads' && (
+        {tab !== 'downloads' && tab !== 'earnings' && tab !== 'promo' && (
           <div className="relative">
             <select
               value={statusFilter}
@@ -413,6 +465,57 @@ export default function History() {
                   </Link>
                 );
               })}
+            </div>
+          )}
+
+          {/* Earnings tab */}
+          {tab === 'earnings' && (
+            filteredEarnings.length === 0 ? <EmptyState icon={<ArrowUpRight className="w-8 h-8 text-text-muted" />} label="No earnings found." sub="Earnings from downloads will appear here." /> :
+            <div className="space-y-2">
+              {filteredEarnings.map(e => (
+                <div key={e.id} className="bg-surface-2 rounded-xl p-4 flex items-center gap-4">
+                  <div className="w-9 h-9 bg-surface-3 rounded-lg flex items-center justify-center shrink-0">
+                    <ArrowUpRight className="w-4 h-4 text-green-400" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-text truncate">{e.dropTitle}</p>
+                    <p className="text-xs text-text-muted">{fmtDate(e.timestamp)} · {fmtTime(e.timestamp)}</p>
+                    {e.description && (
+                      <p className="text-xs text-text-muted mt-0.5">{e.description}</p>
+                    )}
+                  </div>
+                  <div className="text-right shrink-0 flex flex-col items-end gap-1">
+                    <span className="text-sm font-mono font-semibold text-green-400">
+                      +{e.amount.toLocaleString()} cr
+                    </span>
+                    <span className="text-xs text-text-muted">Balance: {e.balanceAfter.toLocaleString()}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Promo charges tab */}
+          {tab === 'promo' && (
+            filteredPromoCharges.length === 0 ? <EmptyState icon={<Megaphone className="w-8 h-8 text-text-muted" />} label="No promo charges found." sub="Charges from ad impressions and clicks will appear here." /> :
+            <div className="space-y-2">
+              {filteredPromoCharges.map(c => (
+                <div key={c.id} className="bg-surface-2 rounded-xl p-4 flex items-center gap-4">
+                  <div className="w-9 h-9 bg-surface-3 rounded-lg flex items-center justify-center shrink-0">
+                    <Megaphone className="w-4 h-4 text-brand" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-text truncate">{c.description || 'Promo charge'}</p>
+                    <p className="text-xs text-text-muted">{fmtDate(c.timestamp)} · {fmtTime(c.timestamp)}</p>
+                  </div>
+                  <div className="text-right shrink-0 flex flex-col items-end gap-1">
+                    <span className="text-sm font-mono font-semibold text-brand">
+                      -{Math.abs(c.amount).toLocaleString()} cr
+                    </span>
+                    <span className="text-xs text-text-muted">Balance: {c.balanceAfter.toLocaleString()}</span>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
 

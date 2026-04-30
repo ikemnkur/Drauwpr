@@ -107,13 +107,14 @@ export function estimateRealSecondsRemaining(
   return Math.max(0, realSeconds);
 }
 
-/** Contributor discount: Price = BasePrice × (1 − floor(userContribution^1.5) / totalGoal) */
+/** Contributor discount: Price = BasePrice × (1 − (userContribution / totalGoal)^1.5) */
 export function contributorDiscount(
   basePrice: number,
   userContribution: number,
   totalGoal: number,
 ): number {
-  const discount = Math.floor(Math.pow(userContribution, 1.5)) / totalGoal;
+  const ratio = totalGoal > 0 ? Math.max(0, userContribution / totalGoal) : 0;
+  const discount = Math.pow(ratio, 0.75);
   return Math.max(0, basePrice * (1 - Math.min(discount, 0.95)));
 }
 

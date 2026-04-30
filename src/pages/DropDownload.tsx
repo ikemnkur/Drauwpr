@@ -178,6 +178,7 @@ export default function DropDownload() {
       setDlError(e.message || 'Download failed');
       setDlState('idle');
     }
+    
   }
 
   const avgRating = reviews.length > 0
@@ -289,7 +290,11 @@ export default function DropDownload() {
       {/* Price, download & contributors */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="space-y-4">
-          <PriceDisplay drop={drop} userContribution={pricePreview?.contributedAmount ?? 0} />
+          <PriceDisplay
+            drop={drop}
+            userContribution={pricePreview?.contributedAmount ?? 0}
+            pricePreview={pricePreview}
+          />
 
           {/* Price detail toggle */}
           {pricePreview && pricePreview.totalDiscountPct > 0 && (
@@ -430,12 +435,12 @@ export default function DropDownload() {
                   </div>
                 </div>
                 {/* Quality bar */}
-                <div className="h-1.5 bg-surface-3 rounded-full overflow-hidden mb-3">
+                {/* <div className="h-1.5 bg-surface-3 rounded-full overflow-hidden mb-3">
                   <div
                     className="h-full rounded-full bg-brand transition-all"
                     style={{ width: `${r.rating}%` }}
                   />
-                </div>
+                </div> */}
                 <p className="text-sm text-text-muted">{r.comment}</p>
               </div>
             ))}

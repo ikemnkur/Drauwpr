@@ -126,6 +126,7 @@ const corsOptions = {
       'http://localhost:3000',
       'http://localhost:3001',
       'http://localhost:3002',
+      'http://localhost:4000',
       'http://localhost:5001',
       'http://localhost:5000',
       // 'https://key-ching.com',
@@ -135,6 +136,7 @@ const corsOptions = {
       // "https://servers4sqldb.uc.r.appspot.com",
       // "https://orca-app-j32vd.ondigitalocean.app",
       // "https://monkfish-app-mllt8.ondigitalocean.app/",
+      "https://editor-pavement-encircle.ngrok-free.dev",
       "http://localhost:5173",
       "http://localhost:5174",
       "http://localhost:5175",
@@ -1266,6 +1268,7 @@ server.post(PROXY + '/api/promo-submissions', authenticateToken, async (req, res
       const ctaText = String(fields.ctaText || '').trim() || null;
       const contactEmail = String(fields.contactEmail || req.user?.email || '').trim();
       const budgetUsd = Number(fields.budgetUsd || 0) || 0;
+      const tags = String(fields.tags || '').trim() || null;
 
       if (!['ad', 'drop_sponsorship'].includes(submissionType)) {
         return res.status(400).json({ message: 'Invalid submission type' });
@@ -1299,6 +1302,7 @@ server.post(PROXY + '/api/promo-submissions', authenticateToken, async (req, res
         ctaText,
         budgetUsd,
         assetPath,
+        tags,
         status: 'pending',
       });
 
@@ -1362,6 +1366,111 @@ server.post(PROXY + '/api/promo-submissions', authenticateToken, async (req, res
   });
 
   req.pipe(busboy);
+});
+
+server.get(PROXY + '/api/promo-submissions/me', authenticateToken, async (req, res) => {
+  try {
+    await ensurePromoSubmissionsTable();
+    const userId = String(req.user?.id || '');
+
+    const rows = await knex('promoSubmissions')
+      .where('userId', userId)
+      .orderBy('created_at', 'desc')
+      .select('*');
+
+    const toNum = (v) => Number(v || 0);
+    const summary = rows.reduce((acc, r) => {
+      const impressions = toNum(r.impressions);
+      const clicks = toNum(r.clicks);
+      const likes = toNum(r.likes);
+      const neutrals = toNum(r.neutrals);
+      const dislikes = toNum(r.dislikes);
+
+      acc.total += 1;
+      if (r.submissionType === 'ad') acc.ads += 1;
+      if (r.submissionType === 'drop_sponsorship') acc.sponsorships += 1;
+      acc.impressions += impressions;
+      acc.clicks += clicks;
+      acc.likes += likes;
+      acc.neutrals += neutrals;
+      acc.dislikes += dislikes;
+      return acc;
+    }, {
+      total: 0,
+      ads: 0,
+      sponsorships: 0,
+      impressions: 0,
+      clicks: 0,
+      likes: 0,
+      neutrals: 0,
+      dislikes: 0,
+    });
+
+    const ctr = summary.impressions > 0 ? (summary.clicks / summary.impressions) * 100 : 0;
+
+    res.json({
+      summary: {
+        ...summary,
+        ctrPct: Number(ctr.toFixed(2)),
+      },
+      items: rows.map((r) => {
+        const impressions = toNum(r.impressions);
+        const clicks = toNum(r.clicks);
+        return {
+          ...r,
+          ctrPct: impressions > 0 ? Number(((clicks / impressions) * 100).toFixed(2)) : 0,
+        };
+      }),
+    });
+  } catch (err) {
+    console.error('GET /api/promo-submissions/me error:', err);
+    res.status(500).json({ error: 'Failed to fetch promo performance' });
+  }
+});
+
+server.delete(PROXY + '/api/promo-submissions/:id', authenticateToken, async (req, res) => {
+  try {
+    await ensurePromoSubmissionsTable();
+    const id = String(req.params.id || '');
+    const userId = String(req.user?.id || '');
+
+    const row = await knex('promoSubmissions').where({ id, userId }).first();
+    if (!row) return res.status(404).json({ error: 'Promo item not found' });
+
+    await knex('promoSubmissions').where({ id, userId }).del();
+    res.json({ success: true, id });
+  } catch (err) {
+    console.error('DELETE /api/promo-submissions/:id error:', err);
+    res.status(500).json({ error: 'Failed to delete promo item' });
+  }
+});
+
+server.get(PROXY + '/api/promo-submissions/me/export', authenticateToken, async (req, res) => {
+  try {
+    await ensurePromoSubmissionsTable();
+    const userId = String(req.user?.id || '');
+    const rows = await knex('promoSubmissions')
+      .where('userId', userId)
+      .orderBy('created_at', 'desc')
+      .select('*');
+
+    const headers = [
+      'id', 'submissionType', 'status', 'title', 'targetDropId', 'budgetUsd',
+      'impressions', 'clicks', 'likes', 'neutrals', 'dislikes', 'tags', 'created_at', 'updated_at',
+    ];
+    const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const lines = [
+      headers.map(esc).join(','),
+      ...rows.map((r) => headers.map((h) => esc(r[h])).join(',')),
+    ];
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="promo-performance.csv"');
+    res.send(lines.join('\n'));
+  } catch (err) {
+    console.error('GET /api/promo-submissions/me/export error:', err);
+    res.status(500).json({ error: 'Failed to export promo performance' });
+  }
 });
 
 
@@ -1455,6 +1564,14 @@ const ensurePromoSubmissionsTable = async () => {
       assetPath VARCHAR(255) DEFAULT NULL,
       status VARCHAR(40) NOT NULL DEFAULT 'pending',
       adminNotes TEXT,
+      clicks INT DEFAULT 0,
+      dislikes INT DEFAULT 0,
+      likes INT DEFAULT 0,
+      neutrals INT DEFAULT 0,
+      impressions INT DEFAULT 0,
+      billedImpressions INT DEFAULT 0,
+      billedClicks INT DEFAULT 0,
+      tags TINYTEXT,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (id),
@@ -1462,7 +1579,108 @@ const ensurePromoSubmissionsTable = async () => {
       KEY idx_promo_user (userId)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`
   );
+
+  const [cols] = await knex.raw(
+    `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'promoSubmissions'
+       AND COLUMN_NAME IN ('clicks', 'dislikes', 'likes', 'neutrals', 'impressions', 'billedImpressions', 'billedClicks', 'tags')`
+  );
+
+  const existing = new Set((cols || []).map((col) => col.COLUMN_NAME));
+  const alters = [];
+  if (!existing.has('clicks')) alters.push('ADD COLUMN clicks INT DEFAULT 0');
+  if (!existing.has('dislikes')) alters.push('ADD COLUMN dislikes INT DEFAULT 0');
+  if (!existing.has('likes')) alters.push('ADD COLUMN likes INT DEFAULT 0');
+  if (!existing.has('neutrals')) alters.push('ADD COLUMN neutrals INT DEFAULT 0');
+  if (!existing.has('impressions')) alters.push('ADD COLUMN impressions INT DEFAULT 0');
+  if (!existing.has('billedImpressions')) alters.push('ADD COLUMN billedImpressions INT DEFAULT 0');
+  if (!existing.has('billedClicks')) alters.push('ADD COLUMN billedClicks INT DEFAULT 0');
+  if (!existing.has('tags')) alters.push('ADD COLUMN tags TINYTEXT');
+
+  if (alters.length > 0) {
+    await knex.raw(`ALTER TABLE promoSubmissions ${alters.join(', ')}`);
+  }
 };
+
+const PROMO_IMPRESSION_COST = parseInt(process.env.PROMO_IMPRESSION_COST || '1', 10);
+const PROMO_CLICK_COST = parseInt(process.env.PROMO_CLICK_COST || '10', 10);
+
+async function runPromoBillingCron() {
+  try {
+    await ensurePromoSubmissionsTable();
+
+    const promos = await knex('promoSubmissions')
+      .select('id', 'userId', 'title', 'targetDropId')
+      .where('status', 'approved');
+
+    let processed = 0;
+    let charged = 0;
+
+    for (const promo of promos) {
+      await knex.transaction(async (trx) => {
+        const livePromo = await trx('promoSubmissions')
+          .where('id', promo.id)
+          .first()
+          .forUpdate();
+
+        if (!livePromo || livePromo.status !== 'approved') return;
+
+        const impressions = Math.max(0, Number(livePromo.impressions || 0));
+        const clicks = Math.max(0, Number(livePromo.clicks || 0));
+        const billedImpressions = Math.max(0, Number(livePromo.billedImpressions || 0));
+        const billedClicks = Math.max(0, Number(livePromo.billedClicks || 0));
+
+        const deltaImpressions = Math.max(0, impressions - billedImpressions);
+        const deltaClicks = Math.max(0, clicks - billedClicks);
+        const chargeAmount = (deltaImpressions * PROMO_IMPRESSION_COST) + (deltaClicks * PROMO_CLICK_COST);
+
+        if (chargeAmount <= 0) return;
+
+        const userRow = await trx('userData')
+          .where('id', livePromo.userId)
+          .select('credits')
+          .first()
+          .forUpdate();
+
+        if (!userRow) return;
+
+        const newBalance = Number(userRow.credits || 0) - chargeAmount;
+
+        await trx('userData')
+          .where('id', livePromo.userId)
+          .update({ credits: newBalance });
+
+        await safeInsertWalletTransaction({
+          id: require('crypto').randomUUID(),
+          userId: livePromo.userId,
+          type: 'admin_adjustment',
+          amount: -chargeAmount,
+          balanceAfter: newBalance,
+          relatedDropId: livePromo.targetDropId || null,
+          description: `Promo charge: ${livePromo.title || 'Promotion'} | +${deltaImpressions} impressions, +${deltaClicks} clicks`,
+          created_at: trx.fn.now(),
+        });
+
+        await trx('promoSubmissions')
+          .where('id', livePromo.id)
+          .update({
+            billedImpressions: billedImpressions + deltaImpressions,
+            billedClicks: billedClicks + deltaClicks,
+          });
+
+        processed += 1;
+        charged += chargeAmount;
+      });
+    }
+
+    if (processed > 0) {
+      console.log(`📣 Promo billing cron: charged ${charged} credits across ${processed} promo items.`);
+    }
+  } catch (err) {
+    console.error('Promo billing cron error:', err.message || err);
+  }
+}
 
 const ensureVerificationReviewColumns = async () => {
   const [cols] = await knex.raw(
@@ -2153,19 +2371,27 @@ async function CreateNotification(type, title, message, category, username, prio
   const id = Math.random().toString(36).substring(2, 12).toUpperCase();
   const createdAt = new Date().toISOString().slice(0, 19).replace('T', ' ');
 
+  const rawCategory = String(category || '').toLowerCase().trim();
+  const sellerCategoryHints = new Set(['seller', 'creator', 'payout', 'earnings']);
+  const safeCategory = sellerCategoryHints.has(rawCategory) ? 'seller' : 'buyer';
+
+  const rawPriority = String(priority || '').toLowerCase().trim();
+  const allowedPriorities = new Set(['success', 'info', 'warning', 'error']);
+  const safePriority = allowedPriorities.has(rawPriority) ? rawPriority : 'info';
+
   await knex('notifications').insert({
-    id,
+    userId,
     type,
     title,
     message,
     createdAt,
-    priority,
-    category,
+    priority: safePriority,
+    category: safeCategory,
     username,
     isRead: 0
   });
 
-  return { id, type, title, message, createdAt, priority, category, username, isRead: 0 };
+  return { id, type, title, message, createdAt, priority: safePriority, category: safeCategory, username, isRead: 0 };
 }
 
 // 
@@ -2568,6 +2794,18 @@ const RECEIVING_WALLETS = {
  *   2. Refresh from chain via live API, then re-check.
  *   Returns { found: bool, tx: row|null, error: string|null }
  */
+// ═══════════════════════════════════════════════════════════════════════════════
+//  VERIFY TRANSACTION ON BLOCKCHAIN
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Architecture:
+//  - Primary: TATUM API (fast, reliable, multi-chain)
+//  - Fallback: Legacy APIs (Esplora, Etherscan, Solana RPC)
+//  Steps:
+//  1. Check database cache first (fast path)
+//  2. If not found, fetch from TATUM API
+//  3. If TATUM fails, fall back to legacy chain-specific APIs
+//  4. Store results in cache and verify presence
+// ═══════════════════════════════════════════════════════════════════════════════
 async function verifyTxOnChain(currency, txHash) {
   const sym      = currency.toUpperCase();
   const receiver = RECEIVING_WALLETS[sym];
@@ -2577,48 +2815,124 @@ async function verifyTxOnChain(currency, txHash) {
   const table = TABLE_MAP[sym];
   if (!table) return { found: false, tx: null, error: `No TX table for ${sym}` };
 
-  // ── Step 1: check local cache ───────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════
+  //  STEP 1: Check database cache (fast path)
+  // ═══════════════════════════════════════════════════════════════
   try {
-    const [cached] = await knex(table).where('hash', txHash).select('*').limit(1);
+    const [cached] = await knex(table).where('txHash', txHash).select('*').limit(1);
     if (cached && cached.direction === 'inbound') {
+      console.log(`✅ Transaction found in cache: ${txHash.slice(0, 10)}... (${sym})`);
       return { found: true, tx: cached, error: null };
     }
   } catch (e) {
     console.error(`verifyTxOnChain: DB check error (${sym}):`, e.message);
   }
 
-  // ── Step 2: fetch fresh from chain, store results, re-check ────────────────
-  try {
-    let liveTxs = [];
-    if (sym === 'BTC') {
-      liveTxs = await fetchEsploraAddressTxs(BTC_ESPLORA, receiver, 50);
-    } else if (sym === 'LTC') {
-      liveTxs = await fetchEsploraAddressTxs(LTC_ESPLORA, receiver, 50);
-    } else if (sym === 'ETH') {
-      liveTxs = await fetchEth({ address: receiver, limit: 50 });
-    } else if (sym === 'SOL') {
-      liveTxs = await fetchSol(receiver, 50);
-    }
+  // ═══════════════════════════════════════════════════════════════
+  //  STEP 2: Fetch fresh transactions from blockchain
+  // ═══════════════════════════════════════════════════════════════
+  let liveTxs = [];
+  let source = 'unknown';
 
-    // Upsert into cache table
+  // ─────────────────────────────────────────────────────────────
+  //  PRIMARY: Try TATUM API first
+  // ─────────────────────────────────────────────────────────────
+  if (TATUM_API_KEY) {
+    try {
+      liveTxs = await fetchTatumTransactions(sym, receiver, 50);
+      source = 'TATUM';
+      console.log(`✅ TATUM: Fetched ${liveTxs.length} ${sym} transactions for verification`);
+    } catch (tatumError) {
+      console.warn(`⚠️ TATUM failed for ${sym} verification, using fallback:`, tatumError.message);
+      liveTxs = []; // Reset for fallback
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  //  FALLBACK: Use legacy APIs if TATUM fails or not configured
+  // ─────────────────────────────────────────────────────────────
+  if (liveTxs.length === 0) {
+    try {
+      if (sym === 'BTC') {
+        liveTxs = await fetchEsploraAddressTxs(BTC_ESPLORA, receiver, 50);
+        source = 'Blockstream Esplora';
+      } else if (sym === 'LTC') {
+        liveTxs = await fetchEsploraAddressTxs(LTC_ESPLORA, receiver, 50);
+        source = 'Litecoin Esplora';
+      } else if (sym === 'ETH') {
+        liveTxs = await fetchEth({ address: receiver, limit: 50 });
+        source = 'Etherscan';
+      } else if (sym === 'SOL') {
+        liveTxs = await fetchSol(receiver, 50);
+        source = 'Solana RPC';
+      }
+      console.log(`✅ ${source}: Fetched ${liveTxs.length} ${sym} transactions (fallback)`);
+    } catch (fallbackErr) {
+      console.error(`❌ Both TATUM and ${source} failed for ${sym}:`, fallbackErr.message);
+      return { found: false, tx: null, error: `Failed to fetch ${sym} transactions from blockchain` };
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  STEP 3: Store fresh transactions in cache
+  // ═══════════════════════════════════════════════════════════════
+  try {
     for (const row of liveTxs) {
       const hash = row.hash || row.signature;
       if (!hash) continue;
+      
       try {
-        await knex(table).insert({ hash, ...row }).onConflict('hash').ignore();
-      } catch (_) { /* ignore dupe */ }
+        // Check if exists first
+        const [existing] = await knex(table).where('txHash', hash).select('txHash').limit(1);
+        if (existing) continue; // Skip if already in DB
+        
+        // Insert new transaction
+        await knex(table).insert({
+          created_at: row.time,
+          direction: row.direction,
+          amount: row.amount,
+          fromAddress: row.from,
+          toAddress: row.to,
+          txHash: hash
+        });
+      } catch (insertErr) {
+        // Ignore duplicate errors, log others
+        if (!insertErr.message.includes('Duplicate')) {
+          console.warn(`⚠️ Failed to cache ${sym} transaction:`, insertErr.message);
+        }
+      }
     }
-
-    // Re-check cache
-    const [fresh] = await knex(table).where('hash', txHash).select('*').limit(1);
-    if (fresh && fresh.direction === 'inbound') {
-      return { found: true, tx: fresh, error: null };
-    }
-  } catch (liveErr) {
-    console.error(`verifyTxOnChain: live fetch error (${sym}):`, liveErr.message);
-    // Fall through — treat as not-yet-visible, queue for manual review
+  } catch (cacheErr) {
+    console.error(`verifyTxOnChain: cache storage error (${sym}):`, cacheErr.message);
+    // Continue anyway - we have the data in memory
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  //  STEP 4: Verify transaction from fresh data or re-check cache
+  // ═══════════════════════════════════════════════════════════════
+  try {
+    // First check in-memory results
+    const matchedTx = liveTxs.find(tx => 
+      (tx.hash === txHash || tx.signature === txHash) && 
+      tx.direction === 'inbound'
+    );
+    
+    if (matchedTx) {
+      console.log(`✅ Transaction verified on-chain: ${txHash.slice(0, 10)}... (${sym}, source: ${source})`);
+      return { found: true, tx: matchedTx, error: null };
+    }
+
+    // Double-check cache in case insert was delayed
+    const [fresh] = await knex(table).where('txHash', txHash).select('*').limit(1);
+    if (fresh && fresh.direction === 'inbound') {
+      console.log(`✅ Transaction verified in cache: ${txHash.slice(0, 10)}... (${sym})`);
+      return { found: true, tx: fresh, error: null };
+    }
+  } catch (verifyErr) {
+    console.error(`verifyTxOnChain: verification error (${sym}):`, verifyErr.message);
+  }
+
+  console.log(`⚠️ Transaction not found or not inbound: ${txHash.slice(0, 10)}... (${sym})`);
   return { found: false, tx: null, error: null };
 }
 
@@ -2670,8 +2984,9 @@ server.post(PROXY + '/api/purchases/:username', authenticateToken, async (req, r
       id:            purchaseId,
       userId,
       username,
+      amount:         amount, // in cents
       credits:       creditsToAward,
-      amountPaid:    dollars,
+      amountPaid:    Math.floor(amount/100) > dollars ? Math.ceil(amount/100) : dollars, // Handle potential rounding issues (in dollars)
       currency:      'USD',
       paymentMethod,
       status,
@@ -2754,7 +3069,300 @@ server.post(PROXY + '/api/purchases/:username', authenticateToken, async (req, r
   }
 });
 
+const CURRENCIES = [
+  { symbol: 'BTC', name: 'Bitcoin',   coinId: 'bitcoin',  address: 'bc1q4j9e7equq4xvlyu7tan4gdmkvze7wc0egvykr6' },
+  { symbol: 'ETH', name: 'Ethereum',  coinId: 'ethereum', address: '0x9a61f30347258A3D03228F363b07692F3CBb7f27' },
+  { symbol: 'LTC', name: 'Litecoin',  coinId: 'litecoin', address: 'ltc1qgg5aggedmvjx0grd2k5shg6jvkdzt9dtcqa4dh' },
+  { symbol: 'SOL', name: 'Solana',    coinId: 'solana',   address: 'qaSpvAumg2L3LLZA8qznFtbrRKYMP1neTGqpNgtCPaU' },
+];
 
+// ═══════════════════════════════════════════════════════════════
+//  TATUM API INTEGRATION (Primary method for crypto transactions)
+// ═══════════════════════════════════════════════════════════════
+
+const TATUM_API_KEY = process.env.TATUM_API_KEY || '';
+if (!TATUM_API_KEY) {
+  console.warn('⚠️ Warning: TATUM_API_KEY not set. Falling back to legacy APIs only.');
+}
+
+// Tatum API base URL
+const TATUM_BASE_URL = 'https://api.tatum.io/v3';
+
+/**
+ * Fetch transaction history for an address using TATUM API (Primary Method)
+ * @param {string} chain - Chain symbol: BTC, LTC, ETH, SOL
+ * @param {string} address - Wallet address
+ * @param {number} limit - Max transactions to fetch
+ * @returns {Promise<Array>} Normalized transaction array
+ */
+async function fetchTatumTransactions(chain, address, limit = 100) {
+  if (!TATUM_API_KEY) {
+    throw new Error('TATUM_API_KEY not configured');
+  }
+
+  const chainMap = {
+    BTC: 'bitcoin',
+    LTC: 'litecoin',
+    ETH: 'ethereum',
+    SOL: 'solana'
+  };
+
+  const tatumChain = chainMap[chain];
+  if (!tatumChain) {
+    throw new Error(`Unsupported chain for TATUM: ${chain}`);
+  }
+
+  try {
+    // Tatum API endpoints vary by chain
+    let url;
+    let params = { pageSize: Math.min(50, limit) };
+
+    switch (chain) {
+      case 'BTC':
+      case 'LTC':
+        url = `${TATUM_BASE_URL}/${tatumChain}/transaction/address/${address}`;
+        params.pageSize = Math.min(50, limit);
+        break;
+      case 'ETH':
+        url = `${TATUM_BASE_URL}/ethereum/account/transaction/${address}`;
+        params.pageSize = Math.min(50, limit);
+        break;
+      case 'SOL':
+        url = `${TATUM_BASE_URL}/solana/account/transaction/${address}`;
+        params.limit = Math.min(50, limit);
+        break;
+      default:
+        throw new Error(`Unsupported chain: ${chain}`);
+    }
+
+    console.log(`🔄 TATUM: Fetching ${chain} transactions for ${address.slice(0, 10)}...`);
+
+    const { data } = await axios.get(url, {
+      headers: { 'x-api-key': TATUM_API_KEY },
+      params,
+      timeout: 15000
+    });
+
+    // Normalize Tatum response to our standard format
+    return normalizeTatumResponse(chain, address, data);
+
+  } catch (error) {
+    if (error.response?.status === 429) {
+      console.warn(`⚠️ TATUM rate limit exceeded for ${chain}`);
+    } else if (error.response?.status === 403) {
+      console.warn(`⚠️ TATUM API key invalid or expired for ${chain}`);
+    } else {
+      console.warn(`⚠️ TATUM API error for ${chain}:`, error.message);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Safely convert various timestamp formats to MySQL datetime string
+ * Handles: Unix seconds, Unix milliseconds, ISO strings, Date objects
+ */
+function safeTimestampToDateTime(timestamp) {
+  if (!timestamp) return null;
+  
+  try {
+    let date;
+    
+    // If it's already a Date object
+    if (timestamp instanceof Date) {
+      date = timestamp;
+    }
+    // If it's an ISO string
+    else if (typeof timestamp === 'string') {
+      date = new Date(timestamp);
+    }
+    // If it's a number, check if it's seconds or milliseconds
+    else if (typeof timestamp === 'number') {
+      // Timestamps before year 2000 (946684800) or after year 2100 (4102444800) are likely wrong
+      // If timestamp is > 10 billion, it's likely milliseconds
+      if (timestamp > 10000000000) {
+        date = new Date(timestamp); // Already in milliseconds
+      } else {
+        date = new Date(timestamp * 1000); // Convert seconds to milliseconds
+      }
+    }
+    else {
+      return null;
+    }
+    
+    // Validate the date is reasonable (between 2009-01-01 and 2050-01-01)
+    const year = date.getFullYear();
+    if (year < 2009 || year > 2050 || isNaN(year)) {
+      console.warn(`⚠️ Invalid timestamp year: ${year} from value: ${timestamp}`);
+      return null;
+    }
+    
+    // Convert to MySQL datetime format: YYYY-MM-DD HH:MM:SS
+    return date.toISOString().replace('T', ' ').slice(0, 19);
+    
+  } catch (error) {
+    console.warn(`⚠️ Failed to convert timestamp ${timestamp}:`, error.message);
+    return null;
+  }
+}
+
+/**
+ * Normalize TATUM API responses to our standard format
+ */
+function normalizeTatumResponse(chain, myAddress, data) {
+  const results = [];
+  const txList = Array.isArray(data) ? data : (data?.data || data?.result || []);
+
+  for (const tx of txList) {
+    try {
+      let normalized;
+
+      switch (chain) {
+        case 'BTC':
+        case 'LTC':
+          normalized = normalizeTatumBtcLtc(tx, myAddress);
+          break;
+        case 'ETH':
+          normalized = normalizeTatumEth(tx, myAddress);
+          break;
+        case 'SOL':
+          normalized = normalizeTatumSol(tx, myAddress);
+          break;
+        default:
+          continue;
+      }
+
+      // ⚠️ CRITICAL: Only include transactions that involve our wallet
+      // (direction must be 'inbound' or 'outbound', not null)
+      if (normalized && normalized.direction) {
+        results.push(normalized);
+      } else if (normalized && !normalized.direction) {
+        console.log(`⚠️ Skipping ${chain} tx ${(normalized.hash || '??').slice(0, 10)}... - doesn't involve our wallet`);
+      }
+    } catch (err) {
+      console.warn(`⚠️ Failed to normalize ${chain} tx:`, err.message);
+    }
+  }
+
+  return results;
+}
+
+function normalizeTatumBtcLtc(tx, myAddress) {
+  const inputs = tx.inputs || [];
+  const outputs = tx.outputs || [];
+  
+  let spent = 0n, received = 0n;
+  
+  for (const input of inputs) {
+    if (input.coin?.address === myAddress) {
+      spent += BigInt(Math.floor((input.coin?.value || 0) * 1e8));
+    }
+  }
+  
+  for (const output of outputs) {
+    if (output.address === myAddress) {
+      received += BigInt(Math.floor((output.value || 0) * 1e8));
+    }
+  }
+  
+  const net = received - spent;
+  const direction = net > 0n ? 'inbound' : net < 0n ? 'outbound' : null;
+  
+  return {
+    time: safeTimestampToDateTime(tx.time),
+    direction,
+    amount: fmt((net < 0n ? -net : net).toString(), 8),
+    from: direction === 'inbound' ? (inputs[0]?.coin?.address || null) : myAddress,
+    to: direction === 'inbound' ? myAddress : (outputs[0]?.address || null),
+    hash: tx.hash
+  };
+}
+
+function normalizeTatumEth(tx, myAddress) {
+  const from = (tx.from || '').toLowerCase();
+  const to = (tx.to || '').toLowerCase();
+  const me = myAddress.toLowerCase();
+  
+  const direction = (to === me && from !== me) ? 'inbound'
+    : (from === me && to !== me) ? 'outbound'
+    : null;
+  
+  return {
+    time: safeTimestampToDateTime(tx.timestamp),
+    direction,
+    amount: fmt(tx.value || '0', 18),
+    from: tx.from || null,
+    to: tx.to || null,
+    hash: tx.hash
+  };
+}
+
+function normalizeTatumSol(tx, myAddress) {
+  const meta = tx.meta || {};
+  const message = tx.transaction?.message || {};
+  const accounts = message.accountKeys || [];
+  
+  const idx = accounts.findIndex(a => a === myAddress);
+  let net = 0n;
+  
+  if (idx >= 0) {
+    const pre = BigInt(meta.preBalances?.[idx] || 0);
+    const post = BigInt(meta.postBalances?.[idx] || 0);
+    net = post - pre;
+  }
+  
+  const direction = net > 0n ? 'inbound' : net < 0n ? 'outbound' : null;
+  const counterparty = accounts.find(a => a !== myAddress) || null;
+  
+  return {
+    time: safeTimestampToDateTime(tx.blockTime),
+    direction,
+    amount: fmt((net < 0n ? -net : net).toString(), 9),
+    from: direction === 'inbound' ? counterparty : myAddress,
+    to: direction === 'inbound' ? myAddress : counterparty,
+    signature: tx.signature || tx.hash
+  };
+}
+
+// ────────────────────────────────────────────────────────────────
+//  TATUM WEBHOOK HANDLER (Real-time transaction notifications)
+// ────────────────────────────────────────────────────────────────
+
+server.post('/webhooks/crypto-payments', async (req, res) => {
+  try {
+    const data = req.body;
+
+    console.log('🔔 TATUM Webhook received:', JSON.stringify(data, null, 2));
+
+    const { address, amount, asset, txId, type, currency } = data;
+
+    // Validate it's an incoming transaction
+    if (type !== 'incoming-tx' && type !== 'native_transfer' && type !== 'NATIVE') {
+      console.log(`⚠️ Ignoring non-incoming transaction type: ${type}`);
+      return res.status(200).send('OK');
+    }
+
+    const chain = (asset || currency || '').toUpperCase();
+    console.log(`✅ Incoming ${chain} transaction: ${amount} to ${address}`);
+    console.log(`🔗 Transaction ID: ${txId}`);
+
+    // Trigger immediate fetch for this chain to update DB
+    if (['BTC', 'LTC', 'ETH', 'SOL'].includes(chain)) {
+      setTimeout(() => {
+        FetchRecentTransactionsCronByChain(chain).catch(err => {
+          console.error(`Failed to fetch ${chain} transactions after webhook:`, err.message);
+        });
+      }, 2000); // Small delay to allow blockchain confirmation
+    }
+
+    res.status(200).send('OK');
+  } catch (error) {
+    console.error('❌ TATUM webhook error:', error);
+    res.status(200).send('OK'); // Still return 200 to prevent retries
+  }
+});
+
+// ETHERSCAN AND BTC/LTC EXPLORA API KEYS/URLS
 
 // --- Configurable backends (Esplora-compatible) ---
 const BTC_ESPLORA = process.env.BTC_ESPLORA || 'https://blockstream.info/api';
@@ -3636,92 +4244,39 @@ cron.schedule('0 * * * *', async () => {
   }
 });
 
-async function FetchRecentTransactionsCron() {
+// Promo billing — every 12 hours (1 credit per impression, 10 credits per click since last billing run)
+cron.schedule('0 */12 * * *', async () => {
+  await runPromoBillingCron();
+});
 
-  const walletAddressMap = {
-    BTC: 'bc1q4j9e7equq4xvlyu7tan4gdmkvze7wc0egvykr6',
-    LTC: 'ltc1qgg5aggedmvjx0grd2k5shg6jvkdzt9dtcqa4dh',
-    SOL: 'qaSpvAumg2L3LLZA8qznFtbrRKYMP1neTGqpNgtCPaU',
-    ETH: '0x9a61f30347258A3D03228F363b07692F3CBb7f27',
-  };
+// ═══════════════════════════════════════════════════════════════════════════════
+//  CRYPTO TRANSACTION SYNC - PRIMARY CRON JOB
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Architecture:
+//  - Primary Method: TATUM API (unified multi-chain blockchain API)
+//  - Fallback APIs: Chain-specific APIs (Esplora, Etherscan, Solana RPC)
+//  - This function iterates all chains and delegates to FetchRecentTransactionsCronByChain
+//  - Each chain automatically tries TATUM first, then falls back to legacy APIs
+// ═══════════════════════════════════════════════════════════════════════════════
+async function FetchRecentTransactionsCron() {
+  const supportedChains = ['BTC', 'LTC', 'ETH', 'SOL'];
 
   try {
-    console.log('🔄 Fetching recent transactions for all wallet addresses...');
-    // Iterate over walletAddressMap entries (key = chain, value = address) for the cron job
-    for (const [chainKey, addr] of Object.entries(walletAddressMap)) {
-      // const txs = await fetchRe,centTransactions(address);
-      const chain = String(chainKey || '').toUpperCase();
-      const address = String(addr || '').trim();
-      // Use a fixed reasonable limit for cron runs
-      const limit = 100;
+    console.log('🔄 Starting transaction sync for all chains...');
+    
+    for (const chain of supportedChains) {
       try {
-
-        if (!address || !chain) {
-          console.log('No address or chain provided');
-          continue; // skip this entry
-        }
-        let rows = [];
-        if (chain === 'BTC') rows = await fetchEsploraAddressTxs(BTC_ESPLORA, address, limit);
-        else if (chain === 'LTC') rows = await fetchEsploraAddressTxs(LTC_ESPLORA, address, limit);
-        else if (chain === 'ETH') rows = await fetchEth({ address, limit, chainId: 1, action: "txlist", extraParams: {} });
-        else if (chain === 'SOL') rows = await fetchSol(address, limit);
-        else {
-          console.log('Unsupported chain. Use BTC, LTC, ETH, SOL');
-          continue;
-        }
-        // return res.status(400).json({ error: 'Unsupported chain. Use BTC, LTC, ETH, SOL' });
-
-        // res.json({ chain, address, count: rows.length, txs: rows });
-
-        let txs = {
-          chain,
-          address,
-          count: rows.length,
-          txs: rows
-        };
-        // console.log(`✅ Fetched ${rows.length} transactions for ${chain} address ${address}`);
-
-
-        for (const tx of txs.txs) {
-          const transactionId = tx.hash;
-
-          // console.log(`Time: ${tx.time}, Direction: ${tx.direction}, Amount: ${tx.amount}, From: ${tx.from}, To: ${tx.to}, Hash: ${tx.hash}`);
-
-          const existingTxs = await knex(`${chain}_TX`)
-            .where('txHash', transactionId)
-            .select('txHash')
-            .limit(1);
-
-          // Check if transaction already exists
-          if (existingTxs.length > 0) {
-            // console.log(`Transaction ${transactionId} already exists in the database. Skipping.`);
-            continue; // Skip to next transaction
-          }
-
-          // Insert new transaction
-          await knex(`${chain}_TX`).insert({
-            created_at: tx.time,
-            direction: tx.direction,
-            amount: tx.amount,
-            fromAddress: tx.from,
-            toAddress: tx.to,
-            txHash: tx.hash
-          });
-
-          // console.log(`Inserted transaction ${transactionId} into ${chain}_TX`);
-        }
-
-
-      } catch (e) {
-        // res.status(500).json({ error: e.message || String(e) });
-        // console.error(`❌ Error processing transactions for ${chain} address ${address}:`, e);
-        console.error(`❌ Error processing transactions for ${chain} address ${address}:`);
-        continue;
+        await FetchRecentTransactionsCronByChain(chain);
+        console.log(`✅ Completed sync for ${chain}`);
+      } catch (chainError) {
+        console.error(`❌ Failed to sync ${chain}:`, chainError.message);
+        // Continue with other chains even if one fails
       }
-      // console.log(`📈 Recent transactions for ${address}:`, txs);
     }
+    
+    console.log('🎉 Transaction sync complete for all chains');
   } catch (error) {
-    console.error('❌ Error fetching recent transactions:', error);
+    console.error('❌ Error in transaction sync cron job:', error);
   }
 }
 
@@ -3737,90 +4292,114 @@ const walletAddressMap = {
 };
 
   try {
-    console.log(`🔄 Fetching recent transactions for all ${cryptoChain || 'chain'} wallet addresses...`);
-    // Iterate over walletAddressMap entries (key = chain, value = address) for the cron job
+    console.log(`🔄 Fetching recent transactions for ${cryptoChain} wallet...`);
 
     const addr = walletAddressMap[cryptoChain];
-
     const chain = String(cryptoChain || '').toUpperCase();
     const address = String(addr || '').trim();
-    // Use a fixed reasonable limit for cron runs
     const limit = 100;
-    try {
 
-      if (!address || !chain) {
-        console.log('No address or chain provided');
+    if (!address || !chain) {
+      console.log('❌ No address or chain provided');
+      return;
+    }
 
+    let rows = [];
+    let source = 'unknown';
+
+    // ═══════════════════════════════════════════════════════════════
+    //  PRIMARY: Try TATUM API first
+    // ═══════════════════════════════════════════════════════════════
+    if (TATUM_API_KEY) {
+      try {
+        rows = await fetchTatumTransactions(chain, address, limit);
+        source = 'TATUM';
+        console.log(`✅ TATUM: Fetched ${rows.length} ${chain} transactions`);
+      } catch (tatumError) {
+        console.warn(`⚠️ TATUM failed for ${chain}, falling back to legacy APIs:`, tatumError.message);
+        rows = []; // Reset for fallback
       }
-      let rows = [];
-      if (chain === 'BTC') rows = await fetchEsploraAddressTxs(BTC_ESPLORA, address, limit);
-      else if (chain === 'LTC') rows = await fetchEsploraAddressTxs(LTC_ESPLORA, address, limit);
-      else if (chain === 'ETH') rows = await fetchEth({ address, limit, chainId: 1, action: "txlist", extraParams: {} });
-      else if (chain === 'SOL') rows = await fetchSol(address, limit);
-      else {
-        console.log('Unsupported chain. Use BTC, LTC, ETH, SOL');
+    } else {
+      console.log(`⚠️ TATUM_API_KEY not set, using legacy APIs for ${chain}`);
+    }
 
+    // ═══════════════════════════════════════════════════════════════
+    //  FALLBACK: Use legacy APIs if TATUM fails or is not configured
+    // ═══════════════════════════════════════════════════════════════
+    if (rows.length === 0) {
+      try {
+        if (chain === 'BTC') {
+          rows = await fetchEsploraAddressTxs(BTC_ESPLORA, address, limit);
+          source = 'Blockstream Esplora';
+        } else if (chain === 'LTC') {
+          rows = await fetchEsploraAddressTxs(LTC_ESPLORA, address, limit);
+          source = 'Litecoin Esplora';
+        } else if (chain === 'ETH') {
+          rows = await fetchEth({ address, limit, chainId: 1, action: "txlist", extraParams: {} });
+          source = 'Etherscan';
+        } else if (chain === 'SOL') {
+          rows = await fetchSol(address, limit);
+          source = 'Solana RPC';
+        } else {
+          console.log(`❌ Unsupported chain: ${chain}`);
+          return;
+        }
+        console.log(`✅ ${source}: Fetched ${rows.length} ${chain} transactions (fallback)`);
+      } catch (fallbackError) {
+        console.error(`❌ Both TATUM and ${source} failed for ${chain}:`, fallbackError.message);
+        return;
       }
-      // return res.status(400).json({ error: 'Unsupported chain. Use BTC, LTC, ETH, SOL' });
+    }
 
-      let transactions = {
-        chain,
-        address,
-        count: rows.length,
-        txs: rows
-      };
+    // ═══════════════════════════════════════════════════════════════
+    //  Store transactions in database
+    // ═══════════════════════════════════════════════════════════════
+    let inserted = 0;
+    let skipped = 0;
 
-      for (const tx of transactions.txs) {
+    for (const tx of rows) {
+      try {
         const transactionId = tx?.hash ?? tx?.signature ?? null;
 
         if (!transactionId) {
-          console.log(`Skipping ${chain} transaction with missing hash`);
-          console.log(tx);
+          console.log(`⚠️ Skipping ${chain} transaction with missing hash`);
+          skipped++;
           continue;
         }
 
-        // todo: only process transactions within last 30 minutes?
-        const txTime = new Date(tx?.time ?? 0);
-        const now = new Date();
-
+        // Check if transaction already exists
         const existingTxs = await knex(`${chain}_TX`)
           .where('txHash', transactionId)
           .select('txHash')
           .limit(1);
 
-        // Check if transaction already exists
         if (existingTxs.length > 0) {
-          // console.log(`Transaction ${transactionId} already exists in the database. Skipping.`);
-          continue; // Skip to next transaction
+          skipped++;
+          continue;
         }
 
-        // Insert new transaction (convert undefined values to null)
+        // Insert new transaction
         await knex(`${chain}_TX`).insert({
-          created_at: tx?.time ?? null,
-          direction: tx?.direction ?? null,
-          amount: tx?.amount ?? null,
-          fromAddress: tx?.from ?? null,
-          toAddress: tx?.to ?? null,
+          created_at: tx.time,
+          direction: tx.direction,
+          amount: tx.amount,
+          fromAddress: tx.from,
+          toAddress: tx.to,
           txHash: transactionId
         });
 
-        // console.log(`Inserted transaction ${transactionId} into ${chain}_TX`);
+        inserted++;
+      } catch (insertError) {
+        console.error(`❌ Failed to insert ${chain} transaction:`, insertError.message);
       }
-
-
-    } catch (e) {
-      // res.status(500).json({ error: e.message || String(e) });
-      // console.error(`❌ Error processing transactions for ${chain} address ${address}:`, e);
-      console.error(`❌ Error processing transactions for ${chain} address ${address}:`, e.message || String(e));
-
     }
 
-    // }
+    console.log(`📊 ${chain} Summary: ${inserted} inserted, ${skipped} skipped (source: ${source})`);
+
   } catch (error) {
-    console.error('❌ Error fetching recent transactions:', error);
+    console.error(`❌ Error processing ${cryptoChain} transactions:`, error.message);
   }
 }
-
 
 
 // ========================================
@@ -5414,7 +5993,10 @@ async function upsertStripeTransactionRecord(record) {
       stripeSubscriptionId = VALUES(stripeSubscriptionId),
       stripeSourceId = VALUES(stripeSourceId),
       stripeSourceType = VALUES(stripeSourceType),
-      status = VALUES(status),
+      status = CASE
+        WHEN stripeTransactions.status IN ('pending', 'processing', 'canceled') THEN stripeTransactions.status
+        ELSE VALUES(status)
+      END,
       amount = VALUES(amount),
       amountReceived = VALUES(amountReceived),
       fee = VALUES(fee),
@@ -5516,6 +6098,20 @@ async function getRecentPayments(limit = 10, includeCustomerDetails = true) {
   }
 }
 
+async function getRecentCheckoutSessions({ limit = 50, timeRangeStart, timeRangeEnd } = {}) {
+  const params = {
+    limit: Math.min(Math.max(parseInt(limit, 10) || 50, 1), 100),
+    expand: ['data.payment_intent', 'data.payment_intent.latest_charge']
+  };
+
+  const created = {};
+  if (Number.isFinite(timeRangeStart)) created.gte = Math.floor(timeRangeStart / 1000);
+  if (Number.isFinite(timeRangeEnd)) created.lte = Math.floor(timeRangeEnd / 1000);
+  if (Object.keys(created).length > 0) params.created = created;
+
+  return stripe.checkout.sessions.list(params);
+}
+
 async function syncStripeTransactionsCron(limit = 100) {
   if (!process.env.STRIPE_SECRET_KEY) {
     console.warn('⚠️ STRIPE_SECRET_KEY is missing. Stripe transaction sync skipped.');
@@ -5598,177 +6194,248 @@ cron.schedule('*/30 * * * *', async () => {
   }
 });
 
+const STRIPE_AUTO_APPROVE_MIN_MATCH_SCORE = parseInt(process.env.STRIPE_AUTO_APPROVE_MIN_MATCH_SCORE || '2', 10);
+const STRIPE_MANUAL_REVIEW_MAX_PER_DAY = parseInt(process.env.STRIPE_MANUAL_REVIEW_MAX_PER_DAY || '3', 10);
+const STRIPE_MANUAL_REVIEW_MAX_PER_HOUR = parseInt(process.env.STRIPE_MANUAL_REVIEW_MAX_PER_HOUR || '1', 10);
+
+function toCount(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+async function enforceStripeManualReviewRateLimit(userId) {
+  if (!userId) return;
+
+  const base = knex('CreditPurchases')
+    .where('userId', userId)
+    .where('paymentMethod', 'stripe')
+    .whereIn('status', ['processing', 'pending']);
+
+  const [hourlyRow] = await base.clone()
+    .where('created_at', '>=', knex.raw('DATE_SUB(NOW(), INTERVAL 1 HOUR)'))
+    .count({ count: 'id' });
+
+  const [dailyRow] = await base.clone()
+    .where('created_at', '>=', knex.raw('DATE_SUB(NOW(), INTERVAL 1 DAY)'))
+    .count({ count: 'id' });
+
+  const hourlyCount = toCount(hourlyRow?.count);
+  const dailyCount = toCount(dailyRow?.count);
+
+  if (hourlyCount >= STRIPE_MANUAL_REVIEW_MAX_PER_HOUR) {
+    const err = new Error('Manual review request limit reached. You can submit only 1 manual-review Stripe request per hour.');
+    err.httpStatus = 429;
+    throw err;
+  }
+
+  if (dailyCount >= STRIPE_MANUAL_REVIEW_MAX_PER_DAY) {
+    const err = new Error('Manual review request limit reached. You can submit up to 3 manual-review Stripe requests per day.');
+    err.httpStatus = 429;
+    throw err;
+  }
+}
+
 // Sent from the client: timeRange, user, packageData from buy Credits page
 server.post(PROXY + '/api/verify-stripe-payment', async (req, res) => {
 
-  const { timeRange, user, packageData } = req.body;
+  const { timeRange, user, packageData, checkoutSessionId } = req.body;
 
-  if (!packageData || !timeRange || !user) {
+  if (!user || (!checkoutSessionId && (!packageData || !timeRange))) {
     return res.status(400).json({
-      error: 'Missing required fields: packageData, timeRange, and user are required',
+      error: 'Missing required fields: user is required, and either checkoutSessionId or packageData + timeRange must be provided',
       status: 'invalid_input'
     });
   }
 
   // fetchRecentStripePayments(20, true).then(result => {
 
-  const pkg = Math.ceil(packageData/1000)*1000; // round to nearest 100 to account for the promotial discount and avoid mismatch with Stripe amounts (e.g. $9.85 -> 985 cents, but we store as 100)
-  const timeOffsetMs = 3 * 60 * 1000; // 3 minutes buffer on either side
-  const timeRangeStart = timeRange.start - timeOffsetMs;   // unix ms
-  const timeRangeEnd   = timeRange.end + timeOffsetMs;     // unix ms
+  let pkg = null;
+  if (packageData) {
+    const parsedAmount = Math.round(Number(packageData.amount || 0));
+    const parsedDollars = Number(packageData.dollars || 0);
+    const parsedCredits = Math.floor(Number(packageData.credits || 0));
 
-  // Normalise user identity fields for soft-matching.
-  const userEmail = (user.email || '').toLowerCase().trim();
-  const userPhone = (user.phone || '').replace(/\D/g, '');
-  const userNameFull = ((user.name || '') + ' ' + (user.username || '')).toLowerCase().trim();
-
-  console.log(`[INFO] verify-stripe-payment: pkg=${JSON.stringify(pkg)}, timeRange=${JSON.stringify(timeRange)}, user=${userEmail || user.username}`);
-
-  // ─── Scoring helper ────────────────────────────────────────────────────
-  // Returns a score 0-4 for a candidate record.
-  // Decisive: time window (required) + amount (required).
-  // Soft signals: email, phone, name each add +1 but blank/missing fields do NOT penalise.
-  function scoreBillingMatch(billing, rawAmount, createdUnixSec) {
-    // Time check (decisive — ms boundaries)
-    const createdMs = createdUnixSec * 1000;
-    if (timeRangeStart && createdMs < timeRangeStart) return -1;
-    if (timeRangeEnd   && createdMs > timeRangeEnd)   return -1;
-
-    // Amount check (decisive)
-    if (rawAmount !== pkg.amount) return -1;
-
-    let score = 0;
-
-    // Email: only count when both sides are non-empty
-    const bEmail = (billing.email || '').toLowerCase().trim();
-    if (userEmail && bEmail && bEmail === userEmail) score += 2;  // email is primary soft signal — weight 2
-
-    // Phone: strip non-digits for loose comparison
-    const bPhone = (billing.phone || '').replace(/\D/g, '');
-    if (userPhone && bPhone && bPhone === userPhone) score += 1;
-
-    // Name: check if user name string appears anywhere in billing name
-    const bName = (billing.name || '').toLowerCase().trim();
-    if (userNameFull && bName && (bName.includes(userNameFull) || userNameFull.includes(bName))) score += 1;
-
-    return score;
-  }
-  // ───────────────────────────────────────────────────────────────────────
-
-  try {
-    // ── Step 1: Check stripeTransactions DB (rawPayload contains full Stripe object) ──
-    console.log('[INFO] Checking stripeTransactions table...');
-
-    // Pull rows that are in the right time window and amount, with rawPayload present.
-    // stripeCreatedAt is a DATETIME stored as seconds-precision; convert boundary to MySQL DATETIME.
-    const startDT = timeRangeStart ? new Date(timeRangeStart).toISOString().slice(0, 19).replace('T', ' ') : null;
-    const endDT   = timeRangeEnd   ? new Date(timeRangeEnd).toISOString().slice(0, 19).replace('T', ' ') : null;
-
-    let dbQuery = knex('stripeTransactions')
-      .whereNotNull('rawPayload')
-      .where('amount', pkg.amount)
-      .orderBy('stripeCreatedAt', 'desc')
-      .limit(50);
-
-    if (startDT) dbQuery = dbQuery.where('stripeCreatedAt', '>=', startDT);
-    if (endDT)   dbQuery = dbQuery.where('stripeCreatedAt', '<=', endDT);
-
-    const dbRows = await dbQuery.select('*');
-    console.log(`[INFO] stripeTransactions candidates in time+amount window: ${dbRows.length}`);
-
-    let bestDbRow    = null;
-    let bestDbScore  = -1;
-
-    for (const row of dbRows) {
-      let raw = null;
-      try { raw = typeof row.rawPayload === 'string' ? JSON.parse(row.rawPayload) : row.rawPayload; } catch (_) {}
-      if (!raw) continue;
-
-      // Extract billing details from the rawPayload (PaymentIntent expanded shape)
-      const charge  = raw.latest_charge && typeof raw.latest_charge === 'object' ? raw.latest_charge : null;
-      const billing = charge?.billing_details || {};
-      const customer = raw.customer && typeof raw.customer === 'object' ? raw.customer : {};
-
-      // Merge billing sources: charge billing_details takes priority, then customer object
-      const mergedBilling = {
-        email: billing.email || customer.email || row.customerEmail || raw.receipt_email || '',
-        phone: billing.phone || customer.phone || '',
-        name:  billing.name  || customer.name  || row.customerName  || '',
-      };
-
-      // stripeCreatedAt is DATETIME string; convert to unix seconds for the scorer
-      const createdSec = raw.created || Math.floor(new Date(row.stripeCreatedAt || 0).getTime() / 1000);
-      const score = scoreBillingMatch(mergedBilling, row.amount, createdSec);
-
-      console.log(`[DEBUG] DB row ${row.stripePaymentIntentId || row.id}: score=${score}, email=${mergedBilling.email}`);
-
-      if (score > bestDbScore) {
-        bestDbScore = score;
-        bestDbRow   = { row, raw, mergedBilling };
-      }
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0 || !Number.isFinite(parsedDollars) || parsedDollars <= 0 || !Number.isFinite(parsedCredits) || parsedCredits <= 0) {
+      return res.status(400).json({
+        error: 'Invalid packageData payload. amount, dollars, and credits are required.',
+        status: 'invalid_input'
+      });
     }
 
-    // ── Step 2: Fall back to live Stripe API if DB had no match ──────────
-    let potentialVerifiedPayment = null;
-    let matchSource = 'db';
+    pkg = {
+      amount: parsedAmount,
+      dollars: parsedDollars,
+      credits: parsedCredits,
+    };
+  }
+  const timeOffsetMs = 3 * 60 * 1000; // 3 minutes buffer on either side
+  const timeRangeStart = timeRange?.start ? (timeRange.start - timeOffsetMs) : null;   // unix ms
+  const timeRangeEnd   = timeRange?.end ? (timeRange.end + timeOffsetMs) : null;     // unix ms
+  const userReferenceId = String(user.id || '').trim();
 
-    if (bestDbRow && bestDbScore >= 0) {
-      // Reconstruct a normalised payment object from the DB row + raw payload
-      const { row, raw, mergedBilling } = bestDbRow;
-      potentialVerifiedPayment = {
-        id:       row.stripePaymentIntentId || raw.id,
-        status:   row.status || raw.status,
-        amount:   row.amount,
-        currency: row.currency || raw.currency,
-        created:  raw.created,
-        customer: mergedBilling,
-        _matchScore: bestDbScore,
-        _matchSource: 'stripeTransactions_db',
-      };
-      console.log(`[INFO] DB match found: ${potentialVerifiedPayment.id} (score=${bestDbScore})`);
-    } else {
-      // No DB row matched — query live Stripe API
-      matchSource = 'stripe_live';
-      console.log('[INFO] No DB match, falling back to live Stripe API...');
-      const details = await getRecentPayments(20, true);
+  if (!userReferenceId) {
+    return res.status(400).json({
+      error: 'User id is required for Stripe client_reference_id verification.',
+      status: 'invalid_input'
+    });
+  }
 
-      if (details.error) {
-        console.error('[ERROR] Could not fetch recent payments:', details.error);
-        const statusCode = details.status === 'server_error' ? 500 : 404;
-        return res.status(statusCode).json(details);
+  console.log(`[INFO] verify-stripe-payment: pkg=${JSON.stringify(pkg)}, timeRange=${JSON.stringify(timeRange)}, userRef=${userReferenceId}`);
+
+  try {
+    // ── Step 1: Verify through Checkout Session (client_reference_id) ──
+    let matchedCheckoutSession = null;
+
+    if (checkoutSessionId) {
+      const directSession = await stripe.checkout.sessions.retrieve(checkoutSessionId, {
+        expand: ['payment_intent', 'payment_intent.latest_charge']
+      });
+
+      const directRef = String(directSession.client_reference_id || directSession.metadata?.userId || '').trim();
+      if (directRef !== userReferenceId) {
+        return res.status(403).json({
+          error: 'Checkout session does not belong to the authenticated account.',
+          status: 'forbidden'
+        });
       }
 
-      let bestLiveScore = -1;
-      let bestLivePayment = null;
-
-      for (const payment of details.payments || []) {
-        const billing = {
-          email: payment.customer?.email || '',
-          phone: payment.customer?.phone || '',
-          name:  payment.customer?.name  || '',
+      if (!pkg && Number.isFinite(Number(directSession.amount_total))) {
+        pkg = {
+          amount: Number(directSession.amount_total),
+          dollars: Number(directSession.amount_total || 0) / 100,
+          credits: Math.floor((Number(directSession.amount_total || 0) / 100) * 1000),
         };
-        const score = scoreBillingMatch(billing, payment.amount, payment.created);
+      }
 
-        console.log(`[DEBUG] Live PI ${payment.id}: score=${score}, amount=${payment.amount}`);
+      matchedCheckoutSession = directSession;
+    }
 
-        if (score > bestLiveScore) {
-          bestLiveScore   = score;
-          bestLivePayment = { ...payment, _matchScore: score, _matchSource: 'stripe_live' };
+    if (!matchedCheckoutSession) {
+      const recentSessions = await getRecentCheckoutSessions({
+        limit: 100,
+        timeRangeStart,
+        timeRangeEnd,
+      });
+
+      let bestSession = null;
+      let bestSessionScore = -1;
+
+      for (const session of recentSessions.data || []) {
+        const refId = String(session.client_reference_id || session.metadata?.userId || '').trim();
+        if (!refId || refId !== userReferenceId) continue;
+        if (session.mode !== 'payment') continue;
+
+        const amountMatches = pkg ? Number(session.amount_total || 0) === Number(pkg.amount || 0) : true;
+        if (!amountMatches) continue;
+
+        const score =
+          (session.payment_status === 'paid' ? 4 : 0) +
+          (session.status === 'complete' ? 2 : 0) +
+          (session.payment_intent ? 2 : 0);
+
+        if (score > bestSessionScore) {
+          bestSessionScore = score;
+          bestSession = session;
         }
       }
 
-      if (bestLiveScore >= 0) {
-        potentialVerifiedPayment = bestLivePayment;
-        console.log(`[INFO] Live API match: ${potentialVerifiedPayment.id} (score=${bestLiveScore})`);
+      matchedCheckoutSession = bestSession;
+    }
+
+    let potentialVerifiedPayment = null;
+    let matchSource = 'checkout_session_client_reference_id';
+
+    if (matchedCheckoutSession) {
+      const paymentIntentObj = matchedCheckoutSession.payment_intent && typeof matchedCheckoutSession.payment_intent === 'object'
+        ? matchedCheckoutSession.payment_intent
+        : null;
+      const paymentIntentId = paymentIntentObj?.id || (typeof matchedCheckoutSession.payment_intent === 'string' ? matchedCheckoutSession.payment_intent : null);
+      const resolvedPi = paymentIntentObj || (paymentIntentId ? await stripe.paymentIntents.retrieve(paymentIntentId, { expand: ['latest_charge'] }) : null);
+
+      if (!resolvedPi) {
+        return res.status(404).json({
+          error: 'Checkout session found but no linked payment intent was available yet.',
+          status: 'not_found',
+        });
+      }
+
+      const resolvedCharge = resolvedPi.latest_charge && typeof resolvedPi.latest_charge === 'object' ? resolvedPi.latest_charge : null;
+
+      potentialVerifiedPayment = {
+        id: resolvedPi.id,
+        stripeChargeId: resolvedCharge?.id || null,
+        status: resolvedPi.status || (matchedCheckoutSession.payment_status === 'paid' ? 'succeeded' : 'processing'),
+        amount: Number(resolvedPi.amount || matchedCheckoutSession.amount_total || 0),
+        currency: String(resolvedPi.currency || matchedCheckoutSession.currency || 'USD').toUpperCase(),
+        created: resolvedPi.created,
+        customer: {
+          email: matchedCheckoutSession.customer_details?.email || matchedCheckoutSession.customer_email || '',
+          name: matchedCheckoutSession.customer_details?.name || '',
+          phone: matchedCheckoutSession.customer_details?.phone || '',
+        },
+        _matchScore: 5,
+        _matchSource: matchSource,
+        stripeCheckoutSessionId: matchedCheckoutSession.id,
+      };
+
+      if (!pkg && Number.isFinite(Number(potentialVerifiedPayment.amount))) {
+        pkg = {
+          amount: Number(potentialVerifiedPayment.amount),
+          dollars: Number(potentialVerifiedPayment.amount || 0) / 100,
+          credits: Math.floor((Number(potentialVerifiedPayment.amount || 0) / 100) * 1000),
+        };
       }
     }
 
+    // No Checkout Session match means no auto-verifiable payment candidate.
     if (!potentialVerifiedPayment) {
-      console.log('[INFO] No payment matched time window + amount.');
-      return res.status(404).json({
-        error: 'No PaymentIntent found matching the time range and amount',
-        status: 'not_found',
+      matchSource = 'checkout_session_client_reference_id';
+    }
+
+    if (!potentialVerifiedPayment) {
+      if (!pkg) {
+        return res.status(400).json({
+          error: 'Unable to determine purchase package for manual review.',
+          status: 'invalid_input'
+        });
+      }
+
+      await enforceStripeManualReviewRateLimit(user.id);
+
+      const pendingResult = await stripeCreditPurchases({
+        username: user.username,
+        userId: user.id,
+        name: user.name,
+        email: user.email,
+        walletAddress: 'Stripe',
+        transactionId: null,
+        stripePaymentIntentId: null,
+        stripeChargeId: null,
+        blockExplorerLink: 'Stripe Payment',
+        currency: 'USD',
+        amount: pkg.amount,
+        cryptoAmount: pkg.dollars,
+        rate: null,
+        session_id: user.id,
+        orderLoggingEnabled: false,
+        userAgent: user.userAgent,
+        ip: user.ip,
+        dollars: pkg.dollars,
+        credits: pkg.credits,
+        status: 'processing',
+        shouldCredit: false,
+        manualReviewReason: 'no_auto_match',
+      });
+
+      console.log('[INFO] No payment matched time window + amount. Queued for manual review.');
+      return res.status(202).json({
+        success: true,
+        status: 'pending',
+        pending: true,
+        autoApproved: false,
+        purchaseId: pendingResult?.purchaseId || null,
         matchSource,
+        message: 'This payment could not be auto-verified and has been submitted for manual review. Credits will be applied once approved.',
       });
     }
 
@@ -5789,37 +6456,86 @@ server.post(PROXY + '/api/verify-stripe-payment', async (req, res) => {
       return res.status(400).json({ error: 'Unrecognized payment amount — package not found', status: 'invalid_amount' });
     }
 
-    // ── Step 4: Log purchase if payment succeeded ──────────────────────────
-    if (potentialVerifiedPayment.status === 'succeeded') {
-      const purchaseData = {
-        username:          user.username,
-        userId:            user.id,
-        name:              user.name,
-        email:             user.email,
-        walletAddress:     'Stripe',
-        transactionId:     potentialVerifiedPayment.id,
-        blockExplorerLink: 'Stripe Payment',
-        currency:          'USD',
-        amount:            potentialVerifiedPayment.amount,
-        cryptoAmount:      matchedPackage.dollars,
-        rate:              null,
-        session_id:        user.id,
-        orderLoggingEnabled: false,
-        userAgent:         user.userAgent,
-        ip:                user.ip,
-        dollars:           matchedPackage.dollars,
-        credits:           matchedPackage.credits,
-      };
+    const autoApproved = potentialVerifiedPayment.status === 'succeeded'
+      && Number(potentialVerifiedPayment._matchScore || 0) >= STRIPE_AUTO_APPROVE_MIN_MATCH_SCORE;
+
+    const purchaseData = {
+      username:          user.username,
+      userId:            user.id,
+      name:              user.name,
+      email:             user.email,
+      walletAddress:     'Stripe',
+      transactionId:     potentialVerifiedPayment.id,
+      stripePaymentIntentId: potentialVerifiedPayment.id,
+      stripeChargeId: potentialVerifiedPayment.stripeChargeId || null,
+      stripeCheckoutSessionId: potentialVerifiedPayment.stripeCheckoutSessionId || null,
+      blockExplorerLink: 'Stripe Payment',
+      currency:          'USD',
+      amount:            potentialVerifiedPayment.amount,
+      cryptoAmount:      matchedPackage.dollars,
+      rate:              null,
+      session_id:        user.id,
+      orderLoggingEnabled: false,
+      userAgent:         user.userAgent,
+      ip:                user.ip,
+      dollars:           matchedPackage.dollars,
+      credits:           matchedPackage.credits,
+      status: autoApproved ? 'completed' : 'processing',
+      shouldCredit: autoApproved,
+      manualReviewReason: autoApproved ? null : `score_${Number(potentialVerifiedPayment._matchScore || 0)}_status_${potentialVerifiedPayment.status}`,
+    };
+
+    if (!autoApproved) {
+      const [existingPending] = await knex('CreditPurchases')
+        .where('paymentMethod', 'stripe')
+        .where('stripePaymentIntentId', potentialVerifiedPayment.id)
+        .whereIn('status', ['processing', 'pending'])
+        .select('id')
+        .limit(1);
+
+      if (existingPending) {
+        return res.status(202).json({
+          success: true,
+          status: 'pending',
+          pending: true,
+          autoApproved: false,
+          purchaseId: existingPending.id,
+          paymentIntentId: potentialVerifiedPayment.id,
+          message: 'This payment could not be auto-verified and is already pending manual review.',
+        });
+      }
+
+      await enforceStripeManualReviewRateLimit(user.id);
+
+      await knex('stripeTransactions')
+        .where('stripePaymentIntentId', potentialVerifiedPayment.id)
+        .update({ status: 'pending', syncedAt: knex.fn.now() })
+        .catch(() => {});
 
       await stripeCreditPurchases(purchaseData);
+
+      console.log(`[INFO] Stripe payment queued for manual review. pi=${potentialVerifiedPayment.id}, score=${potentialVerifiedPayment._matchScore}`);
+      return res.status(202).json({
+        success: true,
+        status: 'pending',
+        pending: true,
+        autoApproved: false,
+        paymentIntentId: potentialVerifiedPayment.id,
+        matchSource: potentialVerifiedPayment._matchSource,
+        matchScore: potentialVerifiedPayment._matchScore,
+        message: 'This payment could not be auto-verified and has been submitted for manual review. Credits will be applied once approved.',
+      });
     }
+
+    await stripeCreditPurchases(purchaseData);
 
     console.log(`[INFO] Payment verification complete. status=${potentialVerifiedPayment.status}, source=${potentialVerifiedPayment._matchSource}, score=${potentialVerifiedPayment._matchScore}`);
     return res.json(potentialVerifiedPayment);
 
   } catch (error) {
     console.error('Payment verification error:', error.message);
-    res.status(500).json({ error: 'Payment verification failed' });
+    const statusCode = Number(error?.httpStatus) || 500;
+    res.status(statusCode).json({ error: error.message || 'Payment verification failed', status: statusCode === 429 ? 'rate_limited' : 'server_error' });
   }
 });
 
@@ -5844,7 +6560,13 @@ async function stripeCreditPurchases(data) {
       userAgent,
       ip,
       dollars,
-      credits
+      credits,
+      stripePaymentIntentId,
+      stripeChargeId,
+      stripeCheckoutSessionId,
+      status = 'completed',
+      shouldCredit = true,
+      manualReviewReason = null,
     } = data;
 
     const amount = Math.round((data.amount || 0)/ 100)*100; // Store amount in cents to avoid floating point issues. round to nearest 100 cents to tolerate small promotional discounts (e.g. $9.85 stored as 985 but package = 1000).
@@ -5855,13 +6577,20 @@ async function stripeCreditPurchases(data) {
     // console.log("data: ", data)
 
 
-    // check for duplicate transactionId
-    if (transactionId) {
-      const existing = await knex('CreditPurchases')
-        .where('transactionId', transactionId);
-      if (existing.length > 0) {
-        console.log('⚠️  Duplicate transaction ID detected:', transactionId);
-        return ({ error: 'Duplicate transaction ID' });
+    // check for duplicate transaction / payment intent
+    if (transactionId || stripePaymentIntentId) {
+      let existingQuery = knex('CreditPurchases').select('id', 'status').where('paymentMethod', 'stripe');
+
+      if (stripePaymentIntentId) {
+        existingQuery = existingQuery.where('stripePaymentIntentId', stripePaymentIntentId);
+      } else if (transactionId) {
+        existingQuery = existingQuery.where('transactionHash', transactionId);
+      }
+
+      const existing = await existingQuery.first();
+      if (existing) {
+        console.log('⚠️ Duplicate Stripe purchase detected:', stripePaymentIntentId || transactionId);
+        return ({ success: true, duplicate: true, purchaseId: existing.id, status: existing.status });
       }
     }
 
@@ -5888,19 +6617,28 @@ async function stripeCreditPurchases(data) {
         return { error: 'Unrecognized payment amount — package not found' };
       }
 
+      const validPackageEnums = new Set(['5000', '10000', '25000', '50000', '100000']);
+      const packageEnumValue = String(packageData.credits);
+      const packageColumnValue = validPackageEnums.has(packageEnumValue) ? packageEnumValue : 'custom';
+
       const [purchaseId] = await knex('CreditPurchases').insert({
         username,
+        userId,
         id: Math.random().toString(36).substring(2, 10),
         name,
         email,
         walletAddress,
         transactionHash: transactionId,
+        stripePaymentIntentId: stripePaymentIntentId || transactionId,
+        stripeChargeId: stripeChargeId || null,
+        stripeCheckoutSessionId: stripeCheckoutSessionId || null,
         blockExplorerLink: "www.stripe.com",
         currency,
         amount,
         cryptoAmount,
-        package: packageData.label,
-        // rate,
+        package: packageColumnValue,
+        status,
+        rate,
         date: Date.now(),
         time: new Date().toISOString(),
         session_id,
@@ -5912,22 +6650,57 @@ async function stripeCreditPurchases(data) {
       });
       const purchases = { insertId: purchaseId };
 
-      await CreateNotification(
-        'credits_purchased',
-        'Credits Purchased',
-        `You have purchased ${amount*10} credits for $${dollars}.`,
-        'purchase',
-        username || 'anonymous'
-      );
-
       // Update user credits
-      if (amount !== undefined && amount !== null && amount > 0) {
+      if (shouldCredit && amount !== undefined && amount !== null && amount > 0) {
+        // Get purchase ID for wallet transaction reference
+        const purchaseRecordId = await knex('CreditPurchases')
+          .where('stripePaymentIntentId', stripePaymentIntentId || transactionId)
+          .orWhere('transactionHash', transactionId)
+          .select('id')
+          .first()
+          .then(row => row?.id);
+
+        // Increment user credits using userId (more reliable than username)
         await knex('userData')
-          .where('username', username)
+          .where('id', userId)
           .increment('credits', Math.floor(credits));
+
+        // Get updated balance
+        const userRow = await knex('userData')
+          .select('credits')
+          .where('id', userId)
+          .first();
+
+        // Create wallet transaction record
+        await safeInsertWalletTransaction({
+          id: require('crypto').randomUUID(),
+          userId: userId,
+          type: 'credit_purchase',
+          amount: Math.floor(credits),
+          balanceAfter: Number(userRow?.credits || 0),
+          relatedPurchaseId: purchaseRecordId,
+          description: 'Stripe payment completed',
+          created_at: knex.fn.now(),
+        });
+
+        await CreateNotification(
+          'credits_purchased',
+          'Credits Purchased',
+          `You have purchased ${Math.floor(credits).toLocaleString()} credits for $${dollars}.`,
+          'purchase',
+          username || 'anonymous'
+        );
+      } else {
+        await CreateNotification(
+          'credit_purchase_pending',
+          'Payment Pending Manual Review',
+          `Your Stripe purchase is pending manual review${manualReviewReason ? ` (${manualReviewReason})` : ''}. Credits will be applied once approved.`,
+          'purchase',
+          username || 'anonymous'
+        );
       }
 
-      return ({ success: true, purchases });
+      return ({ success: true, purchases, purchaseId, pending: !shouldCredit, status });
       // } else {
       //   // invladid transaction
       //   return res.status(400).json({ error: 'Transaction verification failed: ' + result.error });
@@ -6439,12 +7212,33 @@ async function stripeBuySubscription(data) {
 
       // Update user credits
       if (credits !== undefined && credits !== null && credits > 0) {
+        const bonusCredits = Math.floor(credits) / 2;
+
+        // Update credits using userId (more reliable than username)
         await knex('userData')
-          .where('username', username)
+          .where('id', userId)
           .update({
-            credits: knex.raw('credits + ?', [Math.floor(credits) / 2]),
+            credits: knex.raw('credits + ?', [bonusCredits]),
             accountType: planType
           });
+
+        // Get updated balance
+        const userRow = await knex('userData')
+          .select('credits')
+          .where('id', userId)
+          .first();
+
+        // Create wallet transaction record for subscription bonus credits
+        await safeInsertWalletTransaction({
+          id: require('crypto').randomUUID(),
+          userId: userId,
+          type: 'credit_purchase',
+          amount: bonusCredits,
+          balanceAfter: Number(userRow?.credits || 0),
+          relatedPurchaseId: purchaseInsertId || null,
+          description: `Subscription bonus credits - ${plan} plan`,
+          created_at: knex.fn.now(),
+        });
       }
 
       return ({ success: true, purchases, subscription });

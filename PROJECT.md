@@ -2,7 +2,8 @@
 
 > **Drauwper** is a social file-drop platform where creators upload files and set a future release time. Viewers spend credits to accelerate the countdown through a dynamic "burn rate" mechanic powered by real-time momentum.
 
-*Last updated: 2026-04-02*
+*Last updated: 2026-04-30*
+*Payment Processing (Stripe Sessions + TATUM API) — Updated 2026-04-30*
 
 ---
 
@@ -17,10 +18,11 @@
 7. [Database Schema (Key Tables)](#7-database-schema-key-tables)
 8. [Authentication & Authorization](#8-authentication--authorization)
 9. [Credit System](#9-credit-system)
-10. [Burn Rate / Momentum Engine](#10-burn-rate--momentum-engine)
-11. [Account Verification (KYC Lite)](#11-account-verification-kyc-lite)
-12. [Development Setup](#12-development-setup)
-13. [Environment Variables](#13-environment-variables)
+10. [Payment Processing](#10-payment-processing)
+11. [Burn Rate / Momentum Engine](#11-burn-rate--momentum-engine)
+12. [Account Verification (KYC Lite)](#12-account-verification-kyc-lite)
+13. [Development Setup](#13-development-setup)
+14. [Environment Variables](#14-environment-variables)
 
 ---
 
@@ -151,6 +153,10 @@ Drauwpr/
 | `/drop/:id`        | DropFeature     | Drop detail (pre-release)       |
 | `/user/:id`        | UserProfile     | Public creator profile          |
 | `/help`            | Help            | FAQ and platform info           |
+| `/forgot-password` | ForgotPassword  | Request password reset          |
+| `/reset-password`  | ResetPassword   | Reset password from token       |
+| `/password-reset`  | ResetPassword   | Alias route for reset flow      |
+| `/verify-email`    | Verification    | Email verification entry        |
 
 ### Guest Only (redirect if logged in)
 | Route              | Page            |
@@ -163,14 +169,22 @@ Drauwpr/
 |--------------------|---------------------|-----------------------------------|
 | `/dashboard`       | Dashboard           | User home, my drops, stats        |
 | `/account`         | Account             | Profile, verification status      |
-| `/verify`          | Verification        | ID upload + crypto payment KYC    |
 | `/buy-credits`     | BuyCredits          | Buy or redeem credits             |
+| `/buy-credits/stripe` | BuyStripe        | Stripe checkout flow              |
+| `/buy-credits/crypto` | BuyCrypto        | Crypto purchase flow              |
+| `/redeem`          | Redeem              | Redeem credits flow               |
 | `/history`         | History             | Contribution history ledger       |
+| `/notifications`   | Notifications       | User notifications inbox          |
+| `/promo`           | AdsPromo            | Promo hub                         |
+| `/promo/create-ad` | PromoCreateAd       | Submit ad promotion               |
+| `/promo/sponsor-drop` | PromoSponsorDrop | Submit drop sponsorship           |
 | `/contributions`   | ActiveContributions | Drops you've contributed to       |
 | `/create`          | CreateDrop          | Create a new drop                 |
 | `/drop/:id/edit`   | EditDrop            | Edit a pending drop               |
 | `/drop/:id/download` | DropDownload     | Download page (post-release)      |
 | `/drop/:id/review` | DropReview          | Review/feedback page              |
+| `/plans`           | Plans               | Subscription plan management      |
+| `/edit-profile`    | EditProfile         | Edit profile and upload images    |
 
 ### Admin
 | Route            | Page        | Description                        |
@@ -188,9 +202,12 @@ Drauwpr/
 | POST   | `/api/auth/register`                  | No   | Create account                      |
 | POST   | `/api/auth/logout`                    | Yes  | Logout (server-side cleanup)        |
 | POST   | `/api/user`                           | Yes  | Refresh user data                   |
+| PUT    | `/api/users/profile`                  | Yes  | Update bio/avatar/banner/socials    |
+| POST   | `/api/users/profile/avatar-upload`    | Yes  | Upload avatar image to GCS          |
+| POST   | `/api/users/profile/banner-upload`    | Yes  | Upload profile banner image to GCS  |
 | POST   | `/api/auth/verify-account`            | No   | Submit crypto TX for verification   |
 | POST   | `/api/auth/verification-docs/:user`   | Yes  | Upload face pic + ID (local/ephemeral) |
-| POST   | `/api/profile-picture/:username`      | Yes  | Upload profile picture (GCS)        |
+| POST   | `/api/profile-picture/:username`      | Yes  | Legacy profile upload route (GCS)   |
 
 ### Drops (`drauwper-routes.js`)
 | Method | Path                              | Auth | Description                         |
@@ -212,6 +229,30 @@ Drauwpr/
 | GET    | `/api/dashboard`           | Yes  | User drops + stats          |
 | GET    | `/api/users/:id`           | No   | Public user profile         |
 | GET    | `/api/users/:id/drops`     | No   | User's public drops         |
+| GET    | `/api/history/promo-charges` | Yes | Promo billing charge history |
+
+### Payment Processing
+| Method | Path                              | Auth | Description                              |
+|--------|-----------------------------------|------|------------------------------------------|
+| POST   | `/api/stripe/create-checkout-session` | Yes  | Create Stripe checkout session       |
+| POST   | `/webhook/stripe`                 | No   | Stripe webhook handler (signature verified) |
+| GET    | `/api/stripe/check-session/:id`   | Yes  | Poll session status (backup method)      |
+| POST   | `/api/purchases/:username`        | Yes  | Submit crypto purchase for verification  |
+| GET    | `/api/crypto-rate`                | No   | Get current crypto exchange rates        |
+| POST   | `/api/crypto/verify-transaction`  | Yes  | Manually verify crypto transaction       |
+
+### Admin — Payment Review (`server-admin.js`)
+| Method | Path                                  | Auth  | Description                         |
+|--------|---------------------------------------|-------|-------------------------------------|
+| GET    | `/admin/review/purchases`             | Admin | Unified payment review (Stripe + Crypto) |
+| POST   | `/admin/api/review/purchases/:id/:action` | Admin | Approve/Hold/Reject purchase    |
+| GET    | `/admin/review/stripe`                | Admin | Stripe Payment Intents (reference)  |
+| GET    | `/admin/review/crypto`                | Admin | Blockchain transactions (reference) |
+| POST   | `/admin/api/review/stripe/sync`       | Admin | Sync Stripe payment intents         |
+
+### Notifications & Routing Notes
+- Notification `actionUrl` values for released/downloadable drops now use `/drop/:id/download`.
+- Older stored notifications may still contain legacy `/download/:id` links until replaced.
 
 ---
 
@@ -298,7 +339,178 @@ Historical burn-rate / momentum snapshots per drop for analytics.
 
 ---
 
-## 10. Burn Rate / Momentum Engine
+## 10. Payment Processing
+
+### Architecture Overview
+
+Drauwper supports two primary payment methods:
+1. **Stripe** (Credit/Debit Cards) — Session-based checkout with webhook verification
+2. **Cryptocurrency** (BTC, ETH, LTC, SOL) — TATUM API with legacy API fallback
+
+### Stripe Payment Flow
+
+#### Primary: Checkout Session + Webhooks
+```
+User initiates purchase → Create Checkout Session
+  ↓
+Stripe Hosted Page → User completes payment
+  ↓
+Webhook: checkout.session.completed
+  ↓
+Backend: Award credits + Create wallet transaction
+  ↓
+User sees updated balance
+```
+
+**Implementation:**
+- Creates Stripe Checkout Session with `success_url` and `cancel_url`
+- Session ID stored in `CreditPurchases.stripeCheckoutSessionId`
+- **Primary verification:** Webhook handler at `/webhook/stripe` (signature verification required)
+- Credits awarded immediately upon successful webhook event
+- Wallet transaction created with proper audit trail
+
+#### Backup: Session Polling
+If webhooks fail or are delayed, a fallback polling mechanism checks session status:
+- Polls Stripe API every 3 seconds for session completion
+- Max 10 attempts (30 seconds total)
+- Awards credits if session status is `'complete'` and payment status is `'paid'`
+- Prevents duplicate awards by checking existing records
+
+**Benefits:**
+- Ensures credits are awarded even if webhooks fail
+- Provides immediate user feedback
+- Duplicate-proof via database constraints
+
+### Cryptocurrency Payment Flow
+
+#### Primary: TATUM API Integration
+
+**Architecture:**
+```
+┌─────────────────────────────────────────────────────────┐
+│  Payment Verification (Real-time)                       │
+│  ↓                                                       │
+│  1. TATUM API (Primary) ──────→ Blockchain Data         │
+│     • Multi-chain support (BTC, LTC, ETH, SOL)          │
+│     • Unified API interface                             │
+│     • Real-time webhook notifications                   │
+│  ↓                                                       │
+│  2. If TATUM fails:                                     │
+│     Legacy APIs (Fallback) ──→ Blockchain Data          │
+│     • BTC: Blockstream Esplora                          │
+│     • LTC: Litecoin Esplora                             │
+│     • ETH: Etherscan                                    │
+│     • SOL: Solana RPC                                   │
+│  ↓                                                       │
+│  3. Cache in database (BTC_TX, LTC_TX, ETH_TX, SOL_TX)  │
+│  ↓                                                       │
+│  4. Verify transaction:                                 │
+│     • Direction: inbound to platform wallet             │
+│     • Amount: matches expected payment                  │
+│     • Address: correct receiving wallet                 │
+│  ↓                                                       │
+│  5. Award credits + Create wallet transaction           │
+└─────────────────────────────────────────────────────────┘
+```
+
+**TATUM API Features:**
+- **Primary Method:** Unified blockchain API for all supported chains
+- **Endpoints:**
+  - Transaction history: `/v3/{chain}/transaction/address/{address}`
+  - Real-time webhooks: `/webhooks/crypto-payments`
+- **Benefits:**
+  - Faster response times vs. chain-specific APIs
+  - Better reliability with webhook support
+  - Unified error handling
+  - Multi-chain support with single integration
+
+**Fallback APIs:**
+- **BTC:** Blockstream Esplora (`https://blockstream.info/api/`)
+- **LTC:** Litecoin Esplora (`https://litecoinspace.org/api/`)
+- **ETH:** Etherscan API (requires API key)
+- **SOL:** Solana RPC (`https://api.mainnet-beta.solana.com`)
+
+**Transaction Verification Process:**
+1. Check database cache first (fast path)
+2. If not found, fetch from TATUM API (primary)
+3. If TATUM fails, fall back to chain-specific API
+4. Verify transaction properties:
+   - `direction === 'inbound'`
+   - `toAddress === RECEIVING_WALLETS[chain]`
+   - Transaction confirmed on blockchain
+5. Award credits if verified, otherwise queue for manual review
+
+**Cron Job Synchronization:**
+- Runs every 30 minutes via `FetchRecentTransactionsCron()`
+- Syncs latest 100 transactions per chain
+- Updates blockchain transaction cache tables
+- Automatic TATUM-first with fallback to legacy APIs
+
+**Manual Review Flow:**
+If automatic verification fails:
+1. Purchase recorded with `status: 'processing'`
+2. Admin review at `/admin/review/purchases`
+3. Admin can:
+   - **Approve:** Award credits + create wallet transaction
+   - **Hold:** Keep in pending state
+   - **Reject:** Mark as failed/refunded
+4. User receives notification of outcome
+
+### Payment Method Tables
+
+#### Stripe Tables
+- `CreditPurchases` — Purchase records with `stripeCheckoutSessionId`, `stripePaymentIntentId`
+- `stripeTransactions` — Raw Stripe webhook events (audit log)
+- `subscriptions` — Subscription management
+
+#### Crypto Tables
+- `CreditPurchases` — Purchase records with `txHash`, `walletAddress`, `currency`
+- `BTC_TX`, `LTC_TX`, `ETH_TX`, `SOL_TX` — Blockchain transaction cache
+  - Columns: `txHash`, `direction`, `amount`, `fromAddress`, `toAddress`, `created_at`
+- `verificationTxLog` — Crypto micro-payment verification attempts
+
+### Environment Variables
+
+```bash
+# Stripe
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+
+# TATUM API (Primary crypto method)
+TATUM_API_KEY=your_tatum_api_key
+
+# Legacy Crypto APIs (Fallback)
+ETHERSCAN_API_KEY=your_etherscan_key
+
+# Receiving Wallets
+WALLET_BTC=bc1q4j9e7equq4xvlyu7tan4gdmkvze7wc0egvykr6
+WALLET_LTC=ltc1qgg5aggedmvjx0grd2k5shg6jvkdzt9dtcqa4dh
+WALLET_ETH=0x9a61f30347258A3D03228F363b07692F3CBb7f27
+WALLET_SOL=qaSpvAumg2L3LLZA8qznFtbrRKYMP1neTGqpNgtCPaU
+```
+
+### Admin Payment Review
+
+**Unified Purchases Page:** `/admin/review/purchases`
+- Shows ALL payment methods (Stripe + Crypto) in one interface
+- Filters: Status (pending/completed/failed), Payment Method (all/stripe/crypto)
+- Actions: Approve, Hold, Reject
+- Displays `stripeCheckoutSessionId` for Stripe or `txHash` for crypto
+
+**Blockchain Transactions Page:** `/admin/review/crypto`
+- Shows actual blockchain transactions from all chain tables
+- Filters: Chain (BTC/LTC/ETH/SOL), Direction (inbound/outbound)
+- Read-only reference for checking payment history
+- Real-time sync from TATUM + legacy APIs
+
+**Reference Pages:**
+- `/admin/review/stripe` — Stripe Payment Intents (raw Stripe data)
+- `/admin/review/crypto` — Blockchain transactions (raw blockchain data)
+- Both are reference-only, actions performed on Purchases page
+
+---
+
+## 11. Burn Rate / Momentum Engine
 
 ### Formula
 
@@ -314,7 +526,7 @@ $$M_{\text{new}} = \left(M_{\text{old}} \cdot e^{-kt}\right) + \frac{\text{Contr
 
 ---
 
-## 11. Account Verification (KYC Lite)
+## 12. Account Verification (KYC Lite)
 
 Two-step process enabling credit redemption:
 
@@ -330,7 +542,7 @@ Two-step process enabling credit redemption:
 
 ---
 
-## 12. Development Setup
+## 13. Development Setup
 
 ```bash
 # Frontend (from project root)
@@ -343,11 +555,11 @@ npm install
 node server.js       # → localhost:3001
 ```
 
-Vite proxies `/api/*` requests to `localhost:3001` in development (configured in `vite.config.ts`).
+Vite proxies `/api/*` requests to `localhost:4000` in development (configured in `vite.config.ts`).
 
 ---
 
-## 13. Environment Variables
+## 14. Environment Variables
 
 ### Frontend (`.env` in project root)
 | Variable         | Description                    | Default        |
@@ -355,15 +567,25 @@ Vite proxies `/api/*` requests to `localhost:3001` in development (configured in
 | `VITE_API_URL`   | Backend API base URL           | `''` (proxy)   |
 
 ### Backend (`server/.env`)
-| Variable                         | Description                              |
-|----------------------------------|------------------------------------------|
-| `DB_HOST`, `DB_USER`, `DB_PASS`  | MySQL connection                         |
-| `DB_NAME`                        | Database name                            |
-| `JWT_SECRET`                     | JWT signing secret                       |
-| `JWT_EXPIRES_IN`                 | Token expiry (default `7d`)              |
-| `GCS_BUCKET`                     | Google Cloud Storage bucket name         |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Path to GCS service account JSON         |
-| `VERIFICATION_CODE_EXPIRY_MINUTES` | Email verification code TTL (default 30) |
+| Variable                         | Description                                      |
+|----------------------------------|--------------------------------------------------|
+| `DB_HOST`, `DB_USER`, `DB_PASS`  | MySQL connection                                 |
+| `DB_NAME`                        | Database name                                    |
+| `JWT_SECRET`                     | JWT signing secret                               |
+| `JWT_EXPIRES_IN`                 | Token expiry (default `7d`)                      |
+| `GCS_BUCKET`                     | Google Cloud Storage bucket name                 |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Path to GCS service account JSON                 |
+| `VERIFICATION_CODE_EXPIRY_MINUTES` | Email verification code TTL (default 30)       |
+| **Payment Processing:**          |                                                  |
+| `STRIPE_SECRET_KEY`              | Stripe API secret key (sk_test_... or sk_live_...) |
+| `STRIPE_WEBHOOK_SECRET`          | Stripe webhook signing secret (whsec_...)        |
+| `TATUM_API_KEY`                  | TATUM API key for crypto transactions (primary)  |
+| `ETHERSCAN_API_KEY`              | Etherscan API key (fallback for ETH)            |
+| **Receiving Wallets:**           |                                                  |
+| `WALLET_BTC`                     | Bitcoin receiving address                        |
+| `WALLET_LTC`                     | Litecoin receiving address                       |
+| `WALLET_ETH`                     | Ethereum receiving address                       |
+| `WALLET_SOL`                     | Solana receiving address                         |
 
 ---
 

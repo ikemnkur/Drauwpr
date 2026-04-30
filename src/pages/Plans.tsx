@@ -1,6 +1,8 @@
 import { Check, Zap, Star, Crown, ArrowLeft } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { DEFAULT_ECONOMY_SETTINGS, fetchEconomySettings } from '../lib/economySettings';
 
 interface Plan {
   id: string;
@@ -85,6 +87,22 @@ const PLANS: Plan[] = [
 export default function Plans() {
   const { user } = useAuth();
   const currentPlan = (user?.accountType ?? 'free').toLowerCase();
+  const [economy, setEconomy] = useState(DEFAULT_ECONOMY_SETTINGS);
+
+  useEffect(() => {
+    fetchEconomySettings().then(setEconomy);
+  }, []);
+
+  const displayPrice = (value: number) => `$${value.toFixed(value % 1 === 0 ? 0 : 2)}`;
+
+  const plans = useMemo(() => {
+    return PLANS.map((plan) => {
+      if (plan.id === 'free') return { ...plan, price: displayPrice(economy.subscriptionPriceFree) };
+      if (plan.id === 'standard') return { ...plan, price: displayPrice(economy.subscriptionPriceStandard) };
+      if (plan.id === 'premium') return { ...plan, price: displayPrice(economy.subscriptionPricePremium) };
+      return plan;
+    });
+  }, [economy]);
 
   const handleSubscribe = (plan: Plan) => {
     if (!plan.stripePriceId || plan.id === 'free') return;
@@ -122,7 +140,7 @@ export default function Plans() {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-        {PLANS.map((plan) => {
+        {plans.map((plan) => {
           const isCurrent = currentPlan === plan.id;
 
           return (

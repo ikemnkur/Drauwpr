@@ -30,9 +30,9 @@ export interface ServerDrop {
   sensitivity: number;
   decayConstant: number;
   basePrice: number;
-  dailyPriceDecayPct: number | string;
-  volumeDecayStep: number;
-  volumeDecayPct: number | string;
+  dailyPriceDecayPct?: number | string;
+  volumeDecayStep?: number;
+  volumeDecayPct?: number | string;
   totalDownloads: number;
   totalRevenue: number;
   avgRating: number | string | null;
@@ -421,4 +421,120 @@ export function useMembershipHistory() {
   }, [isAuthenticated]);
 
   return { entries, activePlan, loading, error };
+}
+
+// ── Earnings history hook ──────────────────────────────────
+
+export interface EarningsEntry {
+  id: string;
+  dropId: string | null;
+  dropTitle: string | null;
+  amount: number;
+  balanceAfter: number;
+  description: string | null;
+  timestamp: number;
+}
+
+interface EarningsResponse {
+  earnings: {
+    id: string;
+    relatedDropId: string | null;
+    dropTitle: string | null;
+    amount: number;
+    balanceAfter: number;
+    description: string | null;
+    created_at: string;
+  }[];
+  totalEarned: number;
+}
+
+export interface PromoChargeEntry {
+  id: string;
+  amount: number;
+  balanceAfter: number;
+  description: string | null;
+  timestamp: number;
+}
+
+interface PromoChargesResponse {
+  charges: {
+    id: string;
+    amount: number;
+    balanceAfter: number;
+    description: string | null;
+    created_at: string;
+  }[];
+  totalCharged: number;
+}
+
+export function useEarningsHistory() {
+  const { isAuthenticated } = useAuth();
+  const [entries, setEntries] = useState<EarningsEntry[]>([]);
+  const [totalEarned, setTotalEarned] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!isAuthenticated) { setLoading(false); return; }
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const res = await api.get<EarningsResponse>('/api/history/earnings');
+        if (cancelled) return;
+        setEntries(res.earnings.map(e => ({
+          id: e.id,
+          dropId: e.relatedDropId,
+          dropTitle: e.dropTitle || 'Unknown Drop',
+          amount: e.amount,
+          balanceAfter: e.balanceAfter,
+          description: e.description,
+          timestamp: new Date(e.created_at).getTime(),
+        })));
+        setTotalEarned(res.totalEarned);
+      } catch {
+        if (!cancelled) setError('Failed to load earnings history');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isAuthenticated]);
+
+  return { entries, totalEarned, loading, error };
+}
+
+export function usePromoChargeHistory() {
+  const { isAuthenticated } = useAuth();
+  const [entries, setEntries] = useState<PromoChargeEntry[]>([]);
+  const [totalCharged, setTotalCharged] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!isAuthenticated) { setLoading(false); return; }
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const res = await api.get<PromoChargesResponse>('/api/history/promo-charges');
+        if (cancelled) return;
+        setEntries(res.charges.map(c => ({
+          id: c.id,
+          amount: c.amount,
+          balanceAfter: c.balanceAfter,
+          description: c.description,
+          timestamp: new Date(c.created_at).getTime(),
+        })));
+        setTotalCharged(res.totalCharged);
+      } catch {
+        if (!cancelled) setError('Failed to load promo charge history');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isAuthenticated]);
+
+  return { entries, totalCharged, loading, error };
 }

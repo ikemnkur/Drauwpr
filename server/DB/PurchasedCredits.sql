@@ -19,6 +19,7 @@ CREATE TABLE
     -- Stripe fields
     `stripePaymentIntentId` varchar(255) DEFAULT NULL,
     `stripeChargeId` varchar(255) DEFAULT NULL,
+    `stripeCheckoutSessionId` varchar(255) DEFAULT NULL,
 
     -- Crypto fields
     `cryptoAmount` decimal(18, 8) DEFAULT NULL,
