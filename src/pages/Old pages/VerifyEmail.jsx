@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, CircularProgress } from '@mui/material';
 import api from '../api/client';
 
-const API_URL = import.meta.env.VITE_API_SERVER_URL || 'http://localhost:3001';
+const API_URL = import.meta.env.VITE_API_SERVER_URL || 'http://localhost:4000';
 
 export default function VerifyEmail() {
     const location = useLocation();

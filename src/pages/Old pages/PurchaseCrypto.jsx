@@ -15,7 +15,7 @@ import axios from 'axios';
 
 
 const BLOCKCHAIR_API_KEY = import.meta.env.VITE_BLOCKCHAIR_API_KEY;
-const API_URL = import.meta.env.VITE_API_SERVER_URL || 'http://localhost:3001';
+const API_URL = import.meta.env.VITE_API_SERVER_URL || 'http://localhost:4000';
 export default function Purchase() {
 
 

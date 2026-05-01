@@ -44,7 +44,7 @@ export default function AdminPortal() {
           <p className="text-sm text-[#8b90a5]">You can open the full dashboard or jump straight into ID review.</p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
             <a
-              href={`${import.meta.env.VITE_API_URL || 'http://localhost:3001'}/admin`}
+              href={`${import.meta.env.VITE_API_URL || 'http://localhost:4000'}/admin`}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-block px-6 py-2.5 rounded-lg bg-[#6c63ff] text-white font-semibold text-sm hover:bg-[#5a52e0] transition-colors"
@@ -52,7 +52,15 @@ export default function AdminPortal() {
               Open Admin Dashboard
             </a>
             <a
-              href={`${import.meta.env.VITE_API_URL || 'http://localhost:3001'}/admin/review/verifications`}
+              href={`${import.meta.env.VITE_API_URL || 'http://localhost:4000'}/admin/moderation`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-block px-6 py-2.5 rounded-lg border border-[#ff6b6b]/40 text-white font-semibold text-sm hover:border-[#ff6b6b] hover:text-[#ffb3b3] transition-colors"
+            >
+              Open Moderation
+            </a>
+            <a
+              href={`${import.meta.env.VITE_API_URL || 'http://localhost:4000'}/admin/review/verifications`}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-block px-6 py-2.5 rounded-lg border border-[#2e3348] text-white font-semibold text-sm hover:border-[#6c63ff] transition-colors"

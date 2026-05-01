@@ -128,7 +128,7 @@ const corsOptions = {
       'http://localhost:3002',
       'http://localhost:4000',
       'http://localhost:5001',
-      'http://localhost:5000',
+      // 'http://localhost:5000',
       // 'https://key-ching.com',
       'https://drauwper.com',
       'https://www.drauwper.com',
@@ -2319,7 +2319,10 @@ server.post(PROXY + '/api/site-dev-feedback', async (req, res) => {
       supportMessage,
       supportContactInfo,
       supportUsername,
-      supportUserId
+      supportUserId,
+      supportTargetType,
+      supportTargetId,
+      supportTargetUsername,
     } = req.body;
 
 
@@ -2335,6 +2338,64 @@ server.post(PROXY + '/api/site-dev-feedback', async (req, res) => {
         contactInfo: supportContactInfo,
         feedbackType: supportProblemType
       });
+
+      if (
+        String(supportProblemType || '').trim() === 'report-scammer' &&
+        String(supportUserId || '').trim() &&
+        String(supportTargetType || '').trim() === 'user' &&
+        String(supportTargetId || '').trim()
+      ) {
+        await knex.raw(`
+          CREATE TABLE IF NOT EXISTS reports (
+            id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            reporterId VARCHAR(10) NOT NULL,
+            targetType ENUM('user','drop','review','comment') NOT NULL,
+            targetId VARCHAR(36) NOT NULL,
+            type ENUM('spam','abuse','copyright','fraud','inappropriate','other') NOT NULL,
+            description TEXT,
+            status ENUM('pending','reviewed','resolved','dismissed') DEFAULT 'pending',
+            moderatorNote TEXT,
+            resolvedAt DATETIME DEFAULT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            KEY idx_reporterId (reporterId),
+            KEY idx_targetType_targetId (targetType, targetId),
+            KEY idx_status (status)
+          ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci
+        `);
+
+        const reportDescription = [
+          supportTitle ? `Title: ${supportTitle}` : '',
+          supportTargetUsername ? `Target Username: ${supportTargetUsername}` : '',
+          supportMessage ? `Report Details:\n${supportMessage}` : '',
+          supportContactInfo ? `Contact: ${supportContactInfo}` : '',
+        ].filter(Boolean).join('\n\n');
+
+        const existingReport = await knex('reports')
+          .where({
+            reporterId: String(supportUserId).trim(),
+            targetType: 'user',
+            targetId: String(supportTargetId).trim(),
+            status: 'pending',
+          })
+          .first();
+
+        if (!existingReport) {
+          await knex('reports').insert({
+            reporterId: String(supportUserId).trim(),
+            targetType: 'user',
+            targetId: String(supportTargetId).trim(),
+            type: 'fraud',
+            description: reportDescription,
+            status: 'pending',
+          });
+
+          await knex('userData')
+            .where('id', String(supportTargetId).trim())
+            .increment('reportCount', 1)
+            .catch(() => {});
+        }
+      }
     }
 
     res.json({

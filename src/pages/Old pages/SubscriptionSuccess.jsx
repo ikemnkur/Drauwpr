@@ -51,7 +51,7 @@ const SubscriptionSuccess = () => {
 
   const verifySession = async (sessionId) => {
     try {
-      const API_URL = import.meta.env.VITE_API_SERVER_URL || 'http://localhost:3001';        const response = await fetch(`${API_URL}/api/subscription/verify-session?session_id=${sessionId}`);
+      const API_URL = import.meta.env.VITE_API_SERVER_URL || 'http://localhost:4000';        const response = await fetch(`${API_URL}/api/subscription/verify-session?session_id=${sessionId}`);
       
       if (!response.ok) {
         throw new Error('Failed to verify session');

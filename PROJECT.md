@@ -32,7 +32,7 @@
 ┌──────────────────────┐       ┌───────────────────────┐
 │   React Frontend     │──────▶│   Express.js Backend   │
 │   (Vite + TS)        │  API  │   (Node.js)            │
-│   localhost:5174      │◀──────│   localhost:3001        │
+│   localhost:5174      │◀──────│   localhost:4000        │
 └──────────────────────┘       └────────┬──────────────┘
                                         │
                          ┌──────────────┴──────────────┐
@@ -72,7 +72,7 @@ Drauwpr/
 ├── PROJECT_SCOPE.md              # Original scope & burn-rate formulas
 ├── PROJECT.md                    # This file — living documentation
 ├── package.json                  # Frontend dependencies
-├── vite.config.ts                # Vite config (API proxy → :3001)
+├── vite.config.ts                # Vite config (API proxy → :4000)
 ├── tsconfig.json
 ├── index.html
 ├── public/
@@ -552,7 +552,7 @@ npm run dev          # → localhost:5174
 # Backend (from server/)
 cd server
 npm install
-node server.js       # → localhost:3001
+node server.js       # → localhost:4000
 ```
 
 Vite proxies `/api/*` requests to `localhost:4000` in development (configured in `vite.config.ts`).

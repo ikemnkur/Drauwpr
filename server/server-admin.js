@@ -41,6 +41,7 @@ const stripeClient = process.env.STRIPE_SECRET_KEY ? require('stripe')(process.e
 // ─────────────────────────────────────────────────────────
 module.exports = function createAdminRouter(deps = {}) {
   const {
+    pool      = null,
     analytics = null,       // { visitors, users, totalRequests, dataTx, dataRx, endpointCalls, startTime }
     logs      = null,       // { entries: [], maxLogs: 500 }
     dbConfig  = {},         // { host, port, database, ... }
@@ -109,6 +110,7 @@ module.exports = function createAdminRouter(deps = {}) {
   function adminLayout(title, activeNav, bodyContent) {
     const navItems = [
       { href: '', icon: '📊', label: 'Dashboard' },
+      { href: '/moderation', icon: '🛡️', label: 'Moderation' },
       { href: '/logs', icon: '📋', label: 'Logs' },
       { href: '/health', icon: '💚', label: 'Health' },
       { href: '/review/verifications', icon: '🪪', label: 'ID Review' },
@@ -357,6 +359,109 @@ module.exports = function createAdminRouter(deps = {}) {
     res.type('html').send(html);
   }
 
+  async function createNotif(poolRef, {
+    userId,
+    type,
+    title,
+    message = '',
+    priority = 'info',
+    category = 'system',
+    relatedDropId = null,
+    actionUrl = null,
+  }) {
+    if (!userId || !title) return;
+
+    const safePriority = ['success', 'info', 'warning', 'error'].includes(String(priority || '').toLowerCase())
+      ? String(priority).toLowerCase()
+      : 'info';
+
+    const allowedCategories = new Set([
+      'drop_released',
+      'goal_reached',
+      'contribution_received',
+      'contribution_refunded',
+      'credit_purchase',
+      'download_available',
+      'review_received',
+      'account',
+      'moderation',
+      'system',
+    ]);
+
+    const rawCategory = String(category || '').trim().toLowerCase();
+    const safeCategory = allowedCategories.has(rawCategory)
+      ? rawCategory
+      : rawCategory.includes('account')
+        ? 'account'
+        : rawCategory.includes('moderation') || rawCategory.includes('redeem') || rawCategory.includes('subscription')
+          ? 'moderation'
+          : rawCategory.includes('credit') || rawCategory.includes('purchase')
+            ? 'credit_purchase'
+            : 'system';
+
+    const id = crypto.randomUUID().replace(/-/g, '').slice(0, 10).toUpperCase();
+    const createdAt = new Date().toISOString().slice(0, 19).replace('T', ' ');
+
+    if (poolRef?.query) {
+      await poolRef.query(
+        `INSERT IGNORE INTO notifications (id, userId, type, title, message, priority, category, relatedDropId, actionUrl, isRead, createdAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+        [id, userId, type || 'admin_message', title, message, safePriority, safeCategory, relatedDropId, actionUrl, createdAt]
+      );
+      return;
+    }
+
+    await knex('notifications').insert({
+      id,
+      userId,
+      type: type || 'admin_message',
+      title,
+      message,
+      priority: safePriority,
+      category: safeCategory,
+      relatedDropId,
+      actionUrl,
+      isRead: 0,
+      createdAt,
+    });
+  }
+
+  async function ensureFeedbackTable() {
+    await knex.raw(`
+      CREATE TABLE IF NOT EXISTS feedback (
+        id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        title VARCHAR(255) DEFAULT NULL,
+        message TEXT,
+        contactInfo VARCHAR(255) DEFAULT NULL,
+        username VARCHAR(255) DEFAULT NULL,
+        feedbackType VARCHAR(255) DEFAULT NULL,
+        PRIMARY KEY (id)
+      ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci
+    `);
+  }
+
+  async function ensureReportsTable() {
+    await knex.raw(`
+      CREATE TABLE IF NOT EXISTS reports (
+        id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+        reporterId VARCHAR(10) NOT NULL,
+        targetType ENUM('user','drop','review','comment') NOT NULL,
+        targetId VARCHAR(36) NOT NULL,
+        type ENUM('spam','abuse','copyright','fraud','inappropriate','other') NOT NULL,
+        description TEXT,
+        status ENUM('pending','reviewed','resolved','dismissed') DEFAULT 'pending',
+        moderatorNote TEXT,
+        resolvedAt DATETIME DEFAULT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY idx_reporterId (reporterId),
+        KEY idx_targetType_targetId (targetType, targetId),
+        KEY idx_status (status)
+      ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci
+    `);
+  }
+
   async function ensureSubscriptionsTable() {
     await knex.raw(`
       CREATE TABLE IF NOT EXISTS subscriptions (
@@ -470,6 +575,8 @@ module.exports = function createAdminRouter(deps = {}) {
         ensureRedeemCreditsTable(),
         ensureVerificationReviewColumns(),
         ensurePromoSubmissionsTable(),
+        ensureFeedbackTable(),
+        ensureReportsTable(),
       ]);
     } catch (err) {
       console.error('Admin review table bootstrap error:', err.message || err);
@@ -698,6 +805,16 @@ module.exports = function createAdminRouter(deps = {}) {
       : ['processing', 'pending', 'incomplete', 'trialing', 'canceling', 'resubmission_requested'].includes(val) ? 'var(--orange)'
       : 'var(--text2)';
     return `<span style="display:inline-block;padding:3px 10px;border-radius:999px;border:1px solid var(--border);background:var(--surface2);color:${color};font-size:0.8em;font-weight:700;">${escapeHtml(val)}</span>`;
+  };
+
+  const extractFeedbackTarget = (message) => {
+    const text = String(message || '');
+    const idMatch = text.match(/ID:\s*([A-Za-z0-9_-]+)/i);
+    const userMatch = text.match(/Target user:\s*([^\n(]+)/i);
+    return {
+      targetId: idMatch ? String(idMatch[1]).trim() : '',
+      targetUsername: userMatch ? String(userMatch[1]).trim() : '',
+    };
   };
 
   const getVerificationAssets = (row = {}) => {
@@ -1407,6 +1524,352 @@ module.exports = function createAdminRouter(deps = {}) {
   });
 
   // ══════════════════════════════════════════════
+  //  PAGE/API: Moderation
+  // ══════════════════════════════════════════════
+  router.get('/moderation', async (req, res) => {
+    try {
+      await Promise.all([ensureFeedbackTable(), ensureReportsTable()]);
+
+      const [reportRowsRaw, feedbackRows, bannedUsers] = await Promise.all([
+        knex.raw(`
+          SELECT
+            r.id,
+            r.reporterId,
+            reporter.username AS reporterUsername,
+            r.targetType,
+            r.targetId,
+            target.username AS targetUsername,
+            target.email AS targetEmail,
+            target.isBanned AS targetIsBanned,
+            target.banReason AS targetBanReason,
+            r.type,
+            r.description,
+            r.status,
+            r.moderatorNote,
+            r.created_at
+          FROM reports r
+          LEFT JOIN userData reporter ON reporter.id = r.reporterId
+          LEFT JOIN userData target ON r.targetType = 'user' AND target.id = r.targetId
+          ORDER BY FIELD(r.status, 'pending', 'reviewed', 'resolved', 'dismissed'), r.created_at DESC
+          LIMIT 100
+        `),
+        knex('feedback').select('*').orderBy('created_at', 'desc').limit(100),
+        knex('userData')
+          .select('id', 'username', 'email', 'banReason', 'banDate', 'banDuration')
+          .where('isBanned', 1)
+          .orderBy('banDate', 'desc')
+          .limit(50),
+      ]);
+
+      const reportRows = Array.isArray(reportRowsRaw?.[0]) ? reportRowsRaw[0] : reportRowsRaw?.rows || [];
+      const unresolvedReports = reportRows.filter((row) => ['pending', 'reviewed'].includes(String(row.status))).length;
+
+      const reportsHtml = reportRows.length
+        ? reportRows.map((row) => {
+            const noteId = `report-note-${row.id}`;
+            const canBan = row.targetType === 'user' && row.targetId;
+            const targetLabel = row.targetType === 'user'
+              ? `${row.targetUsername || 'Unknown'} (${row.targetId})`
+              : `${row.targetType}:${row.targetId}`;
+
+            return `<tr>
+              <td>#${row.id}</td>
+              <td>${escapeHtml(row.reporterUsername || row.reporterId || 'Unknown')}</td>
+              <td>
+                <div>${escapeHtml(targetLabel)}</div>
+                ${row.targetType === 'user' && row.targetId ? `<a href="/user/${encodeURIComponent(row.targetId)}" target="_blank" rel="noopener noreferrer" style="font-size:.8em;color:var(--accent2);text-decoration:none;">Open profile</a>` : ''}
+              </td>
+              <td>${statusChip(row.type)}</td>
+              <td>${statusChip(row.status)}</td>
+              <td style="max-width:320px;white-space:pre-wrap;">${escapeHtml(row.description || '—')}</td>
+              <td>
+                <textarea id="${noteId}" rows="3" style="width:100%;min-width:220px;resize:vertical;">${escapeHtml(String(row.moderatorNote || ''))}</textarea>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                  <button class="btn btn-outline" onclick="updateReport(${row.id}, 'reviewed')">Review</button>
+                  <button class="btn btn-primary" onclick="updateReport(${row.id}, 'resolved')">Resolve</button>
+                  <button class="btn btn-outline" onclick="updateReport(${row.id}, 'dismissed')">Dismiss</button>
+                  ${canBan ? `<button class="btn btn-danger" onclick='banUser(${JSON.stringify(String(row.targetId))}, ${row.id})'>Ban user</button>` : ''}
+                </div>
+                ${row.targetIsBanned ? `<div style="margin-top:8px;color:var(--red);font-size:.82em;">Banned${row.targetBanReason ? `: ${escapeHtml(String(row.targetBanReason))}` : ''}</div>` : ''}
+              </td>
+            </tr>`;
+          }).join('')
+        : '<tr><td colspan="7" style="color:var(--text2);text-align:center;padding:18px;">No reports found.</td></tr>';
+
+      const feedbackHtml = feedbackRows.length
+        ? feedbackRows.map((row) => {
+            const extracted = extractFeedbackTarget(row.message);
+            return `<tr>
+              <td>#${row.id}</td>
+              <td>${escapeHtml(row.username || 'Anonymous')}</td>
+              <td>${escapeHtml(row.title || 'Untitled')}</td>
+              <td>${statusChip(row.feedbackType || 'other')}</td>
+              <td style="max-width:340px;white-space:pre-wrap;">${escapeHtml(row.message || '—')}</td>
+              <td>
+                <div>${escapeHtml(row.contactInfo || '—')}</div>
+                ${(extracted.targetId || extracted.targetUsername)
+                  ? `<div style="margin-top:6px;font-size:.8em;color:var(--text2);">Target: ${escapeHtml(extracted.targetUsername || 'Unknown')}${extracted.targetId ? ` (${escapeHtml(extracted.targetId)})` : ''}</div>`
+                  : ''}
+                <div style="margin-top:8px;"><button class="btn btn-outline" onclick="archiveFeedback(${row.id})">Archive</button></div>
+              </td>
+            </tr>`;
+          }).join('')
+        : '<tr><td colspan="6" style="color:var(--text2);text-align:center;padding:18px;">No feedback found.</td></tr>';
+
+      const bannedHtml = bannedUsers.length
+        ? bannedUsers.map((row) => `<tr>
+            <td>${escapeHtml(row.username || row.id)}</td>
+            <td>${escapeHtml(row.email || '—')}</td>
+            <td>${escapeHtml(row.banReason || '—')}</td>
+            <td>${fmtDate(row.banDate)}</td>
+            <td>${row.banDuration ? `${escapeHtml(String(row.banDuration))} days` : 'Permanent'}</td>
+            <td><button class="btn btn-outline" onclick='unbanUser(${JSON.stringify(String(row.id))})'>Unban</button></td>
+          </tr>`).join('')
+        : '<tr><td colspan="6" style="color:var(--text2);text-align:center;padding:18px;">No banned users.</td></tr>';
+
+      render(req, res, 'Moderation', '/moderation', `
+        <h1 class="page-title">🛡️ Moderation</h1>
+        <div id="moderation-status" class="card" style="display:none;padding:12px 16px;"></div>
+
+        <div class="grid-4">
+          <div class="card"><h3>Open Reports</h3><div class="big-value">${unresolvedReports}</div></div>
+          <div class="card"><h3>Feedback</h3><div class="big-value">${feedbackRows.length}</div></div>
+          <div class="card"><h3>Banned Users</h3><div class="big-value">${bannedUsers.length}</div></div>
+          <div class="card"><h3>Admin Notice</h3><div class="big-value">Ready</div></div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <h3>Send Admin Notification</h3>
+            <form id="admin-notify-form" style="display:grid;gap:10px;">
+              <input type="text" id="notify-target" placeholder="User ID or username" required>
+              <input type="text" id="notify-title" placeholder="Title" required>
+              <textarea id="notify-message" rows="4" placeholder="Message" required></textarea>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                <select id="notify-priority"><option value="info">Info</option><option value="success">Success</option><option value="warning">Warning</option><option value="error">Error</option></select>
+                <select id="notify-category"><option value="moderation">Moderation</option><option value="account">Account</option><option value="system">System</option></select>
+              </div>
+              <input type="text" id="notify-action-url" placeholder="Optional action URL">
+              <button type="submit" class="btn btn-primary">Send</button>
+            </form>
+          </div>
+
+          <div class="card">
+            <h3>Banned Users</h3>
+            <div style="overflow-x:auto;"><table><thead><tr><th>User</th><th>Email</th><th>Reason</th><th>Banned At</th><th>Duration</th><th>Action</th></tr></thead><tbody>${bannedHtml}</tbody></table></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Formal Reports</h3>
+          <div style="overflow-x:auto;"><table><thead><tr><th>ID</th><th>Reporter</th><th>Target</th><th>Type</th><th>Status</th><th>Description</th><th>Actions</th></tr></thead><tbody>${reportsHtml}</tbody></table></div>
+        </div>
+
+        <div class="card">
+          <h3>Feedback & Abuse Tips</h3>
+          <div style="overflow-x:auto;"><table><thead><tr><th>ID</th><th>From</th><th>Title</th><th>Type</th><th>Message</th><th>Contact / Action</th></tr></thead><tbody>${feedbackHtml}</tbody></table></div>
+        </div>
+
+        <script>
+          function showModerationStatus(kind, message) {
+            const el = document.getElementById('moderation-status');
+            el.style.display = 'block';
+            el.style.border = kind === 'error' ? '1px solid rgba(255,107,107,.4)' : '1px solid rgba(78,205,196,.35)';
+            el.style.background = kind === 'error' ? 'rgba(255,107,107,.08)' : 'rgba(78,205,196,.08)';
+            el.style.color = kind === 'error' ? 'var(--red)' : 'var(--accent2)';
+            el.textContent = message;
+          }
+          async function postJson(url, body) {
+            const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.ok === false) throw new Error(data.error || 'Request failed');
+            return data;
+          }
+          async function updateReport(id, status) {
+            try {
+              const moderatorNote = document.getElementById('report-note-' + id)?.value || '';
+              await postJson('{{BASE}}/api/moderation/report/' + encodeURIComponent(id) + '/status', { status, moderatorNote });
+              showModerationStatus('success', 'Report updated.');
+              location.reload();
+            } catch (error) { showModerationStatus('error', error.message || 'Failed.'); }
+          }
+          async function banUser(userId, sourceReportId) {
+            const reason = window.prompt('Ban reason');
+            if (reason === null) return;
+            const durationDays = window.prompt('Ban duration in days (blank = permanent)', '');
+            try {
+              await postJson('{{BASE}}/api/moderation/user/' + encodeURIComponent(userId) + '/ban', { reason, durationDays, sourceReportId });
+              showModerationStatus('success', 'User banned.');
+              location.reload();
+            } catch (error) { showModerationStatus('error', error.message || 'Failed.'); }
+          }
+          async function unbanUser(userId) {
+            try {
+              await postJson('{{BASE}}/api/moderation/user/' + encodeURIComponent(userId) + '/unban', {});
+              showModerationStatus('success', 'User unbanned.');
+              location.reload();
+            } catch (error) { showModerationStatus('error', error.message || 'Failed.'); }
+          }
+          async function archiveFeedback(id) {
+            if (!window.confirm('Archive this feedback entry?')) return;
+            try {
+              await postJson('{{BASE}}/api/moderation/feedback/' + encodeURIComponent(id) + '/archive', {});
+              showModerationStatus('success', 'Feedback archived.');
+              location.reload();
+            } catch (error) { showModerationStatus('error', error.message || 'Failed.'); }
+          }
+          document.getElementById('admin-notify-form')?.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            try {
+              await postJson('{{BASE}}/api/moderation/notifications', {
+                target: document.getElementById('notify-target').value,
+                title: document.getElementById('notify-title').value,
+                message: document.getElementById('notify-message').value,
+                priority: document.getElementById('notify-priority').value,
+                category: document.getElementById('notify-category').value,
+                actionUrl: document.getElementById('notify-action-url').value,
+              });
+              event.target.reset();
+              showModerationStatus('success', 'Notification sent.');
+            } catch (error) { showModerationStatus('error', error.message || 'Failed.'); }
+          });
+        </script>
+      `);
+    } catch (err) {
+      render(req, res, 'Moderation', '/moderation', `<div class="card"><h3 style="color:var(--red);">Error</h3><p>${escapeHtml(err.message || String(err))}</p></div>`);
+    }
+  });
+
+  router.post('/api/moderation/report/:id/status', express.json(), async (req, res) => {
+    const reportId = Number(req.params.id);
+    const status = String(req.body?.status || '').trim().toLowerCase();
+    const moderatorNote = String(req.body?.moderatorNote || '').trim();
+
+    if (!Number.isFinite(reportId)) return res.status(400).json({ ok: false, error: 'Invalid report id' });
+    if (!['pending', 'reviewed', 'resolved', 'dismissed'].includes(status)) {
+      return res.status(400).json({ ok: false, error: 'Invalid report status' });
+    }
+
+    try {
+      await ensureReportsTable();
+      const existing = await knex('reports').where('id', reportId).first();
+      if (!existing) return res.status(404).json({ ok: false, error: 'Report not found' });
+      await knex('reports').where('id', reportId).update({
+        status,
+        moderatorNote,
+        resolvedAt: ['resolved', 'dismissed'].includes(status) ? knex.fn.now() : null,
+      });
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err.message || String(err) });
+    }
+  });
+
+  router.post('/api/moderation/user/:id/ban', express.json(), async (req, res) => {
+    const userId = String(req.params.id || '').trim();
+    const reason = String(req.body?.reason || '').trim() || 'Banned by admin moderation review';
+    const sourceReportId = Number(req.body?.sourceReportId || 0);
+    const parsedDuration = parseInt(String(req.body?.durationDays || '').trim(), 10);
+    const durationDays = Number.isFinite(parsedDuration) && parsedDuration > 0 ? parsedDuration : null;
+    if (!userId) return res.status(400).json({ ok: false, error: 'Invalid user id' });
+
+    const trx = await knex.transaction();
+    try {
+      await ensureReportsTable();
+      const user = await trx('userData').where('id', userId).first();
+      if (!user) {
+        await trx.rollback();
+        return res.status(404).json({ ok: false, error: 'User not found' });
+      }
+
+      await trx('userData').where('id', userId).update({ isBanned: 1, banReason: reason, banDate: trx.fn.now(), banDuration: durationDays });
+
+      if (Number.isFinite(sourceReportId) && sourceReportId > 0) {
+        const report = await trx('reports').where('id', sourceReportId).first();
+        if (report) {
+          const mergedNote = [String(report.moderatorNote || '').trim(), `Ban action: ${reason}`].filter(Boolean).join('\n');
+          await trx('reports').where('id', sourceReportId).update({ status: 'resolved', moderatorNote: mergedNote, resolvedAt: trx.fn.now() });
+        }
+      }
+
+      await trx.commit();
+      await createNotif(pool, {
+        userId,
+        type: 'account_banned',
+        title: 'Account restricted',
+        message: durationDays ? `Your account has been suspended for ${durationDays} day(s). Reason: ${reason}` : `Your account has been suspended. Reason: ${reason}`,
+        priority: 'error',
+        category: 'moderation',
+        actionUrl: '/help',
+      }).catch((error) => console.warn('Failed to send ban notification:', error.message || error));
+
+      res.json({ ok: true });
+    } catch (err) {
+      await trx.rollback();
+      res.status(500).json({ ok: false, error: err.message || String(err) });
+    }
+  });
+
+  router.post('/api/moderation/user/:id/unban', express.json(), async (req, res) => {
+    const userId = String(req.params.id || '').trim();
+    if (!userId) return res.status(400).json({ ok: false, error: 'Invalid user id' });
+
+    try {
+      const user = await knex('userData').where('id', userId).first();
+      if (!user) return res.status(404).json({ ok: false, error: 'User not found' });
+      await knex('userData').where('id', userId).update({ isBanned: 0, banReason: null, banDate: null, banDuration: null });
+
+      await createNotif(pool, {
+        userId,
+        type: 'account_restored',
+        title: 'Account access restored',
+        message: 'An admin removed the restriction on your account.',
+        priority: 'success',
+        category: 'account',
+        actionUrl: '/account',
+      }).catch((error) => console.warn('Failed to send unban notification:', error.message || error));
+
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err.message || String(err) });
+    }
+  });
+
+  router.post('/api/moderation/notifications', express.json(), async (req, res) => {
+    const target = String(req.body?.target || '').trim();
+    const title = String(req.body?.title || '').trim();
+    const message = String(req.body?.message || '').trim();
+    const priority = String(req.body?.priority || 'info').trim().toLowerCase();
+    const category = String(req.body?.category || 'moderation').trim().toLowerCase();
+    const actionUrl = String(req.body?.actionUrl || '').trim() || null;
+
+    if (!target || !title || !message) return res.status(400).json({ ok: false, error: 'Target, title, and message are required' });
+
+    try {
+      const user = await knex('userData').where('id', target).orWhere('username', target).first();
+      if (!user) return res.status(404).json({ ok: false, error: 'User not found' });
+
+      await createNotif(pool, { userId: user.id, type: 'admin_message', title, message, priority, category, actionUrl });
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err.message || String(err) });
+    }
+  });
+
+  router.post('/api/moderation/feedback/:id/archive', express.json(), async (req, res) => {
+    const feedbackId = Number(req.params.id);
+    if (!Number.isFinite(feedbackId)) return res.status(400).json({ ok: false, error: 'Invalid feedback id' });
+
+    try {
+      await ensureFeedbackTable();
+      await knex('feedback').where('id', feedbackId).del();
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err.message || String(err) });
+    }
+  });
+
+  // ══════════════════════════════════════════════
   //  PAGE: Verification Document Review
   // ══════════════════════════════════════════════
   router.get('/review/verifications', async (req, res) => {
@@ -1472,6 +1935,7 @@ module.exports = function createAdminRouter(deps = {}) {
                 <div class="sub-label" style="margin-top:8px;">Scroll to zoom and drag to pan.</div>
               </div>`
             : `<div class="card" style="margin:0;"><h3>Face Photo</h3><p style="color:var(--text2)">No face photo found for this submission.</p></div>`;
+
 
           const idViewer = assets.idPath
             ? `<div class="zoom-wrap" id="viewer-${domId}-id" data-zoom="1">

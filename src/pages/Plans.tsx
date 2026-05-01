@@ -107,12 +107,12 @@ export default function Plans() {
   const handleSubscribe = (plan: Plan) => {
     if (!plan.stripePriceId || plan.id === 'free') return;
     // Redirect to Stripe Checkout (replace with real checkout session endpoint when ready)
-    const url = `${import.meta.env.VITE_API_URL ?? 'http://localhost:3001'}/api/stripe/create-checkout?priceId=${plan.stripePriceId}&userId=${user?.id}`;
+    const url = `${import.meta.env.VITE_API_URL ?? 'http://localhost:4000'}/api/stripe/create-checkout?priceId=${plan.stripePriceId}&userId=${user?.id}`;
     window.location.href = url;
   };
 
   const handleManage = () => {
-    const url = `${import.meta.env.VITE_API_URL ?? 'http://localhost:3001'}/api/stripe/portal?userId=${user?.id}`;
+    const url = `${import.meta.env.VITE_API_URL ?? 'http://localhost:4000'}/api/stripe/portal?userId=${user?.id}`;
     window.location.href = url;
   };
 

@@ -113,6 +113,9 @@ export default function Help() {
         supportContactInfo: supportContactInfo.trim(),
         supportUsername: supportUsername.trim(),
         supportUserId: user?.id,
+        supportTargetType: reportPrefill.isReport ? 'user' : undefined,
+        supportTargetId: reportPrefill.targetId || undefined,
+        supportTargetUsername: reportPrefill.targetUsername || undefined,
       });
 
       setSubmitStatus({ kind: 'success', message: 'Thanks! Your feedback has been submitted.' });

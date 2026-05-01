@@ -1,8 +1,8 @@
-// In dev, Vite proxies /api/* to localhost:3001 — no CORS needed.
+// In dev, Vite proxies /api/* to localhost:4000 — no CORS needed.
 // In production, set VITE_API_URL in the project-root .env (e.g. VITE_API_URL=https://api.drauwpr.com).
 // NOTE: Vite only exposes env vars with the VITE_ prefix; server/.env is NOT read by Vite.
 const API_BASE = import.meta.env.VITE_API_URL || '';
-// const API_BASE = 'http://localhost:3001';
+// const API_BASE = 'http://localhost:4000';
 
 class ApiClient {
   private getToken(): string | null {
