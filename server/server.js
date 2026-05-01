@@ -130,8 +130,8 @@ const corsOptions = {
       'http://localhost:5001',
       'http://localhost:5000',
       // 'https://key-ching.com',
-      'https://drauwpr.com',
-      'https://www.drauwpr.com',
+      'https://drauwper.com',
+      'https://www.drauwper.com',
       // 'https://microtrax.netlify.app',
       // "https://servers4sqldb.uc.r.appspot.com",
       // "https://orca-app-j32vd.ondigitalocean.app",
@@ -141,7 +141,7 @@ const corsOptions = {
       "http://localhost:5174",
       "http://localhost:5175",
       "http://142.93.82.161",
-      "https://server.drauwpr.com",
+      "https://server.drauwper.com",
       'https://js.stripe.com',
       // "*", // Allow all origins (for development, remove in production)
       // Add any other origins you want to allow
