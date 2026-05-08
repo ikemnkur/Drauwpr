@@ -1043,8 +1043,8 @@ server.post(PROXY + '/api/auth/verify-account', authenticateToken, async (req, r
 
     // Look up each TX hash separately in the chain's transaction table
     const [rows1, rows2] = await Promise.all([
-      knex(txTable).where('hash', transactionId).select('*'),
-      knex(txTable).where('hash', transactionId2).select('*'),
+      knex(txTable).where('txHash', transactionId).select('*'),
+      knex(txTable).where('txHash', transactionId2).select('*'),
     ]);
 
     console.log(`Verification TX lookup — hash1: ${rows1.length} row(s), hash2: ${rows2.length} row(s)`);
@@ -2684,7 +2684,7 @@ async function checkTransaction(crypto, txHash, walletAddress, amount) {
     } else if (crypto === 'ETH') {
 
       const transactions = await knex('ETH_TX')
-        .where('hash', txHash)
+        .where('txHash', txHash)
         .select('*');
 
       // const txamount = await checkEthereumTransaction(txHash, walletAddress);
@@ -3694,7 +3694,7 @@ server.post(PROXY + '/api/lookup-transaction', async (req, res) => {
 
     if (blockchain === "bitcoin" || blockchain === "BTC") {
       tx = await knex('BTC_TX')
-        .where({ direction: 'IN', hash: transactionHash })
+        .where({ direction: 'IN', txHash: transactionHash })
         .select('*');
       console.log('Lookup transaction result for bitcoin:', tx.length > 0 ? tx[0] : 'No transaction found');
 
@@ -3705,7 +3705,7 @@ server.post(PROXY + '/api/lookup-transaction', async (req, res) => {
     }
     else if (blockchain === "ethereum" || blockchain === "ETH") {
       tx = await knex('ETH_TX')
-        .where({ direction: 'IN', hash: transactionHash })
+        .where({ direction: 'IN', txHash: transactionHash })
         .select('*');
       console.log('Lookup transaction result for ethereum:', tx.length > 0 ? tx[0] : 'No transaction found');
 
@@ -3716,7 +3716,7 @@ server.post(PROXY + '/api/lookup-transaction', async (req, res) => {
     }
     else if (blockchain === "litecoin" || blockchain === "LTC") {
       tx = await knex('LTC_TX')
-        .where({ direction: 'IN', hash: transactionHash })
+        .where({ direction: 'IN', txHash: transactionHash })
         .select('*');
       console.log('Lookup transaction result for litecoin:', tx.length > 0 ? tx[0] : 'No transaction found');
 
@@ -3727,7 +3727,7 @@ server.post(PROXY + '/api/lookup-transaction', async (req, res) => {
     }
     else if (blockchain === "solana" || blockchain === "SOL") {
       tx = await knex('SOL_TX')
-        .where({ direction: 'IN', hash: transactionHash })
+        .where({ direction: 'IN', txHash: transactionHash })
         .select('*');
       console.log('Lookup transaction result for solana:', tx.length > 0 ? tx[0] : 'No transaction found');
 
