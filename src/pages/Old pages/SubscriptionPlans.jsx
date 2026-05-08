@@ -48,7 +48,7 @@ const SubscriptionPlans = () => {
     const navigate = useNavigate();
     const { showToast } = useToast();
 
-    const API_URL = import.meta.env.VITE_API_SERVER_URL || 'http://localhost:4000'; 
+    const API_URL = import.meta.env.VITE_API_SERVER_URL || 'http://localhost:4000';
 
     // Subscription plans configuration
     const plans = [
@@ -137,7 +137,7 @@ const SubscriptionPlans = () => {
             const userData = JSON.parse(localStorage.getItem('userdata') || '{}');
             if (!userData.id) return;
 
-            
+
             const response = await fetch(`${API_URL}/api/subscription/current/${userData.id}`);
 
             if (response.ok) {
@@ -163,7 +163,7 @@ const SubscriptionPlans = () => {
             }
 
             // Create Stripe checkout session
-            
+
             const response = await fetch(`${API_URL}/api/subscription/create-checkout`, {
                 method: 'POST',
                 headers: {
@@ -207,7 +207,7 @@ const SubscriptionPlans = () => {
 
     const handleManageSubscription = async () => {
         try {
-            const userData = JSON.parse(localStorage.getItem('userdata') || '{}');              
+            const userData = JSON.parse(localStorage.getItem('userdata') || '{}');
             const response = await fetch(`${API_URL}/api/subscription/portal`, {
                 method: 'POST',
                 headers: {
@@ -263,6 +263,9 @@ const SubscriptionPlans = () => {
             <Box sx={{ textAlign: 'center', mb: 6 }}>
                 <Typography variant="h3" gutterBottom fontWeight="bold">
                     Choose Your Plan
+                </Typography>
+                <Typography variant="h5" color="primary.main" sx={{ mb: 2, fontWeight: 'bold' }}>
+                    (Coming Soon)
                 </Typography>
                 <Typography variant="h6" color="text.secondary" sx={{ mb: 4 }}>
                     Unlock premium features with a subscription

@@ -86,7 +86,7 @@ export default function Landing() {
           </div>
           <h1 className="text-5xl md:text-6xl lg:text-7xl font-extrabold leading-tight mb-6">
             <span className="bg-gradient-to-r from-orange-400 via-orange-500 to-red-500 bg-clip-text text-transparent">
-              Burn the Clock.
+              Burn down the Fuse.
             </span>
             <br />
             <span className="text-white">Unlock the Drop.</span>

@@ -56,6 +56,9 @@ export default function Subscribe() {
         <Typography variant="h3" color="primary.main" sx={{ mb: 2, fontWeight: 'bold' }}>
           Choose Your Plan
         </Typography>
+          <Typography variant="h5" color="primary.main" sx={{ mb: 2, fontWeight: 'bold' }}>
+          (Coming Soon)
+        </Typography>
         <Typography variant="h6" color="text.secondary">
           Select the plan that fits you. Click Subscribe to continue.
         </Typography>
