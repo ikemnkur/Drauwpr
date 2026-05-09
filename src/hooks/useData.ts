@@ -177,6 +177,8 @@ export interface HistoryEntry {
   penaltyAmount: number;
   isRefunded: boolean;
   timestamp: number;
+  kind: 'contribution' | 'stall';
+  stallMinutes?: number;
 }
 
 interface HistoryResponse {
@@ -219,6 +221,7 @@ export function useContributionHistory() {
           penaltyAmount: h.penaltyAmount,
           isRefunded: !!h.isRefunded,
           timestamp: new Date(h.created_at).getTime(),
+          kind: 'contribution' as const,
         })));
         setTotalSpent(res.totalSpent);
       } catch {
@@ -232,6 +235,56 @@ export function useContributionHistory() {
   }, [isAuthenticated]);
 
   return { entries, totalSpent, loading, error };
+}
+
+// ── Stall action history hook ──────────────────────────────
+
+interface StallHistoryResponse {
+  history: {
+    id: string;
+    dropId: string;
+    stallMinutes: number;
+    creditCost: number;
+    balanceAfter: number;
+    created_at: string;
+    dropTitle: string;
+    dropStatus: string;
+  }[];
+  total: number;
+}
+
+export function useStallHistory() {
+  const { isAuthenticated } = useAuth();
+  const [entries, setEntries] = useState<HistoryEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!isAuthenticated) { setLoading(false); return; }
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const res = await api.get<StallHistoryResponse>('/api/stall-actions/history');
+        if (cancelled) return;
+        setEntries(res.history.map(h => ({
+          id: h.id,
+          dropId: h.dropId,
+          dropTitle: h.dropTitle,
+          dropStatus: h.dropStatus,
+          amount: h.creditCost,
+          penaltyAmount: 0,
+          isRefunded: false,
+          timestamp: new Date(h.created_at).getTime(),
+          kind: 'stall' as const,
+          stallMinutes: h.stallMinutes,
+        })));
+      } catch { /* table may not exist yet */ }
+      finally { if (!cancelled) setLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [isAuthenticated]);
+
+  return { entries, loading };
 }
 
 // ── Credit purchase history hook ───────────────────────────

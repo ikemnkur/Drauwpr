@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import {
   History as HistoryIcon, Flame, ArrowUpRight, Undo2,
   Download, CreditCard, Crown, Search, Filter, FileDown,
-  FileText, ChevronDown, Megaphone,
+  FileText, ChevronDown, Megaphone, Timer,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import {
@@ -12,6 +12,7 @@ import {
   useMembershipHistory,
   useEarningsHistory,
   usePromoChargeHistory,
+  useStallHistory,
 } from '../hooks/useData';
 
 // ── Types ──────────────────────────────────────────────────
@@ -92,6 +93,7 @@ export default function History() {
   const [statusFilter, setStatusFilter] = useState('all');
 
   const contrib = useContributionHistory();
+  const stalls = useStallHistory();
   const purchases = usePurchaseHistory();
   const downloads = useDownloadHistory();
   const memberships = useMembershipHistory();
@@ -99,7 +101,7 @@ export default function History() {
   const promoCharges = usePromoChargeHistory();
 
   const loading =
-    tab === 'contributions' ? contrib.loading :
+    tab === 'contributions' ? (contrib.loading || stalls.loading) :
     tab === 'purchases' ? purchases.loading :
     tab === 'downloads' ? downloads.loading :
     tab === 'earnings' ? earnings.loading :
@@ -110,7 +112,13 @@ export default function History() {
   const q = search.toLowerCase();
 
   // Filtered rows per tab
-  const filteredContribs = useMemo(() => contrib.entries.filter(e => {
+  // Merge contributions + stall actions, sorted newest first
+  const mergedContribs = useMemo(() => {
+    return [...contrib.entries, ...stalls.entries]
+      .sort((a, b) => b.timestamp - a.timestamp);
+  }, [contrib.entries, stalls.entries]);
+
+  const filteredContribs = useMemo(() => mergedContribs.filter(e => {
     if (e.timestamp < cutoff) return false;
     if (statusFilter !== 'all') {
       const s = e.isRefunded ? 'refunded' : 'completed';
@@ -227,7 +235,7 @@ export default function History() {
 
   // ── Tab config ─────────────────────────────────────
   const tabs: { id: Tab; label: string; icon: React.ReactNode; count: number }[] = [
-    { id: 'contributions', label: 'Contributions', icon: <Flame className="w-4 h-4" />, count: contrib.entries.length },
+    { id: 'contributions', label: 'Contributions', icon: <Flame className="w-4 h-4" />, count: mergedContribs.length },
     { id: 'purchases', label: 'Credit Purchases', icon: <CreditCard className="w-4 h-4" />, count: purchases.entries.length },
     { id: 'downloads', label: 'Downloads', icon: <Download className="w-4 h-4" />, count: downloads.entries.length },
     { id: 'earnings', label: 'Earnings', icon: <ArrowUpRight className="w-4 h-4" />, count: earnings.entries.length },
@@ -380,15 +388,33 @@ export default function History() {
                   to={`/drop/${h.dropId}`}
                   className="bg-surface-2 rounded-xl p-4 flex items-center gap-4 hover:bg-surface-3 transition-colors block no-underline"
                 >
-                  <div className="w-9 h-9 bg-surface-3 rounded-lg flex items-center justify-center shrink-0">
-                    {h.isRefunded ? <Undo2 className="w-4 h-4 text-green-400" /> : <Flame className="w-4 h-4 text-brand" />}
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+                    h.kind === 'stall' ? 'bg-yellow-500/15' : 'bg-surface-3'
+                  }`}>
+                    {h.kind === 'stall'
+                      ? <Timer className="w-4 h-4 text-yellow-400" />
+                      : h.isRefunded
+                        ? <Undo2 className="w-4 h-4 text-green-400" />
+                        : <Flame className="w-4 h-4 text-brand" />
+                    }
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-text truncate">{h.dropTitle}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-semibold text-text truncate">{h.dropTitle}</p>
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${
+                        h.kind === 'stall'
+                          ? 'bg-yellow-500/15 text-yellow-400'
+                          : 'bg-brand/15 text-brand'
+                      }`}>
+                        {h.kind === 'stall' ? `STALL +${h.stallMinutes}m` : 'CONTRIBUTE'}
+                      </span>
+                    </div>
                     <p className="text-xs text-text-muted">{fmtDate(h.timestamp)} · {fmtTime(h.timestamp)}</p>
                   </div>
                   <div className="text-right shrink-0 flex flex-col items-end gap-1">
-                    <span className={`text-sm font-mono font-semibold ${h.isRefunded ? 'text-green-400' : 'text-brand'}`}>
+                    <span className={`text-sm font-mono font-semibold ${
+                      h.isRefunded ? 'text-green-400' : h.kind === 'stall' ? 'text-yellow-400' : 'text-brand'
+                    }`}>
                       {h.isRefunded ? '+' : '-'}{h.amount.toLocaleString()} cr
                     </span>
                     <StatusBadge status={h.isRefunded ? 'Refunded' : 'Completed'} />

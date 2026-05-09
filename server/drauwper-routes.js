@@ -348,13 +348,15 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       const hasTag = !!tag;
       const [rows] = await pool.query(
         `SELECT id, userId, username, submissionType, mediaType, title, description,
-                targetDropId, mediaUrl, ctaText, budgetUsd, assetPath, status,
+                targetDropId, target_url, mediaUrl, ctaText, budgetUsd, assetPath, status,
                 clicks, impressions, likes, neutrals, dislikes, tags,
                 created_at, updated_at
          FROM promoSubmissions
          WHERE status = 'approved'
-           AND targetDropId IS NOT NULL
-           AND targetDropId <> ''
+           AND (
+             (submissionType = 'drop_sponsorship' AND targetDropId IS NOT NULL AND targetDropId <> '')
+             OR (submissionType = 'ad' AND target_url IS NOT NULL AND target_url <> '')
+           )
            ${hasTag ? 'AND tags IS NOT NULL AND LOWER(tags) LIKE LOWER(?)' : ''}
          ORDER BY updated_at DESC
          LIMIT ?`,
@@ -1606,6 +1608,48 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
     } catch (err) {
       console.error('GET /api/contributions/history error:', err);
       res.status(500).json({ error: 'Failed to fetch contribution history' });
+    }
+  });
+
+  /**
+   * GET /api/stall-actions/history
+   * Returns the authenticated user's stall purchase history with drop info.
+   */
+  server.get(PROXY + '/api/stall-actions/history', authenticateToken, async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+      const offset = parseInt(req.query.offset) || 0;
+
+      const [[tableCheck]] = await pool.query(
+        `SELECT COUNT(*) AS cnt FROM information_schema.tables
+         WHERE table_schema = DATABASE() AND table_name = 'stallActions'`
+      );
+      if (!tableCheck || tableCheck.cnt === 0) {
+        return res.json({ history: [], total: 0 });
+      }
+
+      const [rows] = await pool.query(
+        `SELECT s.id, s.dropId, s.stallMinutes, s.creditCost, s.balanceAfter,
+                s.expiresAtBefore, s.expiresAtAfter, s.created_at,
+                d.title AS dropTitle, d.status AS dropStatus
+         FROM stallActions s
+         JOIN drops d ON d.id = s.dropId
+         WHERE s.userId = ?
+         ORDER BY s.created_at DESC
+         LIMIT ? OFFSET ?`,
+        [userId, limit, offset]
+      );
+
+      const [[{ total }]] = await pool.query(
+        `SELECT COUNT(*) AS total FROM stallActions WHERE userId = ?`,
+        [userId]
+      );
+
+      res.json({ history: rows, total });
+    } catch (err) {
+      console.error('GET /api/stall-actions/history error:', err);
+      res.status(500).json({ error: 'Failed to fetch stall history' });
     }
   });
 

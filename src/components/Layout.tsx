@@ -30,9 +30,11 @@ interface Notif {
 interface SponsoredPromo {
   id: string;
   username: string | null;
+  submissionType: 'ad' | 'drop_sponsorship';
   title: string;
   description: string | null;
   targetDropId: string;
+  target_url: string | null;
   ctaText: string | null;
   mediaUrl: string | null;
   assetPath: string | null;
@@ -72,6 +74,7 @@ export default function Layout() {
   const [sponsoredAds, setSponsoredAds] = useState<SponsoredPromo[]>([]);
   const [showAdModal, setShowAdModal] = useState(false);
   const [activeAd, setActiveAd] = useState<SponsoredPromo | null>(null);
+  const [adCloseCountdown, setAdCloseCountdown] = useState(3);
   const bellRef = useRef<HTMLDivElement>(null);
   const unreadCount = (notifs ?? []).filter((n) => !n.isRead).length;
 
@@ -144,8 +147,10 @@ export default function Layout() {
   useEffect(() => {
     const isExplore = pathname === '/explore';
     const isAccount = pathname === '/account';
+    const isDashboard = pathname === '/dashboard';
+    const isPromo = pathname.startsWith('/promo');
     const isDropFeature = /^\/drop\/[^/]+$/.test(pathname);
-    const shouldShowOnRoute = isExplore || isAccount || isDropFeature;
+    const shouldShowOnRoute = isExplore || isAccount || isDashboard || isPromo || isDropFeature;
 
     if (!shouldShowOnRoute || sponsoredAds.length === 0) {
       setShowAdModal(false);
@@ -155,6 +160,7 @@ export default function Layout() {
 
     const next = sponsoredAds[Math.floor(Math.random() * sponsoredAds.length)];
     setActiveAd(next);
+    setAdCloseCountdown(3);
 
     // Show modal after a random delay between 0 and 10 seconds.
     setShowAdModal(false);
@@ -168,14 +174,27 @@ export default function Layout() {
     };
   }, [pathname, sponsoredAds]);
 
+  // Count down the close button delay whenever the modal is open
+  useEffect(() => {
+    if (!showAdModal) return;
+    setAdCloseCountdown(3);
+    const t = setInterval(() => {
+      setAdCloseCountdown((prev) => {
+        if (prev <= 1) { clearInterval(t); return 0; }
+        return prev - 1;
+      });
+    }, 1_000);
+    return () => clearInterval(t);
+  }, [showAdModal]);
+
   useEffect(() => {
     if (!showAdModal) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setShowAdModal(false);
+      if (e.key === 'Escape' && adCloseCountdown === 0) setShowAdModal(false);
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [showAdModal]);
+  }, [showAdModal, adCloseCountdown]);
 
   useEffect(() => {
     if (!showAdModal || !activeAd) return;
@@ -206,14 +225,18 @@ export default function Layout() {
 
   function openSponsoredTarget() {
     if (!activeAd) return;
-    const target = resolveTarget(activeAd.targetDropId);
-    const isExternal = /^https?:\/\//i.test(target);
     void api.post(`/api/promotions/${activeAd.id}/click`, {}).catch(() => {});
     setShowAdModal(false);
-    if (isExternal) {
-      window.location.href = target;
+    // Ads link to an external URL (target_url); sponsorships link to a drop inside the app
+    if (activeAd.submissionType === 'ad' && activeAd.target_url) {
+      window.open(activeAd.target_url, '_blank', 'noopener,noreferrer');
     } else {
-      navigate(target);
+      const target = resolveTarget(activeAd.targetDropId);
+      if (/^https?:\/\//i.test(target)) {
+        window.location.href = target;
+      } else {
+        navigate(target);
+      }
     }
   }
 
@@ -226,18 +249,29 @@ export default function Layout() {
     <div className="min-h-screen flex flex-col">
       {showAdModal && activeAd && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          {/* Backdrop — only dismissible after countdown */}
           <button
             className="absolute inset-0 bg-black/65"
-            onClick={() => setShowAdModal(false)}
+            onClick={() => adCloseCountdown === 0 && setShowAdModal(false)}
             aria-label="Close ad"
           />
           <div className="relative w-full max-w-xl bg-surface border border-surface-3 rounded-2xl overflow-hidden shadow-2xl">
+            {/* Close button — shows countdown then becomes active */}
             <button
-              onClick={() => setShowAdModal(false)}
-              className="absolute top-3 right-3 w-8 h-8 flex items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70"
-              aria-label="Close"
+              onClick={() => adCloseCountdown === 0 && setShowAdModal(false)}
+              disabled={adCloseCountdown > 0}
+              className={`absolute top-3 right-3 w-8 h-8 flex items-center justify-center rounded-full text-white transition ${
+                adCloseCountdown > 0
+                  ? 'bg-black/40 cursor-not-allowed'
+                  : 'bg-black/50 hover:bg-black/70 cursor-pointer'
+              }`}
+              aria-label={adCloseCountdown > 0 ? `Close in ${adCloseCountdown}s` : 'Close'}
             >
-              <X className="w-4 h-4" />
+              {adCloseCountdown > 0 ? (
+                <span className="text-xs font-bold">{adCloseCountdown}</span>
+              ) : (
+                <X className="w-4 h-4" />
+              )}
             </button>
             <div className="aspect-[16/7] bg-surface-2 overflow-hidden">
               <img
@@ -279,10 +313,15 @@ export default function Layout() {
                   {activeAd.ctaText || 'Learn more'}
                 </button>
                 <button
-                  onClick={() => setShowAdModal(false)}
-                  className="px-4 py-2 text-sm font-semibold rounded-lg bg-surface-2 text-text-muted hover:text-text"
+                  onClick={() => adCloseCountdown === 0 && setShowAdModal(false)}
+                  disabled={adCloseCountdown > 0}
+                  className={`px-4 py-2 text-sm font-semibold rounded-lg transition ${
+                    adCloseCountdown > 0
+                      ? 'bg-surface-2 text-text-muted/50 cursor-not-allowed'
+                      : 'bg-surface-2 text-text-muted hover:text-text cursor-pointer'
+                  }`}
                 >
-                  Close
+                  {adCloseCountdown > 0 ? `Close (${adCloseCountdown}s)` : 'Close'}
                 </button>
               </div>
             </div>
