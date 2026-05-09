@@ -53,21 +53,29 @@ export default function UserProfile() {
   const [profile, setProfile] = useState<CreatorProfile | null>(null);
   const [userDrops, setUserDrops] = useState<Drop[]>([]);
   const [loading, setLoading] = useState(true);
-  const [favorited, setFavorited] = useState(false);
+  const [following, setFollowing] = useState(false);
+  const [followerCount, setFollowerCount] = useState(0);
+  const [followLoading, setFollowLoading] = useState(false);
 
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
     setLoading(true);
 
-    Promise.all([
-      api.get<ServerProfile>(`/api/users/${id}`),
-      api.get<ServerDrop[]>(`/api/users/${id}/drops`),
-    ])
-      .then(([profileRes, dropsRes]) => {
+    const profileReq = api.get<ServerProfile>(`/api/users/${id}`);
+    const dropsReq = api.get<ServerDrop[]>(`/api/users/${id}/drops`);
+    const followingReq = authUser && authUser.id !== id
+      ? api.get<{ following: boolean }>(`/api/users/${id}/am-i-following`).catch(() => null)
+      : Promise.resolve(null);
+
+    Promise.all([profileReq, dropsReq, followingReq])
+      .then(([profileRes, dropsRes, followRes]) => {
         if (cancelled) return;
-        setProfile(mapProfile(profileRes));
+        const mapped = mapProfile(profileRes);
+        setProfile(mapped);
+        setFollowerCount(mapped.followerCount);
         setUserDrops(dropsRes.map(mapDrop));
+        if (followRes) setFollowing(followRes.following);
       })
       .catch(() => {
         // Fallback: try to build profile from context drops
@@ -84,6 +92,7 @@ export default function UserProfile() {
             totalCreditsEarned: 0,
             joined: Date.now(),
           });
+          setFollowerCount(0);
           setUserDrops(fallbackDrops);
         }
       })
@@ -92,7 +101,7 @@ export default function UserProfile() {
       });
 
     return () => { cancelled = true; };
-  }, [id, contextDrops]);
+  }, [id, contextDrops, authUser]);
 
   if (loading) {
     return (
@@ -185,15 +194,30 @@ export default function UserProfile() {
                 )}
 
                 <button
-                  onClick={() => setFavorited(!favorited)}
+                  onClick={async () => {
+                    if (!authUser || authUser.id === profile.id || followLoading) return;
+                    setFollowLoading(true);
+                    try {
+                      const res = await api.post<{ following: boolean; followerCount: number }>(
+                        `/api/users/${profile.id}/follow`, {}
+                      );
+                      setFollowing(res.following);
+                      setFollowerCount(res.followerCount);
+                    } catch {
+                      // silently fail — button reverts visually
+                    } finally {
+                      setFollowLoading(false);
+                    }
+                  }}
+                  disabled={followLoading || !authUser || authUser.id === profile.id}
                   className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-medium transition ${
-                    favorited
+                    following
                       ? 'bg-red-500/15 text-red-400 border border-red-500/30'
                       : 'bg-surface-2 text-text-muted border border-surface-3 hover:border-brand/50 hover:text-brand'
-                  }`}
+                  } disabled:opacity-50`}
                 >
-                  <Heart className={`w-4 h-4 ${favorited ? 'fill-red-400' : ''}`} />
-                  {favorited ? 'Following' : 'Follow'}
+                  <Heart className={`w-4 h-4 ${following ? 'fill-red-400' : ''}`} />
+                  {followLoading ? '…' : following ? 'Unfollow' : 'Follow'}
                 </button>
 
                 {authUser?.id !== profile.id && (
@@ -257,7 +281,7 @@ export default function UserProfile() {
         </div>
         <div className="bg-surface rounded-xl border border-surface-3 p-4 text-center">
           <Users className="w-5 h-5 mx-auto mb-1 text-brand" />
-          <p className="text-2xl font-bold text-text">{profile.followerCount.toLocaleString()}</p>
+          <p className="text-2xl font-bold text-text">{followerCount.toLocaleString()}</p>
           <p className="text-xs text-text-muted">Followers</p>
         </div>
         <div className="bg-surface rounded-xl border border-surface-3 p-4 text-center">

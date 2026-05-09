@@ -86,15 +86,23 @@ export default function Landing() {
           </div>
           <h1 className="text-5xl md:text-6xl lg:text-7xl font-extrabold leading-tight mb-6">
             <span className="bg-gradient-to-r from-orange-400 via-orange-500 to-red-500 bg-clip-text text-transparent">
-              Burn down the Fuse.
+              Lite the Fuse.
+            </span>
+            <br />
+            <span className="bg-gradient-to-r from-orange-400 via-orange-500 to-red-500 bg-clip-text text-transparent">
+              Start the Countdown.
             </span>
             <br />
             <span className="text-white">Unlock the Drop.</span>
           </h1>
           <p className="text-lg md:text-xl text-[#94a3b8] max-w-2xl mx-auto mb-10 leading-relaxed">
-            A social file-drop platform where fans spend credits to accelerate
-            countdowns. The more the community burns, the faster the release.
+            A social file-drop platform where fans spend credits to unlock cool stuff. Spend to accelerate
+            countdowns to download exclusive items and fresh content. The more the community burns, the faster the clock ticks to release.
           </p>
+          <h3 className="text text-[#94a3b8] mb-8">
+            <span className="text-white font-extrabold"> If its hot.... Drauwp it!</span>
+          </h3>
+
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Link
               to="/register"

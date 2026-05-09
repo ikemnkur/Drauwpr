@@ -1264,6 +1264,7 @@ server.post(PROXY + '/api/promo-submissions', authenticateToken, async (req, res
       const title = String(fields.title || '').trim();
       const description = String(fields.description || '').trim();
       const targetDropId = String(fields.targetDropId || '').trim() || null;
+      const targetUrl = String(fields.targetUrl || '').trim() || null;
       const mediaUrl = String(fields.mediaUrl || '').trim() || null;
       const ctaText = String(fields.ctaText || '').trim() || null;
       const contactEmail = String(fields.contactEmail || req.user?.email || '').trim();
@@ -1298,6 +1299,7 @@ server.post(PROXY + '/api/promo-submissions', authenticateToken, async (req, res
         title,
         description,
         targetDropId,
+        target_url: targetUrl,
         mediaUrl,
         ctaText,
         budgetUsd,
@@ -1651,16 +1653,21 @@ async function runPromoBillingCron() {
           .where('id', livePromo.userId)
           .update({ credits: newBalance });
 
+        const rawDropId = livePromo.targetDropId || null;
+        const relatedDropId = rawDropId
+          ? (rawDropId.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i) || [])[0] || null
+          : null;
+
         await safeInsertWalletTransaction({
           id: require('crypto').randomUUID(),
           userId: livePromo.userId,
           type: 'admin_adjustment',
           amount: -chargeAmount,
           balanceAfter: newBalance,
-          relatedDropId: livePromo.targetDropId || null,
+          relatedDropId,
           description: `Promo charge: ${livePromo.title || 'Promotion'} | +${deltaImpressions} impressions, +${deltaClicks} clicks`,
           created_at: trx.fn.now(),
-        });
+        }, trx);
 
         await trx('promoSubmissions')
           .where('id', livePromo.id)
@@ -4310,6 +4317,9 @@ cron.schedule('0 */12 * * *', async () => {
   await runPromoBillingCron();
 });
 
+// Run billing once shortly after startup so history is never stale on fresh deploys
+setTimeout(() => runPromoBillingCron(), 15_000);
+
 // ═══════════════════════════════════════════════════════════════════════════════
 //  CRYPTO TRANSACTION SYNC - PRIMARY CRON JOB
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -5849,7 +5859,7 @@ async function getCustomerDetails(customerId) {
   }
 }
 
-async function safeInsertWalletTransaction(tx) {
+async function safeInsertWalletTransaction(tx, db = knex) {
   const fallbackTypes = {
     credit_purchase: 'purchase',
     contribution_refund: 'bonus',
@@ -5860,7 +5870,7 @@ async function safeInsertWalletTransaction(tx) {
   };
 
   try {
-    await knex('walletTransactions').insert(tx);
+    await db('walletTransactions').insert(tx);
   } catch (error) {
     const isTypeError = error?.code === 'WARN_DATA_TRUNCATED'
       && /column 'type'/i.test(error?.sqlMessage || error?.message || '');
@@ -5869,7 +5879,7 @@ async function safeInsertWalletTransaction(tx) {
     if (!isTypeError || !fallbackType) throw error;
 
     console.warn(`⚠️ walletTransactions.type "${tx.type}" is not supported by the current DB schema. Falling back to "${fallbackType}".`);
-    await knex('walletTransactions').insert({ ...tx, type: fallbackType });
+    await db('walletTransactions').insert({ ...tx, type: fallbackType });
   }
 }
 

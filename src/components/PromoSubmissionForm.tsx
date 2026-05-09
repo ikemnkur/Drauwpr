@@ -17,6 +17,7 @@ export default function PromoSubmissionForm({ fixedType, title, subtitle }: Prop
   const [description, setDescription] = useState('');
   const [targetDropId, setTargetDropId] = useState('');
   const [mediaUrl, setMediaUrl] = useState('');
+  const [targetUrl, setTargetUrl] = useState('');
   const [ctaText, setCtaText] = useState('');
   const [budgetUsd, setBudgetUsd] = useState('');
   const [contactEmail, setContactEmail] = useState('');
@@ -28,7 +29,9 @@ export default function PromoSubmissionForm({ fixedType, title, subtitle }: Prop
   const [error, setError] = useState('');
 
   const needsUpload = useMemo(() => mediaType === 'image' || mediaType === 'audio', [mediaType]);
-  const canSubmit = campaignTitle.trim() && description.trim() && contactEmail.trim() && !submitting && (needsUpload ? !!assetFile || !!mediaUrl.trim() : !!mediaUrl.trim());
+  const canSubmit = campaignTitle.trim() && description.trim() && contactEmail.trim() && !submitting
+    && (fixedType === 'ad' ? !!targetUrl.trim() : true)
+    && (needsUpload ? !!assetFile || !!mediaUrl.trim() : !!mediaUrl.trim());
 
   const onSelectFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] || null;
@@ -41,6 +44,7 @@ export default function PromoSubmissionForm({ fixedType, title, subtitle }: Prop
     setDescription('');
     setTargetDropId('');
     setMediaUrl('');
+    setTargetUrl('');
     setCtaText('');
     setBudgetUsd('');
     setTags('');
@@ -64,6 +68,7 @@ export default function PromoSubmissionForm({ fixedType, title, subtitle }: Prop
       form.append('title', campaignTitle.trim());
       form.append('description', description.trim());
       form.append('targetDropId', targetDropId.trim());
+      form.append('targetUrl', targetUrl.trim());
       form.append('mediaUrl', mediaUrl.trim());
       form.append('ctaText', ctaText.trim());
       form.append('budgetUsd', budgetUsd.trim());
@@ -89,15 +94,7 @@ export default function PromoSubmissionForm({ fixedType, title, subtitle }: Prop
       </section>
 
       <form onSubmit={handleSubmit} className="bg-surface border border-surface-3 rounded-2xl p-6 space-y-5">
-        {submitted && (
-          <div className="flex items-start gap-3 rounded-xl border border-success/30 bg-success/10 px-4 py-3 text-success">
-            <CheckCircle2 className="w-5 h-5 mt-0.5 shrink-0" />
-            <div>
-              <p className="font-semibold">Submission received</p>
-              <p className="text-sm text-text">Your promo request is now pending admin review.</p>
-            </div>
-          </div>
-        )}
+        
 
         {error && (
           <div className="rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">{error}</div>
@@ -146,6 +143,22 @@ export default function PromoSubmissionForm({ fixedType, title, subtitle }: Prop
             className="w-full rounded-xl border border-surface-3 bg-bg px-3 py-2.5 text-text resize-y"
           />
         </div>
+
+        {fixedType === 'ad' && (
+          <div>
+            <label className="block text-sm text-text-muted mb-1">
+              Redirect URL <span className="text-danger">*</span>
+            </label>
+            <input
+              type="url"
+              value={targetUrl}
+              onChange={(e) => setTargetUrl(e.target.value)}
+              placeholder="https://yoursite.com/landing-page"
+              className="w-full rounded-xl border border-surface-3 bg-bg px-3 py-2.5 text-text"
+            />
+            <p className="text-xs text-text-muted mt-1">The URL users are sent to when they click your ad.</p>
+          </div>
+        )}
 
         {fixedType === 'drop_sponsorship' && (
           <div>
@@ -222,7 +235,18 @@ export default function PromoSubmissionForm({ fixedType, title, subtitle }: Prop
           <Send className="w-4 h-4" />
           {submitting ? 'Submitting…' : 'Submit for Review'}
         </button>
+
       </form>
+
+      {submitted && (
+          <div className="flex items-start gap-3 rounded-xl border border-success/30 bg-success/10 px-4 py-3 text-success">
+            <CheckCircle2 className="w-5 h-5 mt-0.5 shrink-0" />
+            <div>
+              <p className="font-semibold">Submission received</p>
+              <p className="text-sm text-text">Your promo request is now pending admin review.</p>
+            </div>
+          </div>
+        )}
     </div>
   );
 }

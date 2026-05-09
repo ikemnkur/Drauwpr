@@ -121,6 +121,7 @@ const WALLET_TX_ENUM_VALUES = [
   'creator_payout',
   'admin_adjustment',
   'bonus',
+  'stall_purchase',
 ];
 
 const WALLET_TX_TYPE_FALLBACKS = {
@@ -130,6 +131,7 @@ const WALLET_TX_TYPE_FALLBACKS = {
   download_payment: 'contribution',
   creator_earning: 'bonus',
   creator_payout: 'admin_adjustment',
+  stall_purchase: 'admin_adjustment',
 };
 
 async function ensureWalletTransactionTypeCompatibility(db) {
@@ -152,7 +154,8 @@ async function ensureWalletTransactionTypeCompatibility(db) {
         'creator_earning',
         'creator_payout',
         'admin_adjustment',
-        'bonus'
+        'bonus',
+        'stall_purchase'
       ) NOT NULL
     `);
 
@@ -758,6 +761,143 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
     }
   });
 
+  //     console.error('POST /api/drops/:id/contribute error:', err);
+  //     res.status(500).json({ error: 'Contribution failed' });
+  //   } finally {
+  //     conn.release();
+  //   }
+  // });
+
+  // ============================================================
+  //  STALL — Buy extra time on a drop's countdown clock
+  // ============================================================
+
+  /**
+   * GET /api/drops/:id/stall-price
+   * Returns the price in credits to stall the drop clock by N minutes.
+   * Query: ?minutes=<5-60>
+   * Formula: goalAmount * min(1, contributions/goalAmount) * (stallMinutes / totalMinutesLeft) + 50
+   * Minimum price is 50 credits.
+   */
+  server.get(PROXY + '/api/drops/:id/stall-price', async (req, res) => {
+    try {
+      const dropId = req.params.id;
+      const stallMinutes = Math.min(60, Math.max(5, parseInt(req.query.minutes || '5', 10)));
+
+      const [[drop]] = await pool.query(
+        'SELECT goalAmount, currentContributions, expiresAt, status FROM drops WHERE id = ?',
+        [dropId]
+      );
+      if (!drop) return res.status(404).json({ error: 'Drop not found' });
+      if (!['active', 'pending'].includes(drop.status)) {
+        return res.status(400).json({ error: 'This drop cannot be stalled' });
+      }
+
+      const totalMinutesLeft = Math.max(1, (new Date(drop.expiresAt).getTime() - Date.now()) / 60_000);
+      const fillRatio = Math.min(1, (drop.currentContributions || 0) / Math.max(1, drop.goalAmount));
+      const price = Math.ceil(drop.goalAmount * fillRatio * (stallMinutes / totalMinutesLeft) + 10 + stallMinutes * 2);
+
+      res.json({ price, stallMinutes, totalMinutesLeft: Math.floor(totalMinutesLeft) });
+    } catch (err) {
+      console.error('GET /api/drops/:id/stall-price error:', err);
+      res.status(500).json({ error: 'Failed to calculate stall price' });
+    }
+  });
+
+  /**
+   * POST /api/drops/:id/stall
+   * Purchase extra time on the drop's countdown.
+   * Body: { minutes: number }
+   */
+  server.post(PROXY + '/api/drops/:id/stall', authenticateToken, async (req, res) => {
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      const dropId = req.params.id;
+      const userId = req.user.id;
+      const stallMinutes = Math.min(60, Math.max(5, parseInt(req.body.minutes || '5', 10)));
+
+      const [[drop]] = await conn.query(
+        'SELECT id, goalAmount, currentContributions, expiresAt, scheduledDropTime, status FROM drops WHERE id = ? FOR UPDATE',
+        [dropId]
+      );
+      if (!drop) { await conn.rollback(); return res.status(404).json({ error: 'Drop not found' }); }
+      if (!['active', 'pending'].includes(drop.status)) {
+        await conn.rollback();
+        return res.status(400).json({ error: 'This drop cannot be stalled' });
+      }
+
+      // Recalculate price inside the transaction (use live data)
+      const totalMinutesLeft = Math.max(1, (new Date(drop.expiresAt).getTime() - Date.now()) / 60_000);
+      const fillRatio = Math.min(1, (drop.currentContributions || 0) / Math.max(1, drop.goalAmount));
+      // const price = Math.ceil(drop.goalAmount * fillRatio * (stallMinutes / totalMinutesLeft) + 50);
+      const price = Math.ceil(drop.goalAmount * fillRatio * (stallMinutes / totalMinutesLeft) + 10 + stallMinutes * 2);
+
+      // Deduct credits
+      const [[user]] = await conn.query(
+        'SELECT id, credits FROM userData WHERE id = ? FOR UPDATE',
+        [userId]
+      );
+      if (!user || user.credits < price) {
+        await conn.rollback();
+        return res.status(400).json({ error: 'Insufficient credits' });
+      }
+
+      const newBalance = user.credits - price;
+      await conn.query('UPDATE userData SET credits = ? WHERE id = ?', [newBalance, userId]);
+
+      // Extend both expiresAt and scheduledDropTime so the analog clock reflects the extra time
+      const stallMs = stallMinutes * 60_000;
+      const expiresAtBefore = drop.expiresAt;
+      const newExpiresAt = new Date(new Date(drop.expiresAt).getTime() + stallMs);
+      const newScheduledDropTime = new Date(new Date(drop.scheduledDropTime).getTime() + stallMs);
+      await conn.query(
+        'UPDATE drops SET expiresAt = ?, scheduledDropTime = ? WHERE id = ?',
+        [newExpiresAt, newScheduledDropTime, dropId]
+      );
+
+      console.log(`Drop ${dropId} stalled by ${stallMinutes} min. expiresAt: ${expiresAtBefore} → ${newExpiresAt}, scheduledDropTime → ${newScheduledDropTime}`);
+
+      // Log wallet transaction
+      const txId = uuidv4();
+      await insertWalletTransaction(conn, {
+        id: txId,
+        userId,
+        type: 'stall_purchase',
+        amount: -price,
+        balanceAfter: newBalance,
+        relatedDropId: dropId,
+        description: `Stalled clock on "${drop.title || dropId}" by ${stallMinutes} min`,
+      });
+
+      // Log stall action
+      const stallId = uuidv4();
+      await conn.query(
+        `INSERT INTO stallActions (id, dropId, userId, stallMinutes, creditCost, balanceAfter, expiresAtBefore, expiresAtAfter)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [stallId, dropId, userId, stallMinutes, price, newBalance, expiresAtBefore, newExpiresAt]
+      );
+
+      await conn.commit();
+
+      res.json({
+        success: true,
+        stallMinutes,
+        creditCost: price,
+        newBalance,
+        expiresAt: newExpiresAt.toISOString(),
+        scheduledDropTime: newScheduledDropTime.toISOString(),
+      });
+    } catch (err) {
+      await conn.rollback();
+      console.error('POST /api/drops/:id/stall error:', err);
+      res.status(500).json({ error: 'Stall purchase failed' });
+    } finally {
+      conn.release();
+    }
+  });
+
   /**
    * GET /api/drops/:id/contributors
    * Top contributors for a drop.
@@ -1278,8 +1418,29 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
   // ============================================================
 
   /**
+   * GET /api/users/:id/am-i-following
+   * Returns { following: true/false } for the authenticated user.
+   */
+  server.get(PROXY + '/api/users/:id/am-i-following', authenticateToken, async (req, res) => {
+    try {
+      const followerId = req.user.id;
+      const followeeId = req.params.id;
+      if (followerId === followeeId) return res.json({ following: false });
+
+      const [[existing]] = await pool.query(
+        'SELECT id FROM followers WHERE followerId = ? AND followeeId = ?',
+        [followerId, followeeId]
+      );
+      res.json({ following: !!existing });
+    } catch (err) {
+      console.error('GET /api/users/:id/am-i-following error:', err);
+      res.status(500).json({ error: 'Failed to check follow status' });
+    }
+  });
+
+  /**
    * POST /api/users/:id/follow
-   * Toggle follow. Returns { following: true/false }.
+   * Toggle follow. Returns { following: true/false, followerCount: number }.
    */
   server.post(PROXY + '/api/users/:id/follow', authenticateToken, async (req, res) => {
     try {
@@ -1294,14 +1455,18 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
 
       if (existing) {
         await pool.query('DELETE FROM followers WHERE id = ?', [existing.id]);
-        res.json({ following: false });
       } else {
         await pool.query(
           'INSERT INTO followers (followerId, followeeId) VALUES (?, ?)',
           [followerId, followeeId]
         );
-        res.json({ following: true });
       }
+
+      const [[countRow]] = await pool.query(
+        'SELECT COUNT(*) AS followerCount FROM followers WHERE followeeId = ?',
+        [followeeId]
+      );
+      res.json({ following: !existing, followerCount: Number(countRow?.followerCount ?? 0) });
     } catch (err) {
       console.error('POST /api/users/:id/follow error:', err);
       res.status(500).json({ error: 'Failed to toggle follow' });
@@ -2147,7 +2312,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
          FROM walletTransactions wt
          WHERE wt.userId = ?
            AND wt.amount < 0
-           AND wt.description LIKE 'Promo charge:%'
+           AND (wt.type = 'promo_charge' OR wt.description LIKE 'Promo charge%')
          ORDER BY wt.created_at DESC
          LIMIT 200`,
         [req.user.id]

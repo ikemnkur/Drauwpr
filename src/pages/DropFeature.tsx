@@ -9,8 +9,9 @@ import BurnRateGauge from '../components/BurnRateGauge';
 import GoalProgress from '../components/GoalProgress';
 import ContributorList from '../components/ContributorList';
 import ContributeForm from '../components/ContributeForm';
+import StallModal from '../components/StallModal';
 import { estimateRealSecondsRemaining } from '../engine/burnRate';
-import { Tag, HardDrive, ChevronDown, ChevronUp, Film, Image } from 'lucide-react';
+import { Tag, HardDrive, ChevronDown, ChevronUp, Film, Image, Timer } from 'lucide-react';
 import ExpirationGauge from '../components/ExpirationGauge';
 
 interface ServerContributor {
@@ -49,6 +50,9 @@ export default function DropFeature() {
 
   const [showBanner, setShowBanner] = useState(true);
   const [showTrailer, setShowTrailer] = useState(true);
+  const [showStallModal, setShowStallModal] = useState(false);
+  const [stallExpiresAt, setStallExpiresAt] = useState<number | null>(null);
+  const [stallScheduledDropTime, setStallScheduledDropTime] = useState<number | null>(null);
 
   const localDrop = drops.find((d) => d.id === id);
   const drop = localDrop ?? fetchedDrop;
@@ -183,14 +187,17 @@ export default function DropFeature() {
     );
   }
 
-  const clockSecondsFromSchedule = Math.max(0, (drop.scheduledDropTime - Date.now()) / 1000);
+  const effectiveScheduledDropTime = stallScheduledDropTime ?? drop.scheduledDropTime;
+  const clockSecondsFromSchedule = Math.max(0, (effectiveScheduledDropTime - Date.now()) / 1000);
+  const effectiveExpiresAt = stallExpiresAt ?? drop.expiresAt;
   const estimatedReal = estimateRealSecondsRemaining(
     clockSecondsFromSchedule,
     drop.burnRate,
     Date.now(),
     drop.createdAt,
-    drop.expiresAt,
+    effectiveExpiresAt,
   );
+  const totalMinutesLeft = Math.max(0, (effectiveExpiresAt - Date.now()) / 60_000);
   const goalMet = drop.currentContributions >= drop.goalAmount;
 
   const uniqueContributorCount = contributors.length > 0 ? contributors.length : drop.contributorCount;
@@ -313,8 +320,18 @@ export default function DropFeature() {
           {/* Clock */}
           <div className="bg-surface-2 rounded-2xl p-4 sm:p-6 flex flex-col sm:flex-row items-center justify-center gap-4 sm:gap-6">
             {/* Clock — shrunk on mobile */}
-            <div className="flex justify-center">
+            <div className="flex flex-col items-center gap-3">
               <AnalogClock remainingSeconds={estimatedReal} burnRate={drop.burnRate} size={180} />
+              {/* Stall button — only for active/pending drops */}
+              {(drop.status === 'active' || drop.status === 'pending') && (
+                <button
+                  onClick={() => setShowStallModal(true)}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-sm font-semibold hover:bg-yellow-500/20 hover:border-yellow-500/60 transition"
+                >
+                  <Timer className="w-4 h-4" />
+                  Stall Clock
+                </button>
+              )}
             </div>
 
 
@@ -490,6 +507,21 @@ export default function DropFeature() {
             
         </div>
       </div>
+
+      {/* Stall Modal */}
+      {showStallModal && (
+        <StallModal
+          dropId={drop.id}
+          dropTitle={drop.title}
+          totalMinutesLeft={totalMinutesLeft}
+          onClose={() => setShowStallModal(false)}
+          onStalled={(newExpiresAt, _creditsSpent, _newBalance, newScheduledDropTime) => {
+            setStallExpiresAt(new Date(newExpiresAt).getTime());
+            setStallScheduledDropTime(new Date(newScheduledDropTime).getTime());
+            refreshDrop();
+          }}
+        />
+      )}
     </div>
   );
 }
