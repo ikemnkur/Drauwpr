@@ -22,7 +22,6 @@ interface PriceResponse {
 type Phase = 'pick' | 'confirm' | 'success' | 'error';
 
 export default function StallModal({ dropId, dropTitle, totalMinutesLeft, onClose, onStalled }: Props) {
-  const [selected, setSelected] = useState<StallOption>(5);
   const [sliderVal, setSliderVal] = useState(5);
   const [priceMap, setPriceMap] = useState<Partial<Record<number, number>>>({});
   const [loadingPrices, setLoadingPrices] = useState(true);
@@ -162,7 +161,7 @@ export default function StallModal({ dropId, dropTitle, totalMinutesLeft, onClos
                   {STALL_OPTIONS.map((m) => (
                     <button
                       key={m}
-                      onClick={() => { setSelected(m); setSliderVal(m); }}
+                      onClick={() => { setSliderVal(m); }}
                       className={`rounded-xl border py-2.5 text-sm font-semibold transition flex flex-col items-center gap-0.5 ${
                         minutes === m
                           ? 'border-brand bg-brand/10 text-brand'
@@ -192,7 +191,7 @@ export default function StallModal({ dropId, dropTitle, totalMinutesLeft, onClos
                   max={60}
                   step={1}
                   value={sliderVal}
-                  onChange={(e) => { setSliderVal(+e.target.value); setSelected(+e.target.value as StallOption); }}
+                  onChange={(e) => { setSliderVal(+e.target.value); }}
                   className="w-full accent-brand h-2 rounded-full"
                 />
                 <div className="flex justify-between text-[10px] text-text-muted mt-0.5">
