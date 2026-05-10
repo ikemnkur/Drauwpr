@@ -3194,135 +3194,141 @@ module.exports = function createAdminRouter(deps = {}) {
 
   router.get('/review/crypto', async (req, res) => {
     try {
-      const status = String(req.query.status || '');
-      let q = knex('CreditPurchases').select('*').whereIn('paymentMethod', ['btc', 'eth', 'ltc', 'sol']);
-      if (status) q = q.where('status', status);
-      const rows = await q.orderBy('created_at', 'desc').limit(100);
-      const all = await knex('CreditPurchases').select('status').whereIn('paymentMethod', ['btc', 'eth', 'ltc', 'sol']);
+      const filterChain  = String(req.query.chain  || '').toUpperCase();
+      const filterStatus = String(req.query.status || '');
+      const CHAINS = ['BTC', 'ETH', 'LTC', 'SOL'];
+      const TABLE_MAP = { BTC: 'BTC_TX', ETH: 'ETH_TX', LTC: 'LTC_TX', SOL: 'SOL_TX' };
 
+      // Pull all rows from each TX table, then left-join CreditPurchases by txHash in JS
+      const cpAll = await knex('CreditPurchases')
+        .whereIn('paymentMethod', ['btc', 'eth', 'ltc', 'sol'])
+        .select('txHash', 'username', 'userId', 'credits', 'amount', 'amountPaid', 'status');
+      const cpByHash = {};
+      for (const cp of cpAll) cpByHash[String(cp.txHash || '')] = cp;
+
+      const allRows = [];
+      for (const sym of CHAINS) {
+        if (filterChain && filterChain !== sym) continue;
+        const table = TABLE_MAP[sym];
+        try {
+          const txRows = await knex(table).select('*').orderBy('created_at', 'desc').limit(500);
+          for (const tx of txRows) {
+            const cp = cpByHash[String(tx.txHash || '')] || {};
+            const status = cp.status || 'no_purchase';
+            if (filterStatus && status !== filterStatus) continue;
+            allRows.push({
+              chain:       sym,
+              txHash:      tx.txHash   || null,
+              direction:   tx.direction || '—',
+              amountCrypto: tx.amount  ?? null,
+              amountUSD:   tx.amountUSD ?? (cp.amount != null ? cp.amount / 100 : null),
+              fromAddress: tx.fromAddress || null,
+              toAddress:   tx.toAddress   || null,
+              created_at:  tx.created_at  || null,
+              username:    cp.username || cp.userId || null,
+              credits:     cp.credits  ?? null,
+              status,
+            });
+          }
+        } catch (chainErr) {
+          console.warn(`admin /review/crypto: ${sym} query failed:`, chainErr.message);
+        }
+      }
+
+      // Sort newest first
+      allRows.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      const rows = allRows.slice(0, 200);
+
+      // Counts across unfiltered allRows
       const counts = {
-        total: all.length,
-        pending: all.filter((r) => String(r.status || '') === 'processing').length,
-        completed: all.filter((r) => String(r.status || '') === 'completed').length,
-        failed: all.filter((r) => ['failed', 'refunded'].includes(String(r.status || ''))).length,
+        total:     allRows.length,
+        pending:   allRows.filter(r => r.status === 'processing').length,
+        completed: allRows.filter(r => r.status === 'completed').length,
+        noPurchase: allRows.filter(r => r.status === 'no_purchase').length,
       };
 
-      const filterBtn = (label, value) => {
-        const active = value === status;
-        const query = value ? `?status=${encodeURIComponent(value)}` : '';
+      const explorerBase = { BTC: 'https://mempool.space/tx/', ETH: 'https://etherscan.io/tx/', LTC: 'https://blockchair.com/litecoin/transaction/', SOL: 'https://solscan.io/tx/' };
+
+      const filterBtn = (label, key, value) => {
+        const params = new URLSearchParams();
+        if (filterChain && key !== 'chain')  params.set('chain',  filterChain);
+        if (filterStatus && key !== 'status') params.set('status', filterStatus);
+        if (value) params.set(key, value);
+        const active = (key === 'chain' && filterChain === value) || (key === 'status' && filterStatus === value) || (!value && key === 'chain' && !filterChain) || (!value && key === 'status' && !filterStatus);
+        const query = params.toString() ? `?${params.toString()}` : '';
         return `<a href="{{BASE}}/review/crypto${query}" class="btn ${active ? 'btn-primary' : 'btn-outline'}" style="font-size:0.78em;padding:5px 10px;">${escapeHtml(label)}</a>`;
       };
 
-      const bodyRows = rows.map((row) => `<tr>
-        <td style="font-family:monospace;font-size:0.78em;">${escapeHtml(row.id || '—')}</td>
-        <td>${escapeHtml(row.username || row.userId || '—')}</td>
-        <td>${escapeHtml(String(row.paymentMethod || '').toUpperCase())}</td>
-        <td>${statusChip(row.status)}</td>
-        <td>${Number(row.credits || 0).toLocaleString()}</td>
-        <td>$${Number(row.amountPaid || 0).toFixed(2)}</td>
-        <td style="font-family:monospace;font-size:0.78em;">${escapeHtml(String(row.txHash || '').slice(0, 20) || '—')}</td>
-        <td style="font-size:0.82em;color:var(--text2);">${fmtDate(row.created_at)}</td>
-      </tr>`).join('');
+      const chainColor = { BTC: '#f7931a', ETH: '#627eea', LTC: '#b8b8b8', SOL: '#9945ff' };
+
+      const bodyRows = rows.map((row) => {
+        const explorer = explorerBase[row.chain] && row.txHash ? `${explorerBase[row.chain]}${escapeHtml(row.txHash)}` : null;
+        const hashCell = row.txHash
+          ? (explorer ? `<a href="${explorer}" target="_blank" rel="noopener noreferrer" style="font-family:monospace;font-size:0.76em;color:var(--accent);">${escapeHtml(String(row.txHash).slice(0, 18))}…</a>`
+                      : `<span style="font-family:monospace;font-size:0.76em;">${escapeHtml(String(row.txHash).slice(0, 18))}…</span>`)
+          : '—';
+        return `<tr>
+          <td><span style="font-weight:700;color:${chainColor[row.chain] || 'inherit'};">${escapeHtml(row.chain)}</span></td>
+          <td>${hashCell}</td>
+          <td style="font-size:0.82em;color:${row.direction === 'inbound' ? 'var(--green)' : 'var(--red)'};">${escapeHtml(row.direction)}</td>
+          <td style="font-family:monospace;font-size:0.85em;">${row.amountCrypto != null ? Number(row.amountCrypto).toFixed(6) : '—'}</td>
+          <td style="font-family:monospace;">$${row.amountUSD != null ? Number(row.amountUSD).toFixed(2) : '—'}</td>
+          <td>${escapeHtml(row.username || '—')}</td>
+          <td style="font-family:monospace;">${row.credits != null ? Number(row.credits).toLocaleString() : '—'}</td>
+          <td>${statusChip(row.status === 'no_purchase' ? 'no_purchase' : row.status)}</td>
+          <td style="font-size:0.82em;color:var(--text2);">${fmtDate(row.created_at)}</td>
+        </tr>`;
+      }).join('');
 
       const body = `
-        <h1 class="page-title">🪙 Crypto Purchases Reference</h1>
-        <p style="color:var(--text2);margin-bottom:20px;">View crypto purchases from CreditPurchases table. For payment approval/review, see the <a href="{{BASE}}/review/purchases" style="color:var(--accent);">Purchases</a> page.</p>
+        <h1 class="page-title">🪙 Crypto Blockchain Transactions</h1>
+        <p style="color:var(--text2);margin-bottom:20px;">Raw data from BTC_TX, ETH_TX, LTC_TX, SOL_TX tables, enriched with purchase records where available. For payment approval, see the <a href="{{BASE}}/review/purchases" style="color:var(--accent);">Purchases</a> page.</p>
 
         <div class="grid-4">
-          <div class="card"><h3>Total Requests</h3><div class="big-value">${counts.total}</div><div class="sub-label">BTC, ETH, LTC, SOL combined</div></div>
+          <div class="card"><h3>Total TX</h3><div class="big-value">${counts.total}</div><div class="sub-label">Across all chains</div></div>
           <div class="card"><h3>Pending</h3><div class="big-value">${counts.pending}</div><div class="sub-label">Awaiting approval</div></div>
-          <div class="card"><h3>Completed</h3><div class="big-value">${counts.completed}</div><div class="sub-label">Credits already applied</div></div>
-          <div class="card"><h3>Failed</h3><div class="big-value">${counts.failed}</div><div class="sub-label">Rejected or refunded</div></div>
+          <div class="card"><h3>Completed</h3><div class="big-value">${counts.completed}</div><div class="sub-label">Credits applied</div></div>
+          <div class="card"><h3>Unmatched</h3><div class="big-value">${counts.noPurchase}</div><div class="sub-label">No purchase record</div></div>
         </div>
 
         <div class="card">
           <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;">
-            <h3 style="margin-bottom:0;">Combined Crypto Queue</h3>
-            <div style="display:flex;gap:6px;flex-wrap:wrap;">
-              ${filterBtn('All', '')}
-              ${filterBtn('Pending', 'processing')}
-              ${filterBtn('Completed', 'completed')}
-              ${filterBtn('Failed', 'failed')}
-            </div>
+            <h3 style="margin-bottom:0;">Blockchain TX Ledger</h3>
           </div>
-          <div style="display:flex;gap:12px;margin-top:12px;flex-wrap:wrap;">
-            <input type="text" id="cryptoSearch" placeholder="Search by user, ID, or tx hash..." style="flex:1;min-width:250px;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:0.9em;" oninput="filterCryptoTable()">
-            <select id="cryptoSort" style="padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:0.9em;" onchange="sortCryptoTable()">
-              <option value="date-desc">Date (Newest First)</option>
-              <option value="date-asc">Date (Oldest First)</option>
-              <option value="amount-desc">Amount (High to Low)</option>
-              <option value="amount-asc">Amount (Low to High)</option>
-              <option value="credits-desc">Credits (High to Low)</option>
-              <option value="credits-asc">Credits (Low to High)</option>
-              <option value="user-asc">User (A-Z)</option>
-            </select>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+            <span style="font-size:0.82em;color:var(--text2);align-self:center;">Chain:</span>
+            ${filterBtn('All', 'chain', '')}
+            ${filterBtn('BTC', 'chain', 'BTC')}
+            ${filterBtn('ETH', 'chain', 'ETH')}
+            ${filterBtn('LTC', 'chain', 'LTC')}
+            ${filterBtn('SOL', 'chain', 'SOL')}
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+            <span style="font-size:0.82em;color:var(--text2);align-self:center;">Status:</span>
+            ${filterBtn('All', 'status', '')}
+            ${filterBtn('Pending', 'status', 'processing')}
+            ${filterBtn('Completed', 'status', 'completed')}
+            ${filterBtn('No Purchase', 'status', 'no_purchase')}
+          </div>
+          <div style="margin-top:12px;">
+            <input type="text" id="cryptoSearch" placeholder="Search by user, tx hash, address..." style="width:100%;max-width:400px;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:0.9em;" oninput="filterCryptoTable()">
           </div>
           <div style="overflow:auto;margin-top:12px;">
             <table id="cryptoTable">
-              <thead><tr><th>ID</th><th>User</th><th>Chain</th><th>Status</th><th>Credits</th><th>USD</th><th>Tx Hash</th><th>Created</th></tr></thead>
-              <tbody>${rows.length ? bodyRows : '<tr><td colspan="8" style="text-align:center;color:var(--text2);padding:24px;">No crypto purchases found</td></tr>'}</tbody>
+              <thead><tr><th>Chain</th><th>Tx Hash</th><th>Direction</th><th>Amount (crypto)</th><th>Amount USD</th><th>User</th><th>Credits</th><th>Status</th><th>Date</th></tr></thead>
+              <tbody>${rows.length ? bodyRows : '<tr><td colspan="9" style="text-align:center;color:var(--text2);padding:24px;">No transactions found</td></tr>'}</tbody>
             </table>
           </div>
         </div>
 
         <script>
           function filterCryptoTable() {
-            const searchTerm = document.getElementById('cryptoSearch').value.toLowerCase();
-            const table = document.getElementById('cryptoTable');
-            const rows = table.getElementsByTagName('tbody')[0].getElementsByTagName('tr');
-            let visibleCount = 0;
-            
-            for (let row of rows) {
-              if (row.cells.length === 1) continue; // Skip "no results" row
-              const text = row.textContent.toLowerCase();
-              if (text.includes(searchTerm)) {
-                row.style.display = '';
-                visibleCount++;
-              } else {
-                row.style.display = 'none';
-              }
+            const term = document.getElementById('cryptoSearch').value.toLowerCase();
+            const tbody = document.getElementById('cryptoTable').getElementsByTagName('tbody')[0];
+            for (const row of tbody.getElementsByTagName('tr')) {
+              if (row.cells.length === 1) continue;
+              row.style.display = row.textContent.toLowerCase().includes(term) ? '' : 'none';
             }
-          }
-
-          function sortCryptoTable() {
-            const sortValue = document.getElementById('cryptoSort').value;
-            const table = document.getElementById('cryptoTable');
-            const tbody = table.getElementsByTagName('tbody')[0];
-            const rows = Array.from(tbody.getElementsByTagName('tr'));
-            
-            if (rows.length <= 1 || rows[0].cells.length === 1) return; // No data to sort
-            
-            rows.sort((a, b) => {
-              const [field, direction] = sortValue.split('-');
-              let aVal, bVal;
-              
-              switch(field) {
-                case 'date':
-                  aVal = a.cells[7].textContent;
-                  bVal = b.cells[7].textContent;
-                  break;
-                case 'amount':
-                  aVal = parseFloat(a.cells[5].textContent.replace(/[^0-9.]/g, ''));
-                  bVal = parseFloat(b.cells[5].textContent.replace(/[^0-9.]/g, ''));
-                  break;
-                case 'credits':
-                  aVal = parseFloat(a.cells[4].textContent.replace(/[^0-9]/g, ''));
-                  bVal = parseFloat(b.cells[4].textContent.replace(/[^0-9]/g, ''));
-                  break;
-                case 'user':
-                  aVal = a.cells[1].textContent.toLowerCase();
-                  bVal = b.cells[1].textContent.toLowerCase();
-                  break;
-              }
-              
-              if (direction === 'asc') {
-                return aVal > bVal ? 1 : -1;
-              } else {
-                return aVal < bVal ? 1 : -1;
-              }
-            });
-            
-            rows.forEach(row => tbody.appendChild(row));
           }
         </script>`;
 

@@ -12,6 +12,7 @@ import {
   ArrowBigDownDash,
   Bell,
   X,
+  Music,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../lib/api';
@@ -38,6 +39,31 @@ interface SponsoredPromo {
   ctaText: string | null;
   mediaUrl: string | null;
   assetPath: string | null;
+  mediaType: string | null;
+}
+
+type MediaKind = 'image' | 'video' | 'audio';
+
+function detectMediaKind(assetPath: string | null, mediaUrl: string | null, mediaType: string | null | undefined): MediaKind {
+  if (mediaType) {
+    if (/^video/i.test(mediaType)) return 'video';
+    if (/^audio/i.test(mediaType)) return 'audio';
+    if (/^image/i.test(mediaType)) return 'image';
+  }
+  const url = (assetPath || mediaUrl || '').toLowerCase().split('?')[0];
+  if (!url) return 'image';
+  if (/youtube\.com|youtu\.be|vimeo\.com/.test(url)) return 'video';
+  if (/\.(mp4|webm|mov|avi|mkv)$/.test(url)) return 'video';
+  if (/\.(mp3|wav|ogg|aac|flac|m4a)$/.test(url)) return 'audio';
+  return 'image';
+}
+
+function toEmbedUrl(url: string): string | null {
+  const ytMatch = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&?/]+)/);
+  if (ytMatch) return `https://www.youtube.com/embed/${ytMatch[1]}`;
+  const vimeoMatch = url.match(/vimeo\.com\/(\d+)/);
+  if (vimeoMatch) return `https://player.vimeo.com/video/${vimeoMatch[1]}`;
+  return null;
 }
 
 interface SponsoredResponse {
@@ -245,9 +271,157 @@ export default function Layout() {
     void api.post(`/api/promotions/${activeAd.id}/reaction`, { reaction }).catch(() => {});
   }
 
+  function openAdInNewTab() {
+    if (!activeAd || !activeAd.target_url) return;
+    void api.post(`/api/promotions/${activeAd.id}/click`, {}).catch(() => {});
+    window.open(activeAd.target_url, '_blank', 'noopener,noreferrer');
+    setShowAdModal(false);
+  }
+
   return (
     <div className="min-h-screen flex flex-col">
-      {showAdModal && activeAd && (
+      {showAdModal && activeAd && activeAd.submissionType === 'ad' && (
+        /* ── Advertisement modal ── */
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <button
+            className="absolute inset-0 bg-black/65"
+            onClick={() => adCloseCountdown === 0 && setShowAdModal(false)}
+            aria-label="Close advertisement"
+          />
+          <div className="relative w-full max-w-xl bg-surface border border-surface-3 rounded-2xl overflow-hidden shadow-2xl">
+            {/* Close button */}
+            <button
+              onClick={() => adCloseCountdown === 0 && setShowAdModal(false)}
+              disabled={adCloseCountdown > 0}
+              className={`absolute top-3 right-3 w-8 h-8 flex items-center justify-center rounded-full text-white transition z-10 ${
+                adCloseCountdown > 0
+                  ? 'bg-black/40 cursor-not-allowed'
+                  : 'bg-black/50 hover:bg-black/70 cursor-pointer'
+              }`}
+              aria-label={adCloseCountdown > 0 ? `Close in ${adCloseCountdown}s` : 'Close'}
+            >
+              {adCloseCountdown > 0 ? (
+                <span className="text-xs font-bold">{adCloseCountdown}</span>
+              ) : (
+                <X className="w-4 h-4" />
+              )}
+            </button>
+            {/* Media banner — image, video, or audio depending on asset type */}
+            {(() => {
+              const resolvedUrl = resolveAssetUrl(activeAd.assetPath, activeAd.mediaUrl);
+              const kind = detectMediaKind(activeAd.assetPath, activeAd.mediaUrl, activeAd.mediaType);
+
+              if (kind === 'video') {
+                const embedSrc = toEmbedUrl(resolvedUrl);
+                return (
+                  <div className="aspect-[16/7] bg-black overflow-hidden">
+                    {embedSrc ? (
+                      <iframe
+                        src={embedSrc}
+                        className="w-full h-full"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                        allowFullScreen
+                        title={activeAd.title}
+                      />
+                    ) : (
+                      <video
+                        src={resolvedUrl}
+                        className="w-full h-full object-cover"
+                        controls
+                        preload="metadata"
+                      />
+                    )}
+                  </div>
+                );
+              }
+
+              if (kind === 'audio') {
+                return (
+                  <div className="bg-surface-2 px-5 py-8 flex flex-col items-center gap-4">
+                    <div className="w-14 h-14 rounded-full bg-brand/15 flex items-center justify-center">
+                      <Music className="w-7 h-7 text-brand" />
+                    </div>
+                    <p className="text-sm font-semibold text-text text-center line-clamp-1">{activeAd.title}</p>
+                    <audio
+                      src={resolvedUrl}
+                      controls
+                      preload="metadata"
+                      className="w-full max-w-xs"
+                    />
+                  </div>
+                );
+              }
+
+              // Default: image (clickable → opens advertiser URL in new tab)
+              return (
+                <button
+                  onClick={openAdInNewTab}
+                  className="block w-full aspect-[16/7] bg-surface-2 overflow-hidden cursor-pointer group"
+                  aria-label={`Visit ${activeAd.title}`}
+                >
+                  <img
+                    src={resolvedUrl}
+                    alt={activeAd.title}
+                    className="w-full h-full object-cover group-hover:opacity-90 transition-opacity"
+                  />
+                </button>
+              );
+            })()}
+            <div className="p-5">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-[10px] uppercase tracking-wider font-bold text-text-muted/60 border border-surface-3 rounded px-1.5 py-0.5">
+                  Ad
+                </span>
+                <p className="text-[10px] text-text-muted/50 truncate">{activeAd.username || 'Advertiser'}</p>
+              </div>
+              <h3 className="text-lg font-bold text-text">{activeAd.title}</h3>
+              <p className="text-xs text-text-muted mt-1 line-clamp-2">{activeAd.description || ''}</p>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  onClick={() => reactToAd('like')}
+                  className="px-2.5 py-1 text-xs rounded-lg bg-surface-2 text-text-muted hover:text-text"
+                >
+                  Like
+                </button>
+                <button
+                  onClick={() => reactToAd('neutral')}
+                  className="px-2.5 py-1 text-xs rounded-lg bg-surface-2 text-text-muted hover:text-text"
+                >
+                  Neutral
+                </button>
+                <button
+                  onClick={() => reactToAd('dislike')}
+                  className="px-2.5 py-1 text-xs rounded-lg bg-surface-2 text-text-muted hover:text-text"
+                >
+                  Dislike
+                </button>
+              </div>
+              <div className="mt-4 flex gap-2">
+                <button
+                  onClick={openAdInNewTab}
+                  className="px-4 py-2 text-sm font-semibold rounded-lg bg-brand text-white hover:bg-brand-dark transition"
+                >
+                  {activeAd.ctaText || 'Visit Site'}
+                </button>
+                <button
+                  onClick={() => adCloseCountdown === 0 && setShowAdModal(false)}
+                  disabled={adCloseCountdown > 0}
+                  className={`px-4 py-2 text-sm font-semibold rounded-lg transition ${
+                    adCloseCountdown > 0
+                      ? 'bg-surface-2 text-text-muted/50 cursor-not-allowed'
+                      : 'bg-surface-2 text-text-muted hover:text-text cursor-pointer'
+                  }`}
+                >
+                  {adCloseCountdown > 0 ? `Close (${adCloseCountdown}s)` : 'Close'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showAdModal && activeAd && activeAd.submissionType === 'drop_sponsorship' && (
+        /* ── Sponsored drop modal ── */
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
           {/* Backdrop — only dismissible after countdown */}
           <button

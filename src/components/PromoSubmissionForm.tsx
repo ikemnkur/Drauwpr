@@ -173,8 +173,9 @@ export default function PromoSubmissionForm({ fixedType, title, subtitle }: Prop
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {(mediaType === 'video_link' || mediaType === 'audio') && (
           <div>
-            <label className="block text-sm text-text-muted mb-1">Media Link</label>
+            <label className="block text-sm text-text-muted mb-1">Video Link</label>
             <input
               value={mediaUrl}
               onChange={(e) => setMediaUrl(e.target.value)}
@@ -182,6 +183,7 @@ export default function PromoSubmissionForm({ fixedType, title, subtitle }: Prop
               className="w-full rounded-xl border border-surface-3 bg-bg px-3 py-2.5 text-text"
             />
           </div>
+          )}
           <div>
             <label className="block text-sm text-text-muted mb-1">CTA / Promo Text</label>
             <input
@@ -222,7 +224,7 @@ export default function PromoSubmissionForm({ fixedType, title, subtitle }: Prop
             <input type="file" className="hidden" accept={mediaType === 'image' ? 'image/*' : mediaType === 'audio' ? 'audio/*' : '*'} onChange={onSelectFile} />
             <div>
               <p className="text-text font-medium">Choose a file</p>
-              <p className="text-sm text-text-muted mt-1">{assetName || 'Image or audio creative'}</p>
+              <p className="text-sm text-text-muted mt-1">{assetName || 'Image or Audio '}</p>
             </div>
           </label>
         </div>

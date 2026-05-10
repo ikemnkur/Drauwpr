@@ -416,21 +416,25 @@ const currencyIdMap = {
 
 // Fetch crypto rate from CoinGecko API
 const fetchCryptoRate = async (cryptoCurrency) => {
+  const fallbackRates = { BTC: 45000, ETH: 3000, LTC: 100, SOL: 150, XMR: 150, XRP: 0.5 };
   try {
     const coinId = currencyIdMap[cryptoCurrency];
     if (!coinId) {
       console.error('Currency not supported:', cryptoCurrency);
-      return 0;
+      return fallbackRates[cryptoCurrency] || 1;
     }
 
     const response = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${coinId}&vs_currencies=usd`);
     const data = await response.json();
-    return data[coinId]?.usd || 0;
+    const rate = data[coinId]?.usd;
+    if (!rate || rate <= 0) {
+      console.warn(`fetchCryptoRate: no valid rate for ${cryptoCurrency}, using fallback`);
+      return fallbackRates[cryptoCurrency] || 1;
+    }
+    return rate;
   } catch (error) {
     console.error('Error fetching crypto rate:', error);
-    // Fallback rates for demo
-    const fallbackRates = { BTC: 45000, ETH: 3000, LTC: 100, SOL: 50, XMR: 150, XRP: 0.5 };
-    return fallbackRates[cryptoCurrency] || 0;
+    return fallbackRates[cryptoCurrency] || 1;
   }
 };
 
@@ -539,11 +543,11 @@ server.post(PROXY + '/api/auth/login', async (req, res) => {
         credits: user.credits
       }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' });
 
-      // conver random amounts to crypto amounts based on current rates 
-      const btcRate = await fetchCryptoRate('BTC');
-      const ethRate = await fetchCryptoRate('ETH');
-      const ltcRate = await fetchCryptoRate('LTC');
-      const solRate = await fetchCryptoRate('SOL');
+      // convert random amounts to crypto amounts based on current rates
+      const btcRate = await fetchCryptoRate('BTC') || 45000;
+      const ethRate = await fetchCryptoRate('ETH') || 3000;
+      const ltcRate = await fetchCryptoRate('LTC') || 100;
+      const solRate = await fetchCryptoRate('SOL') || 150;
       // const xmrRate = await fetchCryptoRate('XMR');
       // const xrpRate = await fetchCryptoRate('XRP');
       const amount1BTC = (user.amount1 / btcRate).toFixed(8);
@@ -789,11 +793,11 @@ server.post(PROXY + '/api/auth/register', async (req, res) => {
 
 
 
-    // conver random amounts to crypto amounts based on current rates 
-    const btcRate = await fetchCryptoRate('BTC');
-    const ethRate = await fetchCryptoRate('ETH');
-    const ltcRate = await fetchCryptoRate('LTC');
-    const solRate = await fetchCryptoRate('SOL');
+    // convert random amounts to crypto amounts based on current rates
+    const btcRate = await fetchCryptoRate('BTC') || 45000;
+    const ethRate = await fetchCryptoRate('ETH') || 3000;
+    const ltcRate = await fetchCryptoRate('LTC') || 100;
+    const solRate = await fetchCryptoRate('SOL') || 150;
     // const xmrRate = await fetchCryptoRate('XMR');
     // const xrpRate = await fetchCryptoRate('XRP');
     const amount1BTC = (amount1 / btcRate).toFixed(8);
@@ -2580,6 +2584,72 @@ server.get(PROXY + '/api/purchases/:username', async (req, res) => {
   }
 });
 
+// ─── Crypto purchase history (all 4 chains) for authenticated user ───────────
+server.get(PROXY + '/api/crypto-purchases/me', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const chains = ['BTC', 'ETH', 'LTC', 'SOL'];
+    const TABLE_MAP = { BTC: 'BTC_TX', ETH: 'ETH_TX', LTC: 'LTC_TX', SOL: 'SOL_TX' };
+
+    // Fetch each user's CreditPurchase records matching their txHashes in each chain table
+    const cpRows = await knex('CreditPurchases')
+      .where('userId', userId)
+      .whereIn('paymentMethod', ['btc', 'eth', 'ltc', 'sol'])
+      .select('txHash', 'paymentMethod', 'credits', 'amount', 'status', 'created_at');
+
+    if (cpRows.length === 0) return res.json({ purchases: [] });
+
+    // Group txHashes by chain
+    const hashByChain = { BTC: [], ETH: [], LTC: [], SOL: [] };
+    for (const cp of cpRows) {
+      const sym = cp.paymentMethod.toUpperCase();
+      if (hashByChain[sym]) hashByChain[sym].push(cp.txHash);
+    }
+
+    // Build a lookup from txHash → CreditPurchase row
+    const cpByHash = {};
+    for (const cp of cpRows) cpByHash[cp.txHash] = cp;
+
+    const results = [];
+
+    for (const sym of chains) {
+      const hashes = hashByChain[sym];
+      if (hashes.length === 0) continue;
+      const table = TABLE_MAP[sym];
+      try {
+        const txRows = await knex(table).whereIn('txHash', hashes).select('*');
+        for (const tx of txRows) {
+          const cp = cpByHash[tx.txHash] || {};
+          results.push({
+            chain: sym,
+            txHash: tx.txHash,
+            amountCrypto: tx.amount,
+            amountUSD: tx.amountUSD ?? (cp.amount != null ? cp.amount / 100 : null),
+            credits: cp.credits ?? null,
+            status: cp.status ?? 'unknown',
+            direction: tx.direction,
+            fromAddress: tx.fromAddress,
+            toAddress: tx.toAddress,
+            created_at: tx.created_at || cp.created_at,
+          });
+        }
+      } catch (chainErr) {
+        console.warn(`crypto-purchases/me: ${sym} query failed:`, chainErr.message);
+      }
+    }
+
+    // Sort newest first
+    results.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+    res.json({ purchases: results });
+  } catch (err) {
+    console.error('crypto-purchases/me error:', err);
+    res.status(500).json({ error: 'Failed to fetch crypto purchases' });
+  }
+});
+
 // Custom route for user redemptions
 server.get(PROXY + '/api/redemptions/:username', authenticateToken, async (req, res) => {
   try {
@@ -2944,6 +3014,28 @@ async function verifyTxOnChain(currency, txHash) {
   // ═══════════════════════════════════════════════════════════════
   //  STEP 3: Store fresh transactions in cache
   // ═══════════════════════════════════════════════════════════════
+  // Fetch live USD rate once for this batch, so we can log amountUSD
+  let liveUsdRate = null;
+  try {
+    const coinId = currencyIdMap[sym];
+    if (coinId) {
+      const cached = rateCache[coinId];
+      if (cached && Date.now() - cached.fetchedAt < RATE_CACHE_TTL_MS) {
+        liveUsdRate = cached.rate;
+      } else {
+        const rateResp = await fetch(
+          `https://api.coingecko.com/api/v3/simple/price?ids=${coinId}&vs_currencies=usd`,
+          { headers: { Accept: 'application/json' } }
+        );
+        const rateData = await rateResp.json();
+        liveUsdRate = rateData[coinId]?.usd ?? null;
+        if (liveUsdRate !== null) rateCache[coinId] = { rate: liveUsdRate, fetchedAt: Date.now() };
+      }
+    }
+  } catch (rateErr) {
+    console.warn(`⚠️ Could not fetch ${sym} rate for amountUSD:`, rateErr.message);
+  }
+
   try {
     for (const row of liveTxs) {
       const hash = row.hash || row.signature;
@@ -2953,12 +3045,17 @@ async function verifyTxOnChain(currency, txHash) {
         // Check if exists first
         const [existing] = await knex(table).where('txHash', hash).select('txHash').limit(1);
         if (existing) continue; // Skip if already in DB
+
+        const amountUSD = liveUsdRate && row.amount
+          ? Math.round(Number(row.amount) * liveUsdRate * 100) / 100
+          : null;
         
         // Insert new transaction
         await knex(table).insert({
           created_at: row.time,
           direction: row.direction,
           amount: row.amount,
+          amountUSD,
           fromAddress: row.from,
           toAddress: row.to,
           txHash: hash

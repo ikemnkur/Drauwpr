@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bitcoin, Copy, CheckCircle2, ArrowLeft, Upload, Loader2, AlertCircle, QrCode } from 'lucide-react';
+import { Bitcoin, Copy, CheckCircle2, ArrowLeft, Upload, Loader2, AlertCircle, QrCode, Clock, ExternalLink } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../lib/api';
@@ -66,6 +66,38 @@ export default function BuyCrypto() {
   const [screenshot, setScreenshot] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  // ─── Purchase history ─────────────────────────────────────────────────────
+  interface CryptoPurchase {
+    chain: string;
+    txHash: string;
+    amountCrypto: string | number;
+    amountUSD: number | null;
+    credits: number | null;
+    status: string;
+    direction: string;
+    fromAddress: string | null;
+    toAddress: string | null;
+    created_at: string;
+  }
+  const [history, setHistory] = useState<CryptoPurchase[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const fetchHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const data = await api.get<{ purchases: CryptoPurchase[] }>('/api/crypto-purchases/me');
+      setHistory(data.purchases ?? []);
+    } catch {
+      // Non-critical; silently ignore
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (user) fetchHistory();
+  }, [user, fetchHistory]);
 
   const currency = CURRENCIES[currencyIdx];
   const credits = creditsForDollars(amount);
@@ -138,12 +170,14 @@ export default function BuyCrypto() {
         });
         // Refresh balance so the navbar updates
         refreshUser?.();
+        fetchHistory();
       } else {
         // pending manual review (202)
         setSubmitResult({
           success: true,
           message: result.message || 'Your transaction has been submitted for manual review. Credits will be applied within 24 hours once confirmed.',
         });
+        fetchHistory();
       }
       setTxHash('');
       setScreenshot(null);
@@ -399,6 +433,110 @@ export default function BuyCrypto() {
           `Submit Order — ${credits.toLocaleString()} credits`
         )}
       </button>
+
+      {/* ─── Purchase History ─── */}
+      <div className="mt-8">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-base font-semibold text-text flex items-center gap-2">
+            <Clock className="w-4 h-4 text-text-muted" />
+            Purchase History
+          </h2>
+          <button onClick={fetchHistory} className="text-xs text-brand hover:underline">
+            Refresh
+          </button>
+        </div>
+
+        {historyLoading ? (
+          <div className="flex justify-center py-8">
+            <Loader2 className="w-5 h-5 animate-spin text-text-muted" />
+          </div>
+        ) : history.length === 0 ? (
+          <div className="bg-surface-2 rounded-2xl p-6 text-center text-sm text-text-muted">
+            No crypto purchases found.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {history.map((p, idx) => {
+              const explorerBase: Record<string, string> = {
+                BTC: 'https://mempool.space/tx/',
+                ETH: 'https://etherscan.io/tx/',
+                LTC: 'https://blockchair.com/litecoin/transaction/',
+                SOL: 'https://solscan.io/tx/',
+              };
+              const explorerUrl = p.txHash ? `${explorerBase[p.chain] ?? ''}${p.txHash}` : null;
+
+              const statusColor =
+                p.status === 'completed' ? 'text-green-400 bg-green-400/10'
+                : p.status === 'processing' ? 'text-yellow-400 bg-yellow-400/10'
+                : 'text-text-muted bg-surface-3';
+
+              const chainColor: Record<string, string> = {
+                BTC: 'text-orange-400',
+                ETH: 'text-blue-400',
+                LTC: 'text-gray-300',
+                SOL: 'text-purple-400',
+              };
+
+              return (
+                <div key={idx} className="bg-surface-2 rounded-xl p-4 flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <span className={`text-sm font-bold ${chainColor[p.chain] ?? 'text-text'}`}>
+                      {p.chain}
+                    </span>
+                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${statusColor}`}>
+                      {p.status}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-text-muted">
+                    <div>
+                      <span className="block text-[10px] uppercase tracking-wide opacity-60">Amount</span>
+                      <span className="font-mono text-text">
+                        {Number(p.amountCrypto).toFixed(6)} {p.chain}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] uppercase tracking-wide opacity-60">USD Value</span>
+                      <span className="font-mono text-text">
+                        {p.amountUSD != null ? `$${Number(p.amountUSD).toFixed(2)}` : '—'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] uppercase tracking-wide opacity-60">Credits</span>
+                      <span className="font-mono text-text">
+                        {p.credits != null ? p.credits.toLocaleString() : '—'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] uppercase tracking-wide opacity-60">Date</span>
+                      <span className="text-text">
+                        {p.created_at ? new Date(p.created_at).toLocaleDateString() : '—'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] font-mono text-text-muted truncate flex-1">
+                      {p.txHash ?? '—'}
+                    </span>
+                    {explorerUrl && (
+                      <a
+                        href={explorerUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="shrink-0 text-brand hover:text-brand/80 transition-colors"
+                        title="View on block explorer"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
