@@ -8,6 +8,9 @@ const { v4: uuidv4 } = require('uuid');
 // const axios = require('axios');
 const multer = require('multer');
 const jwt = require('jsonwebtoken');
+const { authenticator } = require('otplib');
+const QRCode = require('qrcode');
+const crypto = require('crypto');
 
 // const multer = require('multer');
 const axios = require('axios');
@@ -522,70 +525,23 @@ server.post(PROXY + '/api/auth/login', async (req, res) => {
     const isValidPassword = await bcrypt.compare(password, user.passwordHash);
 
     if (isValidPassword) {
-      const userData = { ...user };
-      delete userData.passwordHash; // Don't send password hash
-
-      // Update last login with proper MySQL datetime format
+      // Update last login
       const currentDateTime = new Date().toISOString().slice(0, 19).replace('T', ' ');
-
       await knex('userData')
         .where('email', email)
         .update({ loginStatus: true, lastLogin: currentDateTime });
 
-      // Generate a proper JWT-like token (in production, use actual JWT)
-      // const token = Buffer.from(`${user.id}_${Date.now()}_${Math.random()}`).toString('base64');
+      // Issue a short-lived temp token for the 2FA step
+      const tempToken = jwt.sign(
+        { id: user.id, email: user.email, stage: user.twoFactorEnabled ? 'pre_2fa' : 'pre_2fa_setup' },
+        process.env.JWT_SECRET,
+        { expiresIn: '10m' }
+      );
 
-      // const token = jwt.sign({ id: user.id, user_id: user.user_id, accountId: user.account_id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-      const token = jwt.sign({
-        id: user.id,
-        email: user.email,
-        username: user.username,
-        credits: user.credits
-      }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' });
-
-      // convert random amounts to crypto amounts based on current rates
-      const btcRate = await fetchCryptoRate('BTC') || 45000;
-      const ethRate = await fetchCryptoRate('ETH') || 3000;
-      const ltcRate = await fetchCryptoRate('LTC') || 100;
-      const solRate = await fetchCryptoRate('SOL') || 150;
-      // const xmrRate = await fetchCryptoRate('XMR');
-      // const xrpRate = await fetchCryptoRate('XRP');
-      const amount1BTC = (user.amount1 / btcRate).toFixed(8);
-      const amount2BTC = (user.amount2 / btcRate).toFixed(8);
-      const amount1ETH = (user.amount1 / ethRate).toFixed(8);
-      const amount2ETH = (user.amount2 / ethRate).toFixed(8);
-      const amount1LTC = (user.amount1 / ltcRate).toFixed(8);
-      const amount2LTC = (user.amount2 / ltcRate).toFixed(8);
-      const amount1SOL = (user.amount1 / solRate).toFixed(8);
-      const amount2SOL = (user.amount2 / solRate).toFixed(8);
-
-      res.json({
-        token,
-        tokenExpiry: new Date(Date.now() + 7200 * 1000),
-        user: { id: user.id, username: user.username, email: user.email, credits: user.credits },
-        accountType: user.accountType,
-        message: 'Login successful',
-        // verification: { status: user.verification, amount1: user.amount1, amount2: user.amount2 },
-        verification: {
-          verified: false,
-          amount1: user.amount1,
-          amount2: user.amount2,
-          cryptoAmounts: {
-            BTC: { amount1: amount1BTC, amount2: amount2BTC },
-            ETH: { amount1: amount1ETH, amount2: amount2ETH },
-            LTC: { amount1: amount1LTC, amount2: amount2LTC },
-            SOL: { amount1: amount1SOL, amount2: amount2SOL }
-          },
-          time: new Date().getTime(),
-        }
-      });
-
-      // res.json({
-      //   success: true,
-      //   user: userData,
-      //   token: token,
-      //   message: 'Login successful'
-      // });
+      if (!user.twoFactorEnabled) {
+        return res.json({ requires2FASetup: true, tempToken });
+      }
+      return res.json({ requiresTOTP: true, tempToken });
     } else {
       res.status(401).json({
         success: false,
@@ -924,43 +880,16 @@ server.post(PROXY + '/api/auth/register', async (req, res) => {
     const { sql, values } = buildInsert('userData', insertData);
     await knex.raw(sql, values);
 
-    // Generate token for automatic login
-    // TODO: implementation of JWT here
-    const token = jwt.sign({
-      id: newUser.id,
-      email: newUser.email,
-      username: newUser.username,
-      credits: newUser.credits
-    }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' });
-
-    // const token = Buffer.from(`${userId}_${Date.now()}_${Math.random()}`).toString('base64');
-
-    // Return user data without password hash
-    const userData = { ...newUser };
-    delete userData.passwordHash;
-
-    res.status(201).json({
-      success: true,
-      user: userData,
-      token: token,
-      verification: {
-        verified: false,
-        amount1: amount1,
-        amount2: amount2,
-        cryptoAmounts: {
-          BTC: { amount1: amount1BTC, amount2: amount2BTC },
-          ETH: { amount1: amount1ETH, amount2: amount2ETH },
-          LTC: { amount1: amount1LTC, amount2: amount2LTC },
-          SOL: { amount1: amount1SOL, amount2: amount2SOL }
-        },
-        time: new Date().getTime(),
-        // chain: null,
-        // address: null
-      },
-      message: 'Account created successfully'
-    });
-
     sendAccountVerificationEmail(newUser);
+
+    // Require 2FA setup before granting full access
+    const tempToken = jwt.sign(
+      { id: newUser.id, email: newUser.email, stage: 'pre_2fa_setup' },
+      process.env.JWT_SECRET,
+      { expiresIn: '10m' }
+    );
+
+    res.status(201).json({ requires2FASetup: true, tempToken, message: 'Account created. Please set up two-factor authentication.' });
 
 
   } catch (error) {
@@ -969,6 +898,203 @@ server.post(PROXY + '/api/auth/register', async (req, res) => {
       success: false,
       message: 'Server error occurred during registration'
     });
+  }
+});
+
+// ─── 2FA helpers ────────────────────────────────────────────────────────────
+
+async function buildFullAuthResponse(userId) {
+  const [user] = await knex('userData').where('id', userId).select('*');
+  if (!user) throw new Error('User not found');
+
+  const btcRate = await fetchCryptoRate('BTC') || 45000;
+  const ethRate = await fetchCryptoRate('ETH') || 3000;
+  const ltcRate = await fetchCryptoRate('LTC') || 100;
+  const solRate = await fetchCryptoRate('SOL') || 150;
+
+  const token = jwt.sign(
+    { id: user.id, email: user.email, username: user.username, credits: user.credits },
+    process.env.JWT_SECRET,
+    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+  );
+
+  return {
+    token,
+    tokenExpiry: new Date(Date.now() + 7 * 24 * 3600 * 1000),
+    user: { id: user.id, username: user.username, email: user.email, credits: user.credits },
+    accountType: user.accountType,
+    message: 'Login successful',
+    verification: {
+      verified: false,
+      amount1: user.amount1,
+      amount2: user.amount2,
+      cryptoAmounts: {
+        BTC: { amount1: (user.amount1 / btcRate).toFixed(8), amount2: (user.amount2 / btcRate).toFixed(8) },
+        ETH: { amount1: (user.amount1 / ethRate).toFixed(8), amount2: (user.amount2 / ethRate).toFixed(8) },
+        LTC: { amount1: (user.amount1 / ltcRate).toFixed(8), amount2: (user.amount2 / ltcRate).toFixed(8) },
+        SOL: { amount1: (user.amount1 / solRate).toFixed(8), amount2: (user.amount2 / solRate).toFixed(8) },
+      },
+      time: Date.now(),
+    },
+  };
+}
+
+function verifyTempToken(token, expectedStage) {
+  const payload = jwt.verify(token, process.env.JWT_SECRET);
+  if (payload.stage !== expectedStage) throw new Error('Invalid token stage');
+  return payload;
+}
+
+// Step 1 of setup: generate TOTP secret and QR code
+server.post(PROXY + '/api/auth/2fa/setup', async (req, res) => {
+  try {
+    const { tempToken } = req.body;
+    let payload;
+    try {
+      payload = verifyTempToken(tempToken, 'pre_2fa_setup');
+    } catch {
+      return res.status(401).json({ success: false, message: 'Invalid or expired setup token' });
+    }
+
+    const [user] = await knex('userData').where('id', payload.id).select('id', 'email');
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    const secret = authenticator.generateSecret();
+    const otpauthUrl = authenticator.keyuri(user.email, 'Drauwper', secret);
+    const qrUrl = await QRCode.toDataURL(otpauthUrl);
+
+    // Embed secret in a fresh short-lived token so the client can send it back
+    const newTempToken = jwt.sign(
+      { id: user.id, email: user.email, stage: 'pre_2fa_setup', secret },
+      process.env.JWT_SECRET,
+      { expiresIn: '10m' }
+    );
+
+    res.json({ success: true, qrUrl, secret, tempToken: newTempToken });
+  } catch (error) {
+    console.error('2FA setup error:', error);
+    res.status(500).json({ success: false, message: 'Server error during 2FA setup' });
+  }
+});
+
+// Step 2 of setup: confirm first OTP, persist secret, return full JWT + recovery codes
+server.post(PROXY + '/api/auth/2fa/enable', async (req, res) => {
+  try {
+    const { tempToken, code } = req.body;
+    if (!tempToken || !code) {
+      return res.status(400).json({ success: false, message: 'tempToken and code are required' });
+    }
+
+    let payload;
+    try {
+      payload = jwt.verify(tempToken, process.env.JWT_SECRET);
+    } catch {
+      return res.status(401).json({ success: false, message: 'Invalid or expired token' });
+    }
+
+    if (payload.stage !== 'pre_2fa_setup' || !payload.secret) {
+      return res.status(400).json({ success: false, message: 'Call /api/auth/2fa/setup first' });
+    }
+
+    if (!authenticator.verify({ token: String(code), secret: payload.secret })) {
+      return res.status(400).json({ success: false, message: 'Invalid authenticator code' });
+    }
+
+    // Generate 8 one-time recovery codes
+    const recoveryCodes = Array.from({ length: 8 }, () =>
+      [
+        crypto.randomBytes(2).toString('hex'),
+        crypto.randomBytes(2).toString('hex'),
+        crypto.randomBytes(2).toString('hex'),
+        crypto.randomBytes(2).toString('hex'),
+      ].join('-').toUpperCase()
+    );
+
+    await knex('userData').where('id', payload.id).update({
+      twoFactorEnabled: true,
+      twoFactorSecret: payload.secret,
+      recoveryCodes: JSON.stringify(recoveryCodes),
+    });
+
+    const authResponse = await buildFullAuthResponse(payload.id);
+    res.json({ ...authResponse, recoveryCodes, message: '2FA enabled successfully' });
+  } catch (error) {
+    console.error('2FA enable error:', error);
+    res.status(500).json({ success: false, message: 'Server error during 2FA enable' });
+  }
+});
+
+// Login step 2: verify TOTP and return full JWT
+server.post(PROXY + '/api/auth/2fa/verify', async (req, res) => {
+  try {
+    const { tempToken, code } = req.body;
+    if (!tempToken || !code) {
+      return res.status(400).json({ success: false, message: 'tempToken and code are required' });
+    }
+
+    let payload;
+    try {
+      payload = verifyTempToken(tempToken, 'pre_2fa');
+    } catch {
+      return res.status(401).json({ success: false, message: 'Invalid or expired token' });
+    }
+
+    const [user] = await knex('userData').where('id', payload.id).select('twoFactorSecret', 'twoFactorEnabled');
+    if (!user || !user.twoFactorEnabled) {
+      return res.status(400).json({ success: false, message: '2FA is not enabled for this account' });
+    }
+
+    if (!authenticator.verify({ token: String(code), secret: user.twoFactorSecret })) {
+      return res.status(400).json({ success: false, message: 'Invalid authenticator code' });
+    }
+
+    const authResponse = await buildFullAuthResponse(payload.id);
+    res.json(authResponse);
+  } catch (error) {
+    console.error('2FA verify error:', error);
+    res.status(500).json({ success: false, message: 'Server error during 2FA verification' });
+  }
+});
+
+// Login step 2 (fallback): use a recovery code
+server.post(PROXY + '/api/auth/2fa/recover', async (req, res) => {
+  try {
+    const { tempToken, recoveryCode } = req.body;
+    if (!tempToken || !recoveryCode) {
+      return res.status(400).json({ success: false, message: 'tempToken and recoveryCode are required' });
+    }
+
+    let payload;
+    try {
+      payload = verifyTempToken(tempToken, 'pre_2fa');
+    } catch {
+      return res.status(401).json({ success: false, message: 'Invalid or expired token' });
+    }
+
+    const [user] = await knex('userData').where('id', payload.id).select('recoveryCodes');
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    let codes = [];
+    try {
+      codes = typeof user.recoveryCodes === 'string'
+        ? JSON.parse(user.recoveryCodes)
+        : (Array.isArray(user.recoveryCodes) ? user.recoveryCodes : []);
+    } catch { codes = []; }
+
+    const normalized = recoveryCode.trim().toUpperCase();
+    const idx = codes.indexOf(normalized);
+    if (idx === -1) {
+      return res.status(400).json({ success: false, message: 'Invalid recovery code' });
+    }
+
+    codes.splice(idx, 1); // consume the code
+    await knex('userData').where('id', payload.id).update({ recoveryCodes: JSON.stringify(codes) });
+
+    const authResponse = await buildFullAuthResponse(payload.id);
+    res.json(authResponse);
+  } catch (error) {
+    console.error('2FA recover error:', error);
+    res.status(500).json({ success: false, message: 'Server error during recovery' });
   }
 });
 

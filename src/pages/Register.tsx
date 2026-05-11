@@ -27,7 +27,8 @@ export default function Register() {
     setLoading(true);
     try {
       await register(username, email, password);
-      navigate('/explore');
+      // Server now returns a 2FA setup challenge; redirect to login which handles it
+      navigate('/login');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Registration failed. Please try again.');
     } finally {

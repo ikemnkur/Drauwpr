@@ -13,6 +13,21 @@ const { v4: uuidv4 } = require('uuid');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
+
+// ---------------------------------------------------------------------------
+// One-time download token store
+// Each entry: { dropId, userId, filePath, filename, expiresAt, used }
+// Tokens expire after 2 minutes — enough time for the download to start.
+// ---------------------------------------------------------------------------
+const _downloadTokens = new Map();
+// Sweep expired tokens every 5 minutes to avoid unbounded growth
+setInterval(() => {
+  const now = Date.now();
+  for (const [tok, meta] of _downloadTokens) {
+    if (meta.expiresAt < now) _downloadTokens.delete(tok);
+  }
+}, 5 * 60 * 1000);
 
 // ── Burn-rate engine (matches frontend src/engine/burnRate.ts) ──
 const ENGINE_C = parseFloat(process.env.BURN_C || '0.999'); // Decay constant — admin-configurable
@@ -1030,7 +1045,8 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
 
   /**
    * GET /api/drops/:id/download-url
-   * Returns a 1h signed GCS URL for users who have purchased the drop.
+   * Issues a short-lived one-time token and returns a server-side stream URL.
+   * The raw GCS URL is never sent to the client.
    */
   server.get(PROXY + '/api/drops/:id/download-url', authenticateToken, async (req, res) => {
     try {
@@ -1051,17 +1067,67 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
         if (!dl) return res.status(403).json({ error: 'Purchase the drop before downloading' });
       }
 
-      const [signedUrl] = await storage.bucket(BUCKET_NAME).file(drop.filePath).getSignedUrl({
-        version: 'v4',
-        action: 'read',
-        expires: Date.now() + 5 * 60 * 1000, // 5 minutes
-        responseDisposition: `attachment; filename="${drop.originalFileName || 'download'}"`,
+      // Issue a one-time token valid for 2 minutes
+      const token = crypto.randomBytes(32).toString('hex');
+      _downloadTokens.set(token, {
+        dropId,
+        userId,
+        filePath: drop.filePath,
+        filename: drop.originalFileName || 'download',
+        expiresAt: Date.now() + 2 * 60 * 1000,
+        used: false,
       });
 
-      res.json({ url: signedUrl, filename: drop.originalFileName || 'download' });
+      const filename = drop.originalFileName || 'download';
+      const streamUrl = `${PROXY}/api/drops/stream/${token}`;
+      res.json({ url: streamUrl, filename });
     } catch (err) {
       console.error('GET /api/drops/:id/download-url error:', err);
       res.status(500).json({ error: 'Failed to generate download URL' });
+    }
+  });
+
+  /**
+   * GET /api/drops/stream/:token
+   * Validates a one-time download token and pipes the GCS file through the server.
+   * The GCS URL is never exposed to the client.
+   */
+  server.get(PROXY + '/api/drops/stream/:token', async (req, res) => {
+    const token = String(req.params.token || '').trim();
+    const meta = _downloadTokens.get(token);
+
+    if (!meta) return res.status(410).json({ error: 'Download link is invalid or has expired' });
+    if (meta.used) return res.status(410).json({ error: 'Download link has already been used' });
+    if (Date.now() > meta.expiresAt) {
+      _downloadTokens.delete(token);
+      return res.status(410).json({ error: 'Download link has expired' });
+    }
+
+    // Invalidate the token immediately — one use only
+    meta.used = true;
+
+    try {
+      const file = storage.bucket(BUCKET_NAME).file(meta.filePath);
+      const [metadata] = await file.getMetadata();
+      const contentType = metadata.contentType || 'application/octet-stream';
+      const contentLength = metadata.size;
+
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', `attachment; filename="${meta.filename}"`);
+      if (contentLength) res.setHeader('Content-Length', contentLength);
+      // Prevent caching / downstream reuse
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+      res.setHeader('Pragma', 'no-cache');
+
+      const readStream = file.createReadStream();
+      readStream.on('error', (err) => {
+        console.error('GCS stream error for token download:', err);
+        if (!res.headersSent) res.status(500).json({ error: 'Stream error' });
+      });
+      readStream.pipe(res);
+    } catch (err) {
+      console.error('GET /api/drops/stream/:token error:', err);
+      if (!res.headersSent) res.status(500).json({ error: 'Failed to stream file' });
     }
   });
 
@@ -2054,52 +2120,6 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
     } catch (err) {
       console.error('POST /api/drops/:id/confirm-upload error:', err);
       res.status(500).json({ error: 'Failed to confirm upload' });
-    }
-  });
-
-
-  // ============================================================
-  //  DROP FILE DOWNLOAD — Signed download URL
-  //
-  //  After a user purchases a download (POST /api/drops/:id/download),
-  //  this endpoint returns a short-lived signed URL so the client
-  //  can stream the file directly from GCS.
-  // ============================================================
-
-  /**
-   * GET /api/drops/:id/download-url
-   * Returns a 1-hour signed download URL. Must have a download record.
-   */
-  server.get(PROXY + '/api/drops/:id/download-url', authenticateToken, async (req, res) => {
-    try {
-      if (!storage) return res.status(503).json({ error: 'Cloud storage not configured' });
-
-      const userId = req.user.id;
-      const dropId = req.params.id;
-
-      // Verify purchase
-      const [[dl]] = await pool.query(
-        'SELECT id FROM dropDownloads WHERE dropId = ? AND userId = ?', [dropId, userId]
-      );
-      if (!dl) return res.status(403).json({ error: 'You have not purchased this drop' });
-
-      const [[drop]] = await pool.query('SELECT filePath, title FROM drops WHERE id = ?', [dropId]);
-      if (!drop || !drop.filePath) return res.status(404).json({ error: 'Drop file not found' });
-
-      const bucket = storage.bucket(BUCKET_NAME);
-      const file = bucket.file(drop.filePath);
-
-      const [signedUrl] = await file.getSignedUrl({
-        version: 'v4',
-        action: 'read',
-        expires: Date.now() + 60 * 60 * 1000, // 1 hour
-        responseDisposition: `attachment; filename="${(drop.title || 'download').replace(/"/g, '_')}"`,
-      });
-
-      res.json({ downloadUrl: signedUrl, expiresIn: '1 hour' });
-    } catch (err) {
-      console.error('GET /api/drops/:id/download-url error:', err);
-      res.status(500).json({ error: 'Failed to generate download URL' });
     }
   });
 

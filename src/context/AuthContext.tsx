@@ -7,11 +7,17 @@ interface AuthState {
   token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  twoFAChallenge: TwoFAChallenge | null;
   login: (email: string, password: string) => Promise<void>;
   register: (username: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
   updateBalance: (newBalance: number) => void;
+  setup2FA: () => Promise<{ qrUrl: string; secret: string }>;
+  enable2FA: (code: string) => Promise<{ recoveryCodes: string[] }>;
+  verifyTOTP: (code: string) => Promise<void>;
+  useRecoveryCode: (recoveryCode: string) => Promise<void>;
+  clearTwoFAChallenge: () => void;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -20,18 +26,50 @@ const TOKEN_KEY = 'drauwper_token';
 const USER_KEY = 'drauwper_user';
 
 interface LoginResponse {
-  token: string;
-  tokenExpiry: number;
-  user: { id: string; username: string; email: string; credits: number; avatar?: string; joined?: string; accountType?: string; accountStatus?: string };
-  accountType: string;
-  message: string;
+  token?: string;
+  tokenExpiry?: number;
+  user?: { id: string; username: string; email: string; credits: number; avatar?: string; joined?: string; accountType?: string; accountStatus?: string };
+  accountType?: string;
+  message?: string;
+  requires2FASetup?: boolean;
+  requiresTOTP?: boolean;
+  tempToken?: string;
 }
 
 interface RegisterResponse {
-  success: boolean;
-  user: { id: string; username: string; email: string; credits: number; avatar?: string; joined?: string; accountType?: string; accountStatus?: string };
+  success?: boolean;
+  user?: { id: string; username: string; email: string; credits: number; avatar?: string; joined?: string; accountType?: string; accountStatus?: string };
+  token?: string;
+  message?: string;
+  requires2FASetup?: boolean;
+  tempToken?: string;
+}
+
+type TwoFAChallenge =
+  | { type: 'needs_setup'; tempToken: string }
+  | { type: 'needs_totp'; tempToken: string };
+
+interface TwoFASetupResponse {
+  qrUrl: string;
+  secret: string;
+  tempToken: string;
+}
+
+interface TwoFAEnableResponse {
   token: string;
-  message: string;
+  tokenExpiry: number;
+  user: { id: string; username: string; email: string; credits: number; accountType?: string };
+  accountType: string;
+  recoveryCodes: string[];
+  verification?: unknown;
+}
+
+interface TwoFAVerifyResponse {
+  token: string;
+  tokenExpiry: number;
+  user: { id: string; username: string; email: string; credits: number; accountType?: string };
+  accountType: string;
+  verification?: unknown;
 }
 
 interface UserResponse {
@@ -69,6 +107,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [twoFAChallenge, setTwoFAChallenge] = useState<TwoFAChallenge | null>(null);
 
   // Hydrate from localStorage on mount
   useEffect(() => {
@@ -102,8 +141,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (email: string, password: string) => {
     const res = await api.post<LoginResponse>('/api/auth/login', { email, password });
-    const mapped = mapServerUser({ ...res.user, accountType: res.user.accountType ?? res.accountType });
-    persist(res.token, mapped);
+    if (res.requires2FASetup && res.tempToken) {
+      setTwoFAChallenge({ type: 'needs_setup', tempToken: res.tempToken });
+      return;
+    }
+    if (res.requiresTOTP && res.tempToken) {
+      setTwoFAChallenge({ type: 'needs_totp', tempToken: res.tempToken });
+      return;
+    }
+    if (res.token && res.user) {
+      const mapped = mapServerUser({ ...res.user, accountType: res.user.accountType ?? res.accountType });
+      persist(res.token, mapped);
+    }
   }, [persist]);
 
   const register = useCallback(async (username: string, email: string, password: string) => {
@@ -111,11 +160,69 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       username,
       email,
       password,
-      firstName: username, // backend expects firstName, use username as default
+      firstName: username,
     });
-    const mapped = mapServerUser(res.user);
-    persist(res.token, mapped);
+    if (res.requires2FASetup && res.tempToken) {
+      setTwoFAChallenge({ type: 'needs_setup', tempToken: res.tempToken });
+      return;
+    }
+    if (res.token && res.user) {
+      const mapped = mapServerUser(res.user);
+      persist(res.token, mapped);
+    }
   }, [persist]);
+
+  const setup2FA = useCallback(async (): Promise<{ qrUrl: string; secret: string }> => {
+    if (!twoFAChallenge || twoFAChallenge.type !== 'needs_setup') {
+      throw new Error('No active 2FA setup challenge');
+    }
+    const res = await api.post<TwoFASetupResponse>('/api/auth/2fa/setup', { tempToken: twoFAChallenge.tempToken });
+    // Update stored tempToken with the secret-bearing one from server
+    setTwoFAChallenge({ type: 'needs_setup', tempToken: res.tempToken });
+    return { qrUrl: res.qrUrl, secret: res.secret };
+  }, [twoFAChallenge]);
+
+  const enable2FA = useCallback(async (code: string): Promise<{ recoveryCodes: string[] }> => {
+    if (!twoFAChallenge || twoFAChallenge.type !== 'needs_setup') {
+      throw new Error('No active 2FA setup challenge');
+    }
+    const res = await api.post<TwoFAEnableResponse>('/api/auth/2fa/enable', {
+      tempToken: twoFAChallenge.tempToken,
+      code,
+    });
+    const mapped = mapServerUser({ ...res.user, accountType: res.user.accountType ?? res.accountType });
+    persist(res.token, mapped);
+    setTwoFAChallenge(null);
+    return { recoveryCodes: res.recoveryCodes };
+  }, [twoFAChallenge, persist]);
+
+  const verifyTOTP = useCallback(async (code: string): Promise<void> => {
+    if (!twoFAChallenge || twoFAChallenge.type !== 'needs_totp') {
+      throw new Error('No active TOTP challenge');
+    }
+    const res = await api.post<TwoFAVerifyResponse>('/api/auth/2fa/verify', {
+      tempToken: twoFAChallenge.tempToken,
+      code,
+    });
+    const mapped = mapServerUser({ ...res.user, accountType: res.user.accountType ?? res.accountType });
+    persist(res.token, mapped);
+    setTwoFAChallenge(null);
+  }, [twoFAChallenge, persist]);
+
+  const useRecoveryCode = useCallback(async (recoveryCode: string): Promise<void> => {
+    if (!twoFAChallenge || twoFAChallenge.type !== 'needs_totp') {
+      throw new Error('No active TOTP challenge');
+    }
+    const res = await api.post<TwoFAVerifyResponse>('/api/auth/2fa/recover', {
+      tempToken: twoFAChallenge.tempToken,
+      recoveryCode,
+    });
+    const mapped = mapServerUser({ ...res.user, accountType: res.user.accountType ?? res.accountType });
+    persist(res.token, mapped);
+    setTwoFAChallenge(null);
+  }, [twoFAChallenge, persist]);
+
+  const clearTwoFAChallenge = useCallback(() => setTwoFAChallenge(null), []);
 
   const logout = useCallback(async () => {
     if (user) {
@@ -155,11 +262,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         token,
         isAuthenticated: !!user && !!token,
         isLoading,
+        twoFAChallenge,
         login,
         register,
         logout,
         refreshUser,
         updateBalance,
+        setup2FA,
+        enable2FA,
+        verifyTOTP,
+        useRecoveryCode,
+        clearTwoFAChallenge,
       }}
     >
       {children}
