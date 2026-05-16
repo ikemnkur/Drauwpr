@@ -178,7 +178,11 @@ export default function Layout() {
     const isDropFeature = /^\/drop\/[^/]+$/.test(pathname);
     const shouldShowOnRoute = isExplore || isAccount || isDashboard || isPromo || isDropFeature;
 
-    if (!shouldShowOnRoute || sponsoredAds.length === 0) {
+    // Frequency gate — reads VITE_AD_POPUP_FREQ (0.0–1.0, default 1.0)
+    const freq = Math.min(1, Math.max(0, parseFloat(import.meta.env.VITE_AD_POPUP_FREQ ?? '1') || 1));
+    const blocked = Math.random() > freq;
+
+    if (!shouldShowOnRoute || sponsoredAds.length === 0 || blocked) {
       setShowAdModal(false);
       setActiveAd(null);
       return;

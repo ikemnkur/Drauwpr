@@ -33,6 +33,10 @@ import AdsPromo from './pages/AdsPromo';
 import Notifications from './pages/Notifications';
 import PromoCreateAd from './pages/PromoCreateAd';
 import PromoSponsorDrop from './pages/PromoSponsorDrop';
+import Demo from './pages/Demo';
+import DropPublicView from './pages/DropPublicView';
+import DropPublicInfo from './pages/DropPublicInfo';
+import DropAuthRoute from './components/DropAuthRoute';
 
 export default function App() {
   return (
@@ -53,9 +57,12 @@ export default function App() {
 
               {/* Public pages inside layout */}
               <Route path="/explore" element={<Explore />} />
-              <Route path="/drop/:id" element={<DropFeature />} />
+              <Route path="/drop/:id" element={<DropAuthRoute publicSuffix="/view"><DropFeature /></DropAuthRoute>} />
               <Route path="/user/:id" element={<UserProfile />} />
               <Route path="/help" element={<Help />} />
+              <Route path="/demo" element={<Demo />} />
+              <Route path="/drop/:id/view" element={<DropPublicView />} />
+              <Route path="/drop/:id/info" element={<DropPublicInfo />} />
               {/* Password recovery + email verification */}
               <Route path="/forgot-password" element={<ForgotPassword />} />
               <Route path="/reset-password" element={<ResetPassword />} />
@@ -66,7 +73,7 @@ export default function App() {
 
               {/* Protected pages */}
               <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-              <Route path="/drop/:id/download" element={<ProtectedRoute><DropDownload /></ProtectedRoute>} />
+              <Route path="/drop/:id/download" element={<DropAuthRoute publicSuffix="/info"><DropDownload /></DropAuthRoute>} />
               <Route path="/drop/:id/review" element={<ProtectedRoute><DropReview /></ProtectedRoute>} />
               <Route path="/contributions" element={<ProtectedRoute><ActiveContributions /></ProtectedRoute>} />
               <Route path="/account" element={<ProtectedRoute><Account /></ProtectedRoute>} />

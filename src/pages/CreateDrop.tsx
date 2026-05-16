@@ -16,7 +16,7 @@ import { api } from '../lib/api';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
-const FILE_TYPES = ['game', 'app', 'document', 'music', 'video', 'other'] as const;
+const FILE_TYPES = ['game', 'app', 'document', 'music', 'photo', 'video', 'other'] as const;
 
 export default function CreateDrop() {
   const navigate = useNavigate();
@@ -427,7 +427,7 @@ export default function CreateDrop() {
               <input
                 type="number"
                 min="100"
-                step="100"
+                step="1"
                 value={basePrice}
                 onChange={(e) => setBasePrice(e.target.value)}
                 placeholder="e.g. 5000"

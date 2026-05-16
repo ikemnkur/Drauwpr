@@ -110,6 +110,14 @@ export default function Landing() {
             >
               Start Burning <ArrowRight className="w-5 h-5" />
             </Link>
+
+             <Link
+              to="/demo"
+              className="flex items-center gap-2 border border-[#35354d] hover:border-orange-500/50 text-[#e2e8f0] font-semibold text-lg px-8 py-4 rounded-xl transition"
+            >
+              Watch Demo
+            </Link>
+
             <Link
               to="/login"
               className="flex items-center gap-2 border border-[#35354d] hover:border-orange-500/50 text-[#e2e8f0] font-semibold text-lg px-8 py-4 rounded-xl transition"
@@ -148,7 +156,7 @@ export default function Landing() {
       </section>
 
       {/* Burn Mechanic Visual */}
-      <section className="py-20">
+      {/* <section className="py-20">
         <div className="max-w-5xl mx-auto px-6">
           <div className="bg-gradient-to-r from-[#1e1e2e] to-[#2a2a3e] border border-[#35354d] rounded-2xl p-8 md:p-12 flex flex-col md:flex-row items-center gap-10">
             <div className="flex-1">
@@ -178,7 +186,7 @@ export default function Landing() {
             </div>
           </div>
         </div>
-      </section>
+      </section> */}
 
       {/* Features */}
       <section className="bg-[#1e1e2e] border-y border-[#35354d] py-20">

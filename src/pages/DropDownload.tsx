@@ -8,7 +8,9 @@ import PriceDisplay from '../components/PriceDisplay';
 import ContributorList from '../components/ContributorList';
 import ReviewForm from '../components/ReviewForm';
 import type { Drop, Contributor, Review } from '../types';
-import { Download, Tag, HardDrive, ThumbsUp, ThumbsDown, Star, Check, Loader2, Lock, ChevronDown, ChevronUp } from 'lucide-react';
+import { Download, Tag, HardDrive, ThumbsUp, ThumbsDown, Star, Check, Loader2, Lock, ChevronDown, ChevronUp, Share2, Link2, AtSign, MessageCircle, Globe, Send } from 'lucide-react';
+import XIcon from '@mui/icons-material/X';
+import FacebookIcon from '@mui/icons-material/Facebook';
 
 interface ServerContributor {
   userId: string;
@@ -62,6 +64,7 @@ export default function DropDownload() {
   const [dlState, setDlState] = useState<'idle' | 'purchasing' | 'downloading' | 'done' | 'free'>('idle');
   const [dlError, setDlError] = useState<string | null>(null);
   const [showPriceDetail, setShowPriceDetail] = useState(false);
+  const [copiedInline, setCopiedInline] = useState(false);
 
   const drop = localDrop ?? fetchedDrop;
 
@@ -374,6 +377,65 @@ export default function DropDownload() {
               <Link to="/login" className="text-brand underline">Sign in</Link> to download
             </p>
           )}
+
+          {/* Share box */}
+          <div className="bg-surface-2 border border-surface-3 rounded-2xl p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Share2 className="w-4 h-4 text-brand" />
+              <p className="text-sm font-semibold text-text">Share this Drop</p>
+            </div>
+
+            {/* Copy link */}
+            <div className="flex items-center gap-2">
+              <div className="flex-1 bg-surface border border-surface-3 rounded-xl px-3 py-2 text-xs text-text-muted truncate font-mono select-all">
+                {`${window.location.origin}/drop/${drop.id}/info`}
+              </div>
+              <button
+                onClick={async () => {
+                  const url = `${window.location.origin}/drop/${drop.id}/info`;
+                  try { await navigator.clipboard.writeText(url); }
+                  catch { const el = document.createElement('textarea'); el.value = url; el.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(el); el.select(); document.execCommand('copy'); document.body.removeChild(el); }
+                  setCopiedInline(true);
+                  setTimeout(() => setCopiedInline(false), 2000);
+                }}
+                className={[
+                  'shrink-0 flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-semibold transition',
+                  copiedInline
+                    ? 'bg-green-500/20 border border-green-500/40 text-green-400'
+                    : 'bg-brand/10 border border-brand/30 text-brand hover:bg-brand/20',
+                ].join(' ')}
+              >
+                {copiedInline ? <Check className="w-3.5 h-3.5" /> : <Link2 className="w-3.5 h-3.5" />}
+                {copiedInline ? 'Copied!' : 'Copy'}
+              </button>
+            </div>
+
+            {/* Social buttons */}
+            {(() => {
+              const url = `${window.location.origin}/drop/${drop.id}/info`;
+              const text = `Check out "${drop.title}" on Drauwper 🔥`;
+              return (
+                <div className="grid grid-cols-2 gap-2">
+                  <a href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`} target="_blank" rel="noopener noreferrer"
+                    className="flex items-center gap-2 px-3 py-2 rounded-xl border border-surface-3 text-xs text-text-muted hover:bg-[#1d9bf0]/10 hover:border-[#1d9bf0]/40 hover:text-[#1d9bf0] transition">
+                    <XIcon style={{ fontSize: 14 }} className="shrink-0" /> X / Twitter
+                  </a>
+                  <a href={`https://wa.me/?text=${encodeURIComponent(text + ' ' + url)}`} target="_blank" rel="noopener noreferrer"
+                    className="flex items-center gap-2 px-3 py-2 rounded-xl border border-surface-3 text-xs text-text-muted hover:bg-[#25d366]/10 hover:border-[#25d366]/40 hover:text-[#25d366] transition">
+                    <MessageCircle className="w-3.5 h-3.5 shrink-0" /> WhatsApp
+                  </a>
+                  <a href={`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}`} target="_blank" rel="noopener noreferrer"
+                    className="flex items-center gap-2 px-3 py-2 rounded-xl border border-surface-3 text-xs text-text-muted hover:bg-[#1877f2]/10 hover:border-[#1877f2]/40 hover:text-[#1877f2] transition">
+                    <FacebookIcon style={{ fontSize: 14 }} className="shrink-0" /> Facebook
+                  </a>
+                  <a href={`https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}`} target="_blank" rel="noopener noreferrer"
+                    className="flex items-center gap-2 px-3 py-2 rounded-xl border border-surface-3 text-xs text-text-muted hover:bg-[#2aabee]/10 hover:border-[#2aabee]/40 hover:text-[#2aabee] transition">
+                    <Send className="w-3.5 h-3.5 shrink-0" /> Telegram
+                  </a>
+                </div>
+              );
+            })()}
+          </div>
         </div>
 
         <ContributorList contributors={contributors} />

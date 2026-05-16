@@ -1,5 +1,5 @@
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { api } from '../lib/api';
 import { mapDrop, type ServerDrop } from '../hooks/useData';
@@ -10,8 +10,12 @@ import GoalProgress from '../components/GoalProgress';
 import ContributorList from '../components/ContributorList';
 import ContributeForm from '../components/ContributeForm';
 import StallModal from '../components/StallModal';
+import ShareModal from '../components/ShareModal';
+import DropCelebrationModal from '../components/DropCelebrationModal';
+import XIcon from '@mui/icons-material/X';
+import FacebookIcon from '@mui/icons-material/Facebook';
 import { estimateRealSecondsRemaining } from '../engine/burnRate';
-import { Tag, HardDrive, ChevronDown, ChevronUp, Film, Image, Timer } from 'lucide-react';
+import { Tag, HardDrive, ChevronDown, ChevronUp, Film, Image, Timer, Share2, Link2, Check, MessageCircle, Send } from 'lucide-react';
 import ExpirationGauge from '../components/ExpirationGauge';
 
 interface ServerContributor {
@@ -51,6 +55,10 @@ export default function DropFeature() {
   const [showBanner, setShowBanner] = useState(true);
   const [showTrailer, setShowTrailer] = useState(true);
   const [showStallModal, setShowStallModal] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [showCelebration, setShowCelebration] = useState(false);
+  const celebrationFired = useRef(false);
+  const [copiedInline, setCopiedInline] = useState(false);
   const [stallExpiresAt, setStallExpiresAt] = useState<number | null>(null);
   const [stallScheduledDropTime, setStallScheduledDropTime] = useState<number | null>(null);
 
@@ -73,6 +81,27 @@ export default function DropFeature() {
     if (t.includes('/drop/')) return t;
     return `/drop/${t}`;
   }
+
+  useEffect(() => {
+    if (!drop || drop.status === 'dropped' || celebrationFired.current) return;
+    const iv = window.setInterval(() => {
+      if (celebrationFired.current) { window.clearInterval(iv); return; }
+      const clockSecs = Math.max(0, ((stallScheduledDropTime ?? drop.scheduledDropTime) - Date.now()) / 1000);
+      const real = estimateRealSecondsRemaining(
+        clockSecs,
+        drop.burnRate,
+        Date.now(),
+        drop.createdAt,
+        stallExpiresAt ?? drop.expiresAt,
+      );
+      if (real <= 3) {
+        celebrationFired.current = true;
+        setShowCelebration(true);
+        window.clearInterval(iv);
+      }
+    }, 500);
+    return () => window.clearInterval(iv);
+  }, [drop, stallScheduledDropTime, stallExpiresAt]);
 
   useEffect(() => {
     if (!id || !drop) return;
@@ -301,12 +330,21 @@ export default function DropFeature() {
             <span className="flex items-center gap-1"><Tag className="w-4 h-4" /> {drop.fileType}</span>
           </div>
         </div>
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex flex-col items-end gap-3">
+          <button
+            onClick={() => setShowShareModal(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-surface-3 text-text-muted hover:text-brand hover:border-brand/40 text-sm transition"
+          >
+            <Share2 className="w-4 h-4" />
+            Share
+          </button>
+          <div className="flex gap-2 flex-wrap justify-end">
           {drop.tags.map((t) => (
             <span key={t} className="bg-surface-2 text-text-muted text-xs px-2 py-0.5 rounded-full">
               #{t}
             </span>
           ))}
+          </div>
         </div>
       </div>
 
@@ -458,6 +496,65 @@ export default function DropFeature() {
         <div className="space-y-4">
           <ContributeForm dropId={drop.id} onContributed={handleContributed} />
 
+          {/* Share box */}
+          <div className="bg-surface-2 border border-surface-3 rounded-2xl p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Share2 className="w-4 h-4 text-brand" />
+              <p className="text-sm font-semibold text-text">Share this Drop</p>
+            </div>
+
+            {/* Copy link */}
+            <div className="flex items-center gap-2">
+              <div className="flex-1 bg-surface border border-surface-3 rounded-xl px-3 py-2 text-xs text-text-muted truncate font-mono select-all">
+                {`${window.location.origin}/drop/${drop.id}/view`}
+              </div>
+              <button
+                onClick={async () => {
+                  const url = `${window.location.origin}/drop/${drop.id}/view`;
+                  try { await navigator.clipboard.writeText(url); }
+                  catch { const el = document.createElement('textarea'); el.value = url; el.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(el); el.select(); document.execCommand('copy'); document.body.removeChild(el); }
+                  setCopiedInline(true);
+                  setTimeout(() => setCopiedInline(false), 2000);
+                }}
+                className={[
+                  'shrink-0 flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-semibold transition',
+                  copiedInline
+                    ? 'bg-green-500/20 border border-green-500/40 text-green-400'
+                    : 'bg-brand/10 border border-brand/30 text-brand hover:bg-brand/20',
+                ].join(' ')}
+              >
+                {copiedInline ? <Check className="w-3.5 h-3.5" /> : <Link2 className="w-3.5 h-3.5" />}
+                {copiedInline ? 'Copied!' : 'Copy'}
+              </button>
+            </div>
+
+            {/* Social buttons */}
+            {(() => {
+              const url = `${window.location.origin}/drop/${drop.id}/view`;
+              const text = `Check out "${drop.title}" on Drauwper 🔥`;
+              return (
+                <div className="grid grid-cols-2 gap-2">
+                  <a href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`} target="_blank" rel="noopener noreferrer"
+                    className="flex items-center gap-2 px-3 py-2 rounded-xl border border-surface-3 text-xs text-text-muted hover:bg-[#1d9bf0]/10 hover:border-[#1d9bf0]/40 hover:text-[#1d9bf0] transition">
+                    <XIcon style={{ fontSize: 14 }} className="shrink-0" /> X / Twitter
+                  </a>
+                  <a href={`https://wa.me/?text=${encodeURIComponent(text + ' ' + url)}`} target="_blank" rel="noopener noreferrer"
+                    className="flex items-center gap-2 px-3 py-2 rounded-xl border border-surface-3 text-xs text-text-muted hover:bg-[#25d366]/10 hover:border-[#25d366]/40 hover:text-[#25d366] transition">
+                    <MessageCircle className="w-3.5 h-3.5 shrink-0" /> WhatsApp
+                  </a>
+                  <a href={`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}`} target="_blank" rel="noopener noreferrer"
+                    className="flex items-center gap-2 px-3 py-2 rounded-xl border border-surface-3 text-xs text-text-muted hover:bg-[#1877f2]/10 hover:border-[#1877f2]/40 hover:text-[#1877f2] transition">
+                    <FacebookIcon style={{ fontSize: 14 }} className="shrink-0" /> Facebook
+                  </a>
+                  <a href={`https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}`} target="_blank" rel="noopener noreferrer"
+                    className="flex items-center gap-2 px-3 py-2 rounded-xl border border-surface-3 text-xs text-text-muted hover:bg-[#2aabee]/10 hover:border-[#2aabee]/40 hover:text-[#2aabee] transition">
+                    <Send className="w-3.5 h-3.5 shrink-0" /> Telegram
+                  </a>
+                </div>
+              );
+            })()}
+          </div>
+
           {sponsoredAd && (
             (() => {
               const target = resolveTarget(sponsoredAd.targetDropId);
@@ -507,6 +604,23 @@ export default function DropFeature() {
             
         </div>
       </div>
+
+      {/* Celebration Modal */}
+      {showCelebration && (
+        <DropCelebrationModal
+          dropId={drop.id}
+          dropTitle={drop.title}
+        />
+      )}
+
+      {/* Share Modal */}
+      {showShareModal && (
+        <ShareModal
+          dropTitle={drop.title}
+          dropUrl={`${window.location.origin}/drop/${drop.id}/view`}
+          onClose={() => setShowShareModal(false)}
+        />
+      )}
 
       {/* Stall Modal */}
       {showStallModal && (
