@@ -474,24 +474,33 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
         scheduledDropTime, expiresAt,
         trailerUrl, thumbnailUrl,
         sensitivity, decayConstant,
+        expiryBehaviour, expiryThreshold,
       } = req.body;
 
       if (!title || !goalAmount || !scheduledDropTime || !expiresAt) {
         return res.status(400).json({ error: 'Missing required fields: title, goalAmount, scheduledDropTime, expiresAt' });
       }
 
+      // Sanitise expiry fields — expiryBehaviour only accepted for premium users
+      const behaviour = expiryBehaviour === 'keep' ? 'keep' : 'refund';
+      const threshold = (behaviour === 'keep' && expiryThreshold != null)
+        ? Math.min(1, Math.max(0, parseFloat(expiryThreshold) || 0))
+        : null;
+
       const dropId = uuidv4();
       await pool.query(
         `INSERT INTO drops
          (id, creatorId, title, description, fileType, tags,
           goalAmount, basePrice, scheduledDropTime, expiresAt,
+          expiry_behaviour, expiry_threshold,
           trailerUrl, thumbnailUrl, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
         [
           dropId, userId, title, description || '',
           fileType || 'other', JSON.stringify(tags || []),
           +goalAmount, +(basePrice || 0),
           new Date(scheduledDropTime), new Date(expiresAt),
+          behaviour, threshold,
           trailerUrl || null, thumbnailUrl || null,
         ]
       );

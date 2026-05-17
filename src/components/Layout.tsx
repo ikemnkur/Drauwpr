@@ -182,7 +182,10 @@ export default function Layout() {
     const freq = Math.min(1, Math.max(0, parseFloat(import.meta.env.VITE_AD_POPUP_FREQ ?? '1') || 1));
     const blocked = Math.random() > freq;
 
-    if (!shouldShowOnRoute || sponsoredAds.length === 0 || blocked) {
+    // Subscribed users (Standard / Premium) are ad-free
+    const isSubscribed = ['standard', 'premium'].includes((user?.accountType ?? '').toLowerCase());
+
+    if (!shouldShowOnRoute || sponsoredAds.length === 0 || blocked || isSubscribed) {
       setShowAdModal(false);
       setActiveAd(null);
       return;

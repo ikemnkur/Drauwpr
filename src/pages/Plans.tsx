@@ -17,6 +17,7 @@ interface Plan {
   popular?: boolean;
   features: string[];
   stripePriceId?: string;
+  stripePaymentLink?: string;
 }
 
 const PLANS: Plan[] = [
@@ -31,12 +32,12 @@ const PLANS: Plan[] = [
     borderClass: 'border-surface-3',
     buttonClass: 'bg-surface-3 text-text-muted hover:bg-surface cursor-default',
     features: [
-      '1,000 credits per month',
+      'Earn up to 1,000 bonus credits per month',
       'Ads displayed',
       'Standard quality only',
       'File size limits apply',
-      'Watermarks on content',
-      'Longest wait times',
+      'Drop creation limits',
+      'Longest upload wait time',
     ],
   },
   {
@@ -51,15 +52,16 @@ const PLANS: Plan[] = [
     buttonClass: 'bg-blue-500 hover:bg-blue-400 text-white',
     popular: true,
     features: [
-      '7,500 credits per month',
+      '2,500 bonus credits per month',
       'Ad free',
       'No daily limits',
-      'No watermarks',
+      // 'No watermarks',
       'HD content quality',
-      'Larger file size limits',
-      'Faster processing',
+      'Larger file size limits (250 MB)',
+      'Ad Analytics',
     ],
     stripePriceId: import.meta.env.VITE_STRIPE_PRICE_STANDARD,
+    stripePaymentLink: 'https://buy.stripe.com/test_3cIeV63u3eVYfrL4UV0sU0e',
   },
   {
     id: 'premium',
@@ -72,15 +74,17 @@ const PLANS: Plan[] = [
     borderClass: 'border-brand/50',
     buttonClass: 'bg-brand hover:bg-orange-400 text-white',
     features: [
-      '15,000 credits per month',
+      '5,000 bonus credits per month',
       'Everything in Standard',
       'No wait times',
-      'Advanced content options',
+      // 'Ad Analytics',
+      'Drop Analytics',
       'Full HD & 4K quality',
-      'Largest file limits (250 MB)',
+      'Largest file limits (500 MB)',
       'Priority support',
     ],
     stripePriceId: import.meta.env.VITE_STRIPE_PRICE_PREMIUM,
+    stripePaymentLink: 'https://buy.stripe.com/test_9B69AM1lV7twcfz8770sU0d',
   },
 ];
 
@@ -105,8 +109,17 @@ export default function Plans() {
   }, [economy]);
 
   const handleSubscribe = (plan: Plan) => {
-    if (!plan.stripePriceId || plan.id === 'free') return;
-    // Redirect to Stripe Checkout (replace with real checkout session endpoint when ready)
+    if (plan.id === 'free') return;
+    if (plan.stripePaymentLink) {
+      // Append client_reference_id so the server can map userId + planId after Stripe redirects back
+      const ref = user?.id ? `${user.id}_${plan.id}` : plan.id;
+      const url = new URL(plan.stripePaymentLink);
+      url.searchParams.set('client_reference_id', ref);
+      if (user?.email) url.searchParams.set('prefilled_email', user.email);
+      window.location.href = url.toString();
+      return;
+    }
+    if (!plan.stripePriceId) return;
     const url = `${import.meta.env.VITE_API_URL ?? 'http://localhost:4000'}/api/stripe/create-checkout?priceId=${plan.stripePriceId}&userId=${user?.id}`;
     window.location.href = url;
   };

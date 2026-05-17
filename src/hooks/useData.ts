@@ -43,6 +43,8 @@ export interface ServerDrop {
   isPublic: number | boolean;
   created_at: string;
   updated_at?: string;
+  expiry_behaviour?: 'refund' | 'keep';
+  expiry_threshold?: number | null;
   // Joined fields from /api/dashboard
   creatorName?: string;
   creatorAvatar?: string;
@@ -95,6 +97,8 @@ export function mapDrop(d: ServerDrop): Drop & { myContribution?: number } {
     tags,
     myContribution: d.myContribution,
     lastContributionTime: d.lastContributionTime ? new Date(d.lastContributionTime).getTime() : undefined,
+    expiryBehaviour: d.expiry_behaviour ?? 'refund',
+    expiryThreshold: d.expiry_threshold ?? null,
   };
 }
 

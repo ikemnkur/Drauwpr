@@ -5587,7 +5587,22 @@ server.get(PROXY + '/api/subscription/verify-session', async (req, res) => {
 
     if (session.payment_status === 'paid' && session.subscription) {
       const subscription = session.subscription;
-      const userId = session.metadata.userId || session.client_reference_id;
+
+      // client_reference_id may be "userId_planId" (payment link flow) or plain userId
+      const clientRef = session.client_reference_id || '';
+      const underscoreIdx = clientRef.lastIndexOf('_');
+      let userId, planId;
+      if (underscoreIdx > 0) {
+        userId = clientRef.substring(0, underscoreIdx);
+        planId = clientRef.substring(underscoreIdx + 1);
+      } else {
+        userId = clientRef;
+        planId = null;
+      }
+      // Fall back to session metadata if present (server-created checkout sessions)
+      userId = session.metadata?.userId || userId;
+      planId = session.metadata?.planId || planId || 'standard';
+      const planName = session.metadata?.planName || (planId.charAt(0).toUpperCase() + planId.slice(1));
 
       // Save subscription to database
       await knex.raw(
@@ -5604,8 +5619,8 @@ server.get(PROXY + '/api/subscription/verify-session', async (req, res) => {
           userId,
           subscription.id,
           session.customer.id || session.customer,
-          session.metadata.planId,
-          session.metadata.planName,
+          planId,
+          planName,
           subscription.status,
           new Date(subscription.current_period_start * 1000),
           new Date(subscription.current_period_end * 1000),
@@ -5613,7 +5628,10 @@ server.get(PROXY + '/api/subscription/verify-session', async (req, res) => {
         ]
       );
 
-      console.log(`✅ Subscription activated for user ${userId}`);
+      // Update the user's account type to reflect the new plan
+      await knex('userData').where({ id: userId }).update({ accountType: planId });
+
+      console.log(`✅ Subscription activated for user ${userId}: plan=${planId}`);
 
       res.json({
         success: true,
@@ -5622,8 +5640,8 @@ server.get(PROXY + '/api/subscription/verify-session', async (req, res) => {
           customer_email: session.customer_details?.email || session.customer_email,
           subscription: {
             id: subscription.id,
-            planId: session.metadata.planId,
-            planName: session.metadata.planName,
+            planId: planId,
+            planName: planName,
             interval: subscription.items.data[0]?.plan.interval,
             current_period_end: subscription.current_period_end,
             status: subscription.status

@@ -15,7 +15,7 @@ import DropCelebrationModal from '../components/DropCelebrationModal';
 import XIcon from '@mui/icons-material/X';
 import FacebookIcon from '@mui/icons-material/Facebook';
 import { estimateRealSecondsRemaining } from '../engine/burnRate';
-import { Tag, HardDrive, ChevronDown, ChevronUp, Film, Image, Timer, Share2, Link2, Check, MessageCircle, Send } from 'lucide-react';
+import { Tag, HardDrive, ChevronDown, ChevronUp, Film, Image, Timer, Share2, Link2, Check, MessageCircle, Send, AlertTriangle } from 'lucide-react';
 import ExpirationGauge from '../components/ExpirationGauge';
 
 interface ServerContributor {
@@ -57,6 +57,7 @@ export default function DropFeature() {
   const [showStallModal, setShowStallModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [showCelebration, setShowCelebration] = useState(false);
+  const [showExpiredModal, setShowExpiredModal] = useState(false);
   const celebrationFired = useRef(false);
   const [copiedInline, setCopiedInline] = useState(false);
   const [stallExpiresAt, setStallExpiresAt] = useState<number | null>(null);
@@ -81,6 +82,14 @@ export default function DropFeature() {
     if (t.includes('/drop/')) return t;
     return `/drop/${t}`;
   }
+
+  useEffect(() => {
+    if (!drop) return;
+    // Show expired modal if drop expired without reaching its goal
+    const isExpired = drop.status === 'expired' ||
+      (Date.now() > (stallExpiresAt ?? drop.expiresAt) && drop.currentContributions < drop.goalAmount);
+    if (isExpired) setShowExpiredModal(true);
+  }, [drop, stallExpiresAt]);
 
   useEffect(() => {
     if (!drop || drop.status === 'dropped' || celebrationFired.current) return;
@@ -494,7 +503,16 @@ export default function DropFeature() {
 
         {/* Right: Contribute form */}
         <div className="space-y-4">
-          <ContributeForm dropId={drop.id} onContributed={handleContributed} />
+          {/* Hide contribute form when drop is expired without reaching goal */}
+          {drop.status !== 'expired' && !(Date.now() > (stallExpiresAt ?? drop.expiresAt) && drop.currentContributions < drop.goalAmount) ? (
+            <ContributeForm dropId={drop.id} onContributed={handleContributed} />
+          ) : (
+            <div className="bg-surface-2 border border-red-500/20 rounded-2xl p-5 text-center space-y-2">
+              <AlertTriangle className="w-8 h-8 text-red-400 mx-auto" />
+              <p className="text-sm font-semibold text-red-300">This drop has expired</p>
+              <p className="text-xs text-text-muted">The goal wasn’t reached in time. Contributions have been refunded.</p>
+            </div>
+          )}
 
           {/* Share box */}
           <div className="bg-surface-2 border border-surface-3 rounded-2xl p-4 space-y-3">
@@ -605,8 +623,47 @@ export default function DropFeature() {
         </div>
       </div>
 
+      {/* Expired Modal */}
+      {showExpiredModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4">
+          <div className="bg-[#1e1e2e] border border-red-500/30 rounded-3xl w-full max-w-sm shadow-2xl shadow-red-500/10 overflow-hidden">
+            <div className="h-1.5 w-full bg-gradient-to-r from-red-600 via-red-400 to-orange-400" />
+            <div className="px-7 py-8 text-center space-y-4">
+              <div className="w-14 h-14 mx-auto rounded-full bg-red-500/15 flex items-center justify-center">
+                <AlertTriangle className="w-7 h-7 text-red-400" />
+              </div>
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.2em] text-red-400 mb-1">Drop Expired</p>
+                <h2 className="text-xl font-extrabold text-white">Sorry, this drop has expired</h2>
+              </div>
+              <div className="bg-[#2a2a3e] border border-[#35354d] rounded-xl px-4 py-3">
+                <p className="text-white font-bold text-sm line-clamp-2">"{drop.title}"</p>
+              </div>
+              <p className="text-sm text-[#94a3b8]">
+                The goal wasn't reached before the deadline. Any credits contributed have been refunded to everyone who participated.
+              </p>
+              <div className="flex flex-col gap-2 pt-1">
+                <button
+                  onClick={() => setShowExpiredModal(false)}
+                  className="w-full py-3 rounded-2xl bg-[#2a2a3e] hover:bg-[#35354d] text-white font-semibold text-sm transition"
+                >
+                  OK, got it
+                </button>
+                <Link
+                  to="/explore"
+                  className="w-full py-2.5 rounded-2xl text-center text-sm text-text-muted hover:text-text transition"
+                >
+                  Browse other drops
+                </Link>
+              </div>
+            </div>
+            <div className="h-1 w-full bg-gradient-to-r from-orange-500 via-red-500 to-orange-400 opacity-40" />
+          </div>
+        </div>
+      )}
+
       {/* Celebration Modal */}
-      {showCelebration && (
+      {(showCelebration && drop.status !== "expired") && (
         <DropCelebrationModal
           dropId={drop.id}
           dropTitle={drop.title}

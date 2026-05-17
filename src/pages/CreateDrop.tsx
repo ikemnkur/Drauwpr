@@ -11,8 +11,11 @@ import {
   X,
   Flame,
   CheckCircle,
+  Crown,
+  Lock,
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { useAuth } from '../context/AuthContext';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -20,6 +23,8 @@ const FILE_TYPES = ['game', 'app', 'document', 'music', 'photo', 'video', 'other
 
 export default function CreateDrop() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const isPremium = (user?.accountType ?? '').toLowerCase() === 'premium';
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bannerInputRef = useRef<HTMLInputElement>(null);
 
@@ -33,6 +38,9 @@ export default function CreateDrop() {
   const [basePrice, setBasePrice] = useState('');
   const [durationDays, setDurationDays] = useState('7');
   const [trailerUrl, setTrailerUrl] = useState('');
+  // 'refund' = credits returned to contributors on expiry | 'keep' = drop stays downloadable
+  const [expiryBehaviour, setExpiryBehaviour] = useState<'refund' | 'keep'>('refund');
+  const [expiryThreshold, setExpiryThreshold] = useState<number>(0);
   const [fileName, setFileName] = useState('');
   const [fileSize, setFileSize] = useState('');
   const [bannerName, setBannerName] = useState('');
@@ -108,6 +116,8 @@ export default function CreateDrop() {
         scheduledDropTime,
         expiresAt,
         trailerUrl: trailerUrl.trim() || null,
+        expiryBehaviour: isPremium ? expiryBehaviour : 'refund',
+        expiryThreshold: (isPremium && expiryBehaviour === 'keep' && expiryThreshold > 0) ? expiryThreshold / 100 : null,
       });
 
       setCreatedDropId(dropId);
@@ -440,6 +450,105 @@ export default function CreateDrop() {
               )}
             </div>
           </div>
+        </section>
+
+        {/* ── Expiry Behaviour (Premium) ── */}
+        <section className={`rounded-2xl border p-5 space-y-4 relative ${
+          isPremium ? 'bg-surface border-surface-3' : 'bg-surface/50 border-surface-3/50'
+        }`}>
+          {/* Lock overlay for non-premium */}
+          {!isPremium && (
+            <div className="absolute inset-0 rounded-2xl bg-surface/60 backdrop-blur-[1px] flex flex-col items-center justify-center gap-2 z-10">
+              <div className="flex items-center gap-2 bg-[#1e1e2e] border border-brand/30 rounded-xl px-4 py-2.5 shadow-lg">
+                <Crown className="w-4 h-4 text-brand" />
+                <span className="text-sm font-semibold text-brand">Premium feature</span>
+                <Lock className="w-3.5 h-3.5 text-text-muted ml-1" />
+              </div>
+              <p className="text-xs text-text-muted">Upgrade to Premium to control expiry behaviour</p>
+            </div>
+          )}
+
+          <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wider flex items-center gap-2">
+            <Crown className="w-4 h-4 text-brand" /> Expiry Behaviour
+            {!isPremium && <span className="ml-auto text-[10px] font-bold text-brand bg-brand/10 border border-brand/20 px-2 py-0.5 rounded-full uppercase tracking-wide">Premium only</span>}
+          </h2>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* Refund option */}
+            <button
+              type="button"
+              disabled={!isPremium}
+              onClick={() => isPremium && setExpiryBehaviour('refund')}
+              className={`relative text-left rounded-xl border-2 p-4 transition ${
+                !isPremium
+                  ? 'border-surface-3 opacity-50 cursor-not-allowed'
+                  : expiryBehaviour === 'refund'
+                  ? 'border-brand bg-brand/10'
+                  : 'border-surface-3 hover:border-surface-3/80'
+              }`}
+            >
+              {expiryBehaviour === 'refund' && isPremium && (
+                <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-brand" />
+              )}
+              <p className="text-sm font-semibold text-text mb-1">Refund contributors</p>
+              <p className="text-xs text-text-muted leading-relaxed">
+                If the drop expires without reaching its goal, all contributed credits are automatically returned to contributors.
+              </p>
+            </button>
+
+            {/* Keep downloadable option */}
+            <button
+              type="button"
+              disabled={!isPremium}
+              onClick={() => isPremium && setExpiryBehaviour('keep')}
+              className={`relative text-left rounded-xl border-2 p-4 transition ${
+                !isPremium
+                  ? 'border-surface-3 opacity-50 cursor-not-allowed'
+                  : expiryBehaviour === 'keep'
+                  ? 'border-brand bg-brand/10'
+                  : 'border-surface-3 hover:border-surface-3/80'
+              }`}
+            >
+              {expiryBehaviour === 'keep' && isPremium && (
+                <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-brand" />
+              )}
+              <p className="text-sm font-semibold text-text mb-1">Keep downloadable</p>
+              <p className="text-xs text-text-muted leading-relaxed">
+                The drop remains available for purchase and download even after its expiry date passes.
+              </p>
+            </button>
+          </div>
+
+          {/* Threshold — only shown when 'keep' is selected */}
+          {isPremium && expiryBehaviour === 'keep' && (
+            <div className="border-t border-surface-3 pt-4 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-text-muted">
+                  Activation threshold
+                  <span className="ml-1 text-text font-semibold">{expiryThreshold}%</span>
+                  <span className="ml-1 text-text-muted">(of goal)</span>
+                </label>
+                {expiryThreshold === 0 && (
+                  <span className="text-[10px] text-text-muted border border-surface-3 px-2 py-0.5 rounded-full">No threshold</span>
+                )}
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={5}
+                value={expiryThreshold}
+                onChange={(e) => setExpiryThreshold(Number(e.target.value))}
+                className="w-full accent-brand"
+              />
+              <p className="text-xs text-text-muted">
+                {expiryThreshold === 0
+                  ? 'Drop stays downloadable after expiry regardless of contributions.'
+                  : `Drop only stays downloadable if at least ${expiryThreshold}% of the goal was reached.`
+                }
+              </p>
+            </div>
+          )}
         </section>
 
         {/* ── Submit ── */}

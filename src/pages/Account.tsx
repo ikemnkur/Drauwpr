@@ -95,21 +95,45 @@ export default function Account() {
           
         </div>
         {/* Membership Status */}
-        <Link
-          to="/plans"
-          className="bg-surface-3 rounded-xl p-4 flex items-center justify-between hover:bg-surface transition-colors no-underline"
-        >
-          <div className="flex items-center gap-3">
-            <TierIcon className={`w-5 h-5 ${tier.color}`} />
-            <div>
-              <p className="text-sm font-medium text-text">
-                {tier.label} Plan
-              </p>
-              <p className="text-xs text-text-muted">{tier.desc}</p>
+        <div className="bg-surface-3 rounded-xl p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <TierIcon className={`w-5 h-5 ${tier.color}`} />
+              <div>
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-medium text-text">{tier.label} Plan</p>
+                  {membership !== 'free' && (
+                    <span className="inline-flex items-center gap-1 bg-green-500/15 border border-green-500/30 text-green-400 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full">
+                      Active
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-text-muted">{tier.desc}</p>
+              </div>
             </div>
+            {membership === 'free' ? (
+              <Link
+                to="/plans"
+                className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition no-underline bg-brand hover:bg-orange-400 text-white`}
+              >
+                Upgrade
+              </Link>
+            ) : (
+              <Link
+                to="/plans"
+                className="text-xs font-semibold px-3 py-1.5 rounded-lg transition no-underline border border-surface-3 hover:border-brand/40 text-text-muted hover:text-text"
+              >
+                Manage
+              </Link>
+            )}
           </div>
-          <ChevronRight className="w-4 h-4 text-text-muted" />
-        </Link>
+          {membership !== 'free' && (
+            <div className="border-t border-surface-2 pt-2 flex items-center gap-2 text-xs text-text-muted">
+              <TierIcon className={`w-3.5 h-3.5 ${tier.color}`} />
+              <span>Ad-free experience enabled · Subscription billed monthly</span>
+            </div>
+          )}
+        </div>
 
         {/* Verification Status */}
         <Link

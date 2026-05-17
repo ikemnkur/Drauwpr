@@ -39,6 +39,8 @@ export interface Drop {
   isPublic: boolean;
   tags: string[];
   lastContributionTime?: number; // unix ms
+  expiryBehaviour: 'refund' | 'keep';
+  expiryThreshold: number | null; // 0.0–1.0 fraction of goal, null = no threshold
 }
 
 export interface Contributor {

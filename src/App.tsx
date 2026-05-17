@@ -26,6 +26,7 @@ import Explore from './pages/Explore';
 import Verification from './pages/Verification';
 import Plans from './pages/Plans';
 import EditProfile from './pages/EditProfile';
+import SubscriptionCallback from './pages/SubscriptionCallback';
 import AdminPortal from './pages/AdminPortal';
 import ForgotPassword from './pages/ForgotPasswordPage';
 import ResetPassword from './pages/ResetPasswordPage';
@@ -89,6 +90,7 @@ export default function App() {
               <Route path="/create" element={<ProtectedRoute><CreateDrop /></ProtectedRoute>} />
               <Route path="/drop/:id/edit" element={<ProtectedRoute><EditDrop /></ProtectedRoute>} />
               <Route path="/plans" element={<ProtectedRoute><Plans /></ProtectedRoute>} />
+              <Route path="/subscription/stripe" element={<ProtectedRoute><SubscriptionCallback /></ProtectedRoute>} />
               <Route path="/edit-profile" element={<ProtectedRoute><EditProfile /></ProtectedRoute>} />
             </Route>
           </Routes>
