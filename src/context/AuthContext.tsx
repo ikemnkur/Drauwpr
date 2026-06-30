@@ -18,6 +18,7 @@ interface AuthState {
   verifyTOTP: (code: string) => Promise<void>;
   useRecoveryCode: (recoveryCode: string) => Promise<void>;
   clearTwoFAChallenge: () => void;
+  googleAuth: (credential: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -132,6 +133,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(newUser);
   }, []);
 
+    // inside AuthContext
+ const googleAuth = useCallback(async (credential: string) => {
+     const res = await api.post<LoginResponse>('/api/auth/google', { credential });
+     if (res.token && res.user) {
+       const mapped = mapServerUser({ ...res.user, accountType: res.user.accountType ?? res.accountType });
+       persist(res.token, mapped);
+     }
+   }, [persist]);
+
   const clear = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
@@ -156,21 +166,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [persist]);
 
   const register = useCallback(async (username: string, email: string, password: string) => {
-    const res = await api.post<RegisterResponse>('/api/auth/register', {
-      username,
-      email,
-      password,
-      firstName: username,
-    });
-    if (res.requires2FASetup && res.tempToken) {
-      setTwoFAChallenge({ type: 'needs_setup', tempToken: res.tempToken });
-      return;
-    }
-    if (res.token && res.user) {
-      const mapped = mapServerUser(res.user);
-      persist(res.token, mapped);
-    }
-  }, [persist]);
+     await api.post<RegisterResponse>('/api/auth/register', {
+       username, email, password, firstName: username,
+     });
+     // No session yet — user must verify their email, then log in.
+   }, []);
+
+
+  // const register = useCallback(async (username: string, email: string, password: string) => {
+  //   const res = await api.post<RegisterResponse>('/api/auth/register', {
+  //     username,
+  //     email,
+  //     password,
+  //     firstName: username,
+  //   });
+  //   if (res.requires2FASetup && res.tempToken) {
+  //     setTwoFAChallenge({ type: 'needs_setup', tempToken: res.tempToken });
+  //     return;
+  //   }
+  //   if (res.token && res.user) {
+  //     const mapped = mapServerUser(res.user);
+  //     persist(res.token, mapped);
+  //   }
+  // }, [persist]);
 
   const setup2FA = useCallback(async (): Promise<{ qrUrl: string; secret: string }> => {
     if (!twoFAChallenge || twoFAChallenge.type !== 'needs_setup') {
@@ -273,6 +291,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         verifyTOTP,
         useRecoveryCode,
         clearTwoFAChallenge,
+        googleAuth
       }}
     >
       {children}

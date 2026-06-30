@@ -5,7 +5,7 @@ import { api } from '../lib/api';
 import { mapDrop, type ServerDrop } from '../hooks/useData';
 import type { Drop } from '../types';
 
-const FILE_TYPES = ['game', 'app', 'document', 'music', 'video', 'other', "link"] as const;
+const FILE_TYPES = ['game', 'app', 'document', 'music', 'video', 'other'] as const;
 
 export default function EditDrop() {
   const { id } = useParams<{ id: string }>();
@@ -15,10 +15,6 @@ export default function EditDrop() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
-
-  const [thumbnailName, setThumbnailName] = useState('');
-  const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
-  const [thumbnailPreviewUrl, setThumbnailPreviewUrl] = useState('');
 
   // Form fields
   const [title, setTitle] = useState('');
@@ -31,11 +27,6 @@ export default function EditDrop() {
   const [trailerUrl, setTrailerUrl] = useState('');
   const [linkUrl, setLinkUrl] = useState('');
   const [isMature, setIsMature] = useState(false);
-
-  const [isFileDragActive, setIsFileDragActive] = useState(false);
-  const [isThumbnailDragActive, setIsThumbnailDragActive] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadStep, setUploadStep] = useState('');
 
   useEffect(() => {
     if (!id) return;
@@ -68,136 +59,29 @@ export default function EditDrop() {
     setTagInput('');
   };
 
- 
- const handleSubmit = async (e: React.FormEvent) => {
-  e.preventDefault();
-  if (!id || saving) return;
-  setSaving(true);
-  setError('');
-
-  try {
-    let thumbnailKey: string | undefined;
-
-    // 1. Upload new thumbnail to R2 if the user selected one
-    if (thumbnailFile) {
-      setUploadStep('Requesting upload URL…');
-      const { signedUrl, key } = await api.post<{ signedUrl: string; key: string }>(
-        `/api/posts/${id}/thumbnail-upload-url`,
-        {
-          fileName: thumbnailFile.name,
-          mimeType: thumbnailFile.type || 'image/jpeg',
-        }
-      );
-
-      setUploadStep('Uploading thumbnail…');
-      await uploadToStorage(
-        signedUrl,
-        thumbnailFile,
-        thumbnailFile.type || 'image/jpeg',
-        setUploadProgress
-      );
-
-      thumbnailKey = key;
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!id || saving) return;
+    setSaving(true);
+    setError('');
+    try {
+      await api.put(`/api/drops/${id}`, {
+        title: title.trim(),
+        description: description.trim(),
+        fileType,
+        tags,
+        goalAmount: Number(goalAmount),
+        basePrice: Number(basePrice),
+        trailerUrl: trailerUrl.trim() || null,
+      });
+      setSuccess(true);
+      setTimeout(() => navigate(`/drop/${id}`), 1200);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to save changes');
+    } finally {
+      setSaving(false);
     }
-
-    // 2. Save post fields (+ new thumbnail key, which triggers old-file deletion server-side)
-    setUploadStep('Saving changes…');
-    await api.put(`/api/posts/${id}`, {
-      title: title.trim(),
-      description: description.trim(),
-      fileType,
-      mature: isMature,
-      tags,
-      trailerUrl: trailerUrl.trim() || null,
-      link: fileType === 'link' ? linkUrl.trim() || null : null,
-      ...(thumbnailKey ? { thumbnailKey } : {}),
-    });
-
-    setSuccess(true);
-    setUploadStep('');
-    setTimeout(() => navigate(`/post/${id}`), 1200);
-  } catch (err: unknown) {
-    setError(err instanceof Error ? err.message : 'Failed to save changes');
-  } finally {
-    setSaving(false);
-  }
-};
-
-   const assignPostFile = (f: File) => {
-    setFileName(f.name);
-    setPostFile(f);
-    setPostFileMime(f.type || 'application/octet-stream');
-    const mb = f.size / (1024 * 1024);
-    setFileSize(mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(1)} MB`);
   };
-
-  const assignThumbnailFile = (f: File) => {
-    setThumbnailName(f.name);
-    setThumbnailFile(f);
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      setThumbnailPreviewUrl(reader.result as string);
-    };
-    reader.readAsDataURL(f);
-  };
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    setSubmitError('');
-    assignPostFile(f);
-  };
-
-  const handleThumbnailSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    assignThumbnailFile(f);
-  };
-
-  const handleDragOver = (e: React.DragEvent<HTMLElement>) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'copy';
-  };
-
-  const handleFileDrop = (e: React.DragEvent<HTMLElement>) => {
-    e.preventDefault();
-    setIsFileDragActive(false);
-    const f = e.dataTransfer.files?.[0];
-    if (!f) return;
-    setSubmitError('');
-    assignPostFile(f);
-  };
-
-  const handleThumbnailDrop = (e: React.DragEvent<HTMLElement>) => {
-    e.preventDefault();
-    setIsThumbnailDragActive(false);
-    const f = e.dataTransfer.files?.[0];
-    if (!f) return;
-    assignThumbnailFile(f);
-  };
-
-  // helper — reuse from CreatePost
-function uploadToStorage(
-  signedUrl: string,
-  file: File,
-  mimeType: string,
-  onProgress: (pct: number) => void
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open('PUT', signedUrl);
-    xhr.setRequestHeader('Content-Type', mimeType);
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
-    };
-    xhr.onload = () =>
-      xhr.status >= 200 && xhr.status < 300
-        ? resolve()
-        : reject(new Error(`Upload failed: HTTP ${xhr.status}`));
-    xhr.onerror = () => reject(new Error('Network error during file upload'));
-    xhr.send(file);
-  });
-}
 
   if (loading) {
     return (

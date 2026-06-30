@@ -14,6 +14,14 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
+const {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+} = require('@aws-sdk/client-s3');
+const { getSignedUrl: presignUrl } = require('@aws-sdk/s3-request-presigner');
+
 // ── Burn-rate engine (matches frontend src/engine/burnRate.ts) ──
 const ENGINE_C = parseFloat(process.env.BURN_C || '0.999'); // Decay constant — admin-configurable
 const ENGINE_K = parseInt(process.env.BURN_K || '5', 10);   // Loop interval minutes — admin-configurable
@@ -227,11 +235,58 @@ async function ensurePromoSubmissionMetricsColumns(db) {
   }
 }
 
+async function ensurePostFlagsTable(db) {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS dropFlags (
+      id VARCHAR(36) NOT NULL,
+      postId VARCHAR(36) NOT NULL,
+      userId VARCHAR(10) NOT NULL,
+      reason ENUM('spam','scam','explicit','abuse','plagiarism','impersonation') NOT NULL,
+      description TEXT NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uniq_post_flag_user (postId, userId),
+      KEY idx_post_flags_post (postId),
+      KEY idx_post_flags_user (userId),
+      KEY idx_post_flags_reason (reason)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+  `);
+
+  await db.query(`ALTER TABLE dropFlags ADD COLUMN IF NOT EXISTS description TEXT NOT NULL AFTER reason`);
+}
+
 // ──────────────────────────────────────────────────────────────
 module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY = '', gcs = {}) {
-  const { storage, BUCKET_NAME, DEST_PREFIX } = gcs;
+  const { storage, BUCKET_NAME, DEST_PREFIX, publicUrl, getSignedUrl } = gcs;
 
-  ensureWalletTransactionTypeCompatibility(pool).catch(() => {});
+  const signUrl = getSignedUrl || presignUrl;
+  const toPublicUrl = (objectPath) => {
+    if (typeof publicUrl === 'function') return publicUrl(BUCKET_NAME, objectPath);
+    return null;
+  };
+
+  const normalizeObjectKey = (input) => {
+    const value = String(input || '');
+    if (!value) return '';
+
+    if (/^https?:\/\//i.test(value)) {
+      try {
+        const parsed = new URL(value);
+        const bucketPrefix = `/${BUCKET_NAME}/`;
+        if (parsed.pathname.startsWith(bucketPrefix)) {
+          return decodeURIComponent(parsed.pathname.slice(bucketPrefix.length));
+        }
+        return decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
+      } catch {
+        return value;
+      }
+    }
+
+    return value.replace(/^gs:\/\/[^/]+\//, '').replace(/^\/+/, '');
+  };
+
+  ensureWalletTransactionTypeCompatibility(pool).catch(() => { });
 
   // ============================================================
   //  DROPS — CRUD
@@ -957,7 +1012,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
           const payload = jwt.verify(hdr.split(' ')[1], process.env.JWT_SECRET || 'secret');
           userId = payload.id || payload.userId || null;
         }
-      } catch (_) {}
+      } catch (_) { }
 
       const [[drop]] = await pool.query(
         `SELECT id, creatorId, basePrice, goalAmount, actualDropTime, totalDownloads,
@@ -1750,7 +1805,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
               category: 'system',
               relatedDropId: drop.id,
               actionUrl: `/drop/${drop.id}`,
-            }).catch(() => {});
+            }).catch(() => { });
           }
         }
 
@@ -1820,7 +1875,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
               category: 'contribution_refunded',
               relatedDropId: d.id,
               actionUrl: `/drop/${d.id}`,
-            }).catch(() => {});
+            }).catch(() => { });
           }
         }
       }
@@ -1980,16 +2035,15 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       const gcsFileName = `${uuidv4()}_${safeBase}${ext}`;
       const gcsPath = `${DEST_PREFIX}/drops/${userId}/${dropId}/${gcsFileName}`;
 
-      const bucket = storage.bucket(BUCKET_NAME);
-      const file = bucket.file(gcsPath);
-
-      // Generate a signed resumable-upload URL (15 min expiry)
-      const [signedUrl] = await file.getSignedUrl({
-        version: 'v4',
-        action: 'write',
-        expires: Date.now() + 15 * 60 * 1000,
-        contentType: fileType,
-      });
+      const signedUrl = await getSignedUrl(
+        storage,
+        new PutObjectCommand({
+          Bucket: BUCKET_NAME,
+          Key: gcsPath,
+          ContentType: fileType,
+        }),
+        { expiresIn: 15 * 60 }
+      );
 
       // Store the pending path so confirm-upload can verify it
       await pool.query(
@@ -2033,15 +2087,22 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       if (drop.creatorId !== userId) return res.status(403).json({ error: 'Not the creator' });
       if (!drop.filePath) return res.status(400).json({ error: 'No upload in progress for this drop' });
 
-      // Verify the file actually exists in GCS
-      const bucket = storage.bucket(BUCKET_NAME);
-      const [exists] = await bucket.file(drop.filePath).exists();
-      if (!exists) {
+      let metadata;
+      try {
+        const head = await storage.send(new HeadObjectCommand({
+          Bucket: BUCKET_NAME,
+          Key: normalizeObjectKey(drop.filePath),
+        }));
+        metadata = {
+          size: head.ContentLength,
+          contentType: head.ContentType,
+        };
+      } catch (headErr) {
         return res.status(400).json({ error: 'File not found in storage — upload may have failed' });
       }
 
       // Get actual file metadata from GCS
-      const [metadata] = await bucket.file(drop.filePath).getMetadata();
+      // const [metadata] = await bucket.file(drop.filePath).getMetadata();
 
       const updates = {
         fileSize: metadata.size ? +metadata.size : null,
@@ -2095,15 +2156,15 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       const [[drop]] = await pool.query('SELECT filePath, title FROM drops WHERE id = ?', [dropId]);
       if (!drop || !drop.filePath) return res.status(404).json({ error: 'Drop file not found' });
 
-      const bucket = storage.bucket(BUCKET_NAME);
-      const file = bucket.file(drop.filePath);
-
-      const [signedUrl] = await file.getSignedUrl({
-        version: 'v4',
-        action: 'read',
-        expires: Date.now() + 60 * 60 * 1000, // 1 hour
-        responseDisposition: `attachment; filename="${(drop.title || 'download').replace(/"/g, '_')}"`,
-      });
+      const signedUrl = await getSignedUrl(
+        storage,
+        new GetObjectCommand({
+          Bucket: BUCKET_NAME,
+          Key: normalizeObjectKey(drop.filePath),
+          ResponseContentDisposition: `attachment; filename="${(drop.title || 'download').replace(/"/g, '_')}"`,
+        }),
+        { expiresIn: 60 * 60 }
+      );
 
       res.json({ downloadUrl: signedUrl, expiresIn: '1 hour' });
     } catch (err) {
@@ -2159,18 +2220,36 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
 
         if (!req.file) return res.status(400).json({ error: 'No banner file provided' });
 
-        // If GCS is available, upload to cloud; otherwise serve locally
+        // // If GCS is available, upload to cloud; otherwise serve locally
+        // let thumbnailUrl;
+        // if (storage) {
+        //   const ext = path.extname(req.file.originalname) || '.jpg';
+        //   const gcsPath = `${DEST_PREFIX}/banners/${userId}/${uuidv4()}${ext}`;
+        //   const bucket = storage.bucket(BUCKET_NAME);
+        //   await bucket.upload(req.file.path, {
+        //     destination: gcsPath,
+        //     metadata: { contentType: req.file.mimetype },
+        //   });
+        //   await bucket.file(gcsPath).makePublic().catch(() => { });
+        //   thumbnailUrl = `https://storage.googleapis.com/${BUCKET_NAME}/${encodeURI(gcsPath)}`;
+        //   // Clean up local temp file
+        //   fs.unlink(req.file.path, () => { });
+        // } else {
+        //   thumbnailUrl = `/uploads/banners/${userId}/${req.file.filename}`;
+        // }
+
+        // If cloud storage is available, upload to R2; otherwise serve locally
         let thumbnailUrl;
         if (storage) {
           const ext = path.extname(req.file.originalname) || '.jpg';
           const gcsPath = `${DEST_PREFIX}/banners/${userId}/${uuidv4()}${ext}`;
-          const bucket = storage.bucket(BUCKET_NAME);
-          await bucket.upload(req.file.path, {
-            destination: gcsPath,
-            metadata: { contentType: req.file.mimetype },
-          });
-          await bucket.file(gcsPath).makePublic().catch(() => {});
-          thumbnailUrl = `https://storage.googleapis.com/${BUCKET_NAME}/${encodeURI(gcsPath)}`;
+          await storage.send(new PutObjectCommand({
+            Bucket: BUCKET_NAME,
+            Key: gcsPath,
+            Body: fs.readFileSync(req.file.path),
+            ContentType: req.file.mimetype,
+          }));
+          thumbnailUrl = toPublicUrl(gcsPath) || gcsPath;
           // Clean up local temp file
           fs.unlink(req.file.path, () => {});
         } else {
@@ -2343,10 +2422,10 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
          LIMIT 200`,
         [req.user.id]
       );
-      
+
       // Calculate total earnings
       const totalEarned = rows.reduce((sum, row) => sum + (row.amount || 0), 0);
-      
+
       res.json({ earnings: rows, totalEarned });
     } catch (err) {
       console.error('GET /api/history/earnings error:', err);
@@ -2379,4 +2458,5 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
     }
   });
 
-  console.log('✅ Drauwper routes loaded')};
+  console.log('✅ Drauwper routes loaded')
+};

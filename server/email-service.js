@@ -12,8 +12,8 @@ const SES_SMTP_PORT = parseInt(process.env.SES_SMTP_PORT || "587", 10);
 const SES_SMTP_USER = process.env.SES_SMTP_USER || "";
 const SES_SMTP_PASSWORD = process.env.SES_SMTP_PASSWORD || "";
 
-const DEFAULT_FROM_EMAIL = process.env.EMAIL_FROM || "no-reply@scramblurr.com";
-const DEFAULT_FROM_NAME = process.env.EMAIL_FROM_NAME || "Scramblurr";
+const DEFAULT_FROM_EMAIL = process.env.EMAIL_FROM || "no-reply@faceblurr.com";
+const DEFAULT_FROM_NAME = process.env.EMAIL_FROM_NAME || "faceblurr";
 
 function escapeRegExp(value) {
     return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -22,6 +22,8 @@ function escapeRegExp(value) {
 function normalizeValue(value) {
     if (value === null || value === undefined) {
         return "";
+
+        
     }
     return String(value).replace(/\n/g, "<br/>");
 }
@@ -128,7 +130,7 @@ async function sendAccountVerificationEmail({
     username,
     verificationLink,
     verificationCode,
-    subject = "Verify your Scramblurr account"
+    subject = "Verify your faceblurr account"
 }) {
     return sendTemplatedEmail({
         to,
@@ -146,7 +148,7 @@ async function sendPasswordResetEmail({
     to,
     username,
     resetCode,
-    subject = "Reset your Scramblurr password"
+    subject = "Reset your faceblurr password"
 }) {
     return sendTemplatedEmail({
         to,
@@ -213,7 +215,7 @@ async function sendMonthlyNewsletterEmail({
     subject
 }) {
     const effectiveYear = year || new Date().getFullYear();
-    const effectiveSubject = subject || `Scramblurr Monthly — ${month} ${effectiveYear}`;
+    const effectiveSubject = subject || `faceblurr Monthly — ${month} ${effectiveYear}`;
 
     return sendTemplatedEmail({
         to,

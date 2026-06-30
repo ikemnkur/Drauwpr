@@ -1,6 +1,6 @@
 import { useAuth } from '../context/AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
-import { User, CreditCard, Settings, LogOut, ShieldCheck, ShieldX, ChevronRight, Star, Crown, Zap, Pencil, Eye } from 'lucide-react';
+import { User, CreditCard, Settings, LogOut, ShieldCheck, ShieldX, ChevronRight, TimerIcon, Star, Crown, Zap, Pencil, Eye } from 'lucide-react';
 
 export default function Account() {
   const { user, logout } = useAuth();
@@ -169,9 +169,17 @@ export default function Account() {
           <span className="text-xl font-bold font-mono text-brand">{user.creditBalance.toLocaleString()}</span>
         </div>
 
-        {/* Actions */}
+         {/* Actions */}
         <div className="space-y-2">
-          <button className="w-full text-left px-4 py-3 rounded-xl bg-surface-3 hover:bg-surface text-sm text-text-muted hover:text-text transition-colors flex items-center gap-2">
+            <button className="w-full text-left px-4 py-3 rounded-xl bg-surface-3 hover:bg-surface text-sm text-text-muted hover:text-text transition-colors flex items-center gap-2"
+            onClick={() => navigate('/history')}
+            >
+            <TimerIcon className="w-4 h-4" />
+            Spend History
+          </button>
+          <button className="w-full text-left px-4 py-3 rounded-xl bg-surface-3 hover:bg-surface text-sm text-text-muted hover:text-text transition-colors flex items-center gap-2"
+                  onClick={() => navigate('/account/settings')}
+          >
             <Settings className="w-4 h-4" />
             Account Settings
           </button>

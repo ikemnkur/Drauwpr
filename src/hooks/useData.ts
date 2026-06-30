@@ -13,6 +13,7 @@ export interface ServerDrop {
   fileType: Drop['fileType'];
   fileSize: number | null;
   filePath: string | null;
+  link?: string | null;
   originalFileName: string | null;
   mimeType: string | null;
   thumbnailUrl: string | null;
@@ -37,10 +38,13 @@ export interface ServerDrop {
   totalRevenue: number;
   avgRating: number | string | null;
   reviewCount: number;
+  flagCount: number;
   likeCount: number;
   dislikeCount: number;
+  views?: number;
   status: Drop['status'];
   isPublic: number | boolean;
+  mature?: number | boolean;
   created_at: string;
   updated_at?: string;
   expiry_behaviour?: 'refund' | 'keep';
@@ -70,6 +74,7 @@ export function mapDrop(d: ServerDrop): Drop & { myContribution?: number } {
     filePath: d.filePath ?? null,
     originalFileName: d.originalFileName ?? null,
     mimeType: d.mimeType ?? null,
+    link: d.link ?? null,
     scheduledDropTime: new Date(d.scheduledDropTime).getTime(),
     actualDropTime: d.actualDropTime ? new Date(d.actualDropTime).getTime() : null,
     createdAt: new Date(d.created_at).getTime(),
@@ -92,6 +97,9 @@ export function mapDrop(d: ServerDrop): Drop & { myContribution?: number } {
     reviewCount: d.reviewCount ?? 0,
     likeCount: d.likeCount ?? 0,
     dislikeCount: d.dislikeCount ?? 0,
+    views: d.views ?? 0,
+    flagCount: d.flagCount ?? 0,
+    mature: d.mature ?? 0,
     status: d.status,
     isPublic: Boolean(d.isPublic),
     tags,

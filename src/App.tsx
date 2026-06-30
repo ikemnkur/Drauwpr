@@ -38,6 +38,7 @@ import Demo from './pages/Demo';
 import DropPublicView from './pages/DropPublicView';
 import DropPublicInfo from './pages/DropPublicInfo';
 import DropAuthRoute from './components/DropAuthRoute';
+import AccountSettings from './pages/AccountSettings';
 
 export default function App() {
   return (
@@ -92,6 +93,7 @@ export default function App() {
               <Route path="/plans" element={<ProtectedRoute><Plans /></ProtectedRoute>} />
               <Route path="/subscription/stripe" element={<ProtectedRoute><SubscriptionCallback /></ProtectedRoute>} />
               <Route path="/edit-profile" element={<ProtectedRoute><EditProfile /></ProtectedRoute>} />
+              <Route path="/account/settings" element={<ProtectedRoute><AccountSettings /></ProtectedRoute>} />
             </Route>
           </Routes>
         </BrowserRouter>

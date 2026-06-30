@@ -19,7 +19,7 @@ import { useAuth } from '../context/AuthContext';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
-const FILE_TYPES = ['game', 'app', 'document', 'music', 'photo', 'video', 'other'] as const;
+const FILE_TYPES = ['game', 'app', 'document', 'music', 'photo', 'video', 'other', 'link'] as const;
 
 export default function CreateDrop() {
   const navigate = useNavigate();
@@ -32,6 +32,7 @@ export default function CreateDrop() {
   const [title, setTitle] = useState('');
   const [summary, setSummary] = useState('');
   const [fileType, setFileType] = useState<(typeof FILE_TYPES)[number]>('game');
+  const [isMature, setIsMature] = useState(false);
   const [tagInput, setTagInput] = useState('');
   const [tags, setTags] = useState<string[]>([]);
   const [goalAmount, setGoalAmount] = useState('');
@@ -111,6 +112,7 @@ export default function CreateDrop() {
         description: summary.trim(),
         fileType,
         tags,
+        mature: isMature,
         goalAmount: Number(goalAmount),
         basePrice: Number(basePrice),
         scheduledDropTime,
@@ -146,7 +148,8 @@ export default function CreateDrop() {
         );
 
         setUploadStep('Uploading file…');
-        await uploadToGCS(uploadUrl, dropFile, mimeType, setUploadProgress);
+        // await uploadToGCS(uploadUrl, dropFile, mimeType, setUploadProgress);
+        await uploadToStorage(uploadUrl, dropFile, mimeType, setUploadProgress);
 
         setUploadStep('Confirming upload…');
         await api.post(`/api/drops/${dropId}/confirm-upload`, {
@@ -250,6 +253,18 @@ export default function CreateDrop() {
             ) : (
               <p className="text-sm">Click to select a file to drop</p>
             )}
+
+            <label className="mb-6 flex items-start gap-3 rounded-xl border border-surface-3 bg-surface-2 px-4 py-3">
+              <input
+                type="checkbox"
+                checked={isMature}
+                onChange={(e) => setIsMature(e.target.checked)}
+                className="mt-1 h-4 w-4 rounded border-surface-3 text-brand focus:ring-brand"
+              />
+              <span className="text-sm text-text-muted">
+                Mark this post as mature. Mature posts will be blurred in Explore and More Posts, and common cuss words in the title will be censored.
+              </span>
+            </label>
           </button>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -453,9 +468,8 @@ export default function CreateDrop() {
         </section>
 
         {/* ── Expiry Behaviour (Premium) ── */}
-        <section className={`rounded-2xl border p-5 space-y-4 relative ${
-          isPremium ? 'bg-surface border-surface-3' : 'bg-surface/50 border-surface-3/50'
-        }`}>
+        <section className={`rounded-2xl border p-5 space-y-4 relative ${isPremium ? 'bg-surface border-surface-3' : 'bg-surface/50 border-surface-3/50'
+          }`}>
           {/* Lock overlay for non-premium */}
           {!isPremium && (
             <div className="absolute inset-0 rounded-2xl bg-surface/60 backdrop-blur-[1px] flex flex-col items-center justify-center gap-2 z-10">
@@ -479,13 +493,12 @@ export default function CreateDrop() {
               type="button"
               disabled={!isPremium}
               onClick={() => isPremium && setExpiryBehaviour('refund')}
-              className={`relative text-left rounded-xl border-2 p-4 transition ${
-                !isPremium
+              className={`relative text-left rounded-xl border-2 p-4 transition ${!isPremium
                   ? 'border-surface-3 opacity-50 cursor-not-allowed'
                   : expiryBehaviour === 'refund'
-                  ? 'border-brand bg-brand/10'
-                  : 'border-surface-3 hover:border-surface-3/80'
-              }`}
+                    ? 'border-brand bg-brand/10'
+                    : 'border-surface-3 hover:border-surface-3/80'
+                }`}
             >
               {expiryBehaviour === 'refund' && isPremium && (
                 <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-brand" />
@@ -501,13 +514,12 @@ export default function CreateDrop() {
               type="button"
               disabled={!isPremium}
               onClick={() => isPremium && setExpiryBehaviour('keep')}
-              className={`relative text-left rounded-xl border-2 p-4 transition ${
-                !isPremium
+              className={`relative text-left rounded-xl border-2 p-4 transition ${!isPremium
                   ? 'border-surface-3 opacity-50 cursor-not-allowed'
                   : expiryBehaviour === 'keep'
-                  ? 'border-brand bg-brand/10'
-                  : 'border-surface-3 hover:border-surface-3/80'
-              }`}
+                    ? 'border-brand bg-brand/10'
+                    : 'border-surface-3 hover:border-surface-3/80'
+                }`}
             >
               {expiryBehaviour === 'keep' && isPremium && (
                 <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-brand" />
@@ -575,11 +587,10 @@ export default function CreateDrop() {
           <button
             type="submit"
             disabled={!canSubmit}
-            className={`px-8 py-3 rounded-xl font-semibold text-sm transition flex items-center gap-2 ${
-              canSubmit
+            className={`px-8 py-3 rounded-xl font-semibold text-sm transition flex items-center gap-2 ${canSubmit
                 ? 'bg-brand text-white hover:bg-brand-dark shadow-lg shadow-brand/20'
                 : 'bg-surface-3 text-text-muted cursor-not-allowed'
-            }`}
+              }`}
           >
             <Flame className="w-4 h-4" />
             {submitting ? (uploadStep || 'Creating…') : 'Create Drop'}
@@ -591,7 +602,7 @@ export default function CreateDrop() {
 }
 
 /** Upload a file to GCS via a pre-signed PUT URL, reporting progress 0→100. */
-function uploadToGCS(
+function uploadToStorage(
   signedUrl: string,
   file: File,
   mimeType: string,

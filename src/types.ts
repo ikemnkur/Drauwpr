@@ -11,6 +11,7 @@ export interface Drop {
   fileSize: string;             // human-readable, e.g. "12.4 MB"
   fileSizeBytes: number | null; // raw bytes from DB
   filePath: string | null;      // S3 key or local path
+  link: string | null;          // optional external link (e.g. YouTube, Google Drive)
   originalFileName: string | null;
   mimeType: string | null;
   scheduledDropTime: number;    // unix ms
@@ -37,6 +38,9 @@ export interface Drop {
   dislikeCount: number;
   status: 'draft' | 'pending' | 'active' | 'dropped' | 'expired' | 'removed';
   isPublic: boolean;
+  mature: number | boolean;
+  flagCount: number;
+  views: number;
   tags: string[];
   lastContributionTime?: number; // unix ms
   expiryBehaviour: 'refund' | 'keep';

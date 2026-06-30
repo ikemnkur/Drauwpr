@@ -1,50 +1,69 @@
-import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { LogIn, Eye, EyeOff, ShieldCheck, KeyRound, QrCode, Copy, Check } from 'lucide-react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
+import GoogleSignInButton from '../components/GoogleSignInButton';
+import {
+  LogIn, Eye, EyeOff, ShieldCheck, KeyRound, Mail,
+  Loader2, RefreshCcw, CheckCircle, CheckCircle2, AlertCircle,
+} from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { ApiError } from '../lib/api';
+import { api, ApiError } from '../lib/api';
 
-type Step = 'credentials' | 'totp' | 'setup_qr' | 'setup_confirm' | 'recovery_codes';
+type Step = 'credentials' | 'email_verification' | 'totp';
+
+interface ApiResponse {
+  success?: boolean;
+  message?: string;
+}
+
+function validateEmail(value: string) {
+  const i = value.indexOf('@');
+  return i > 0 && value.lastIndexOf('.') > i && !value.endsWith('.') && !value.endsWith('@');
+}
 
 export default function Login() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPass, setShowPass] = useState(false);
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const { login, twoFAChallenge, verifyTOTP, useRecoveryCode, isAuthenticated, googleAuth } = useAuth();
+
+  // ── Derived initial state from URL (?email=&code=) ──
+  const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+  const emailFromUrl = queryParams.get('email') || '';
+  const codeFromUrl = queryParams.get('code') || '';
+
+  const [step, setStep] = useState<Step>('credentials');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [step, setStep] = useState<Step>('credentials');
 
-  // TOTP verify state
+  // ── Credentials ──
+  const [email, setEmail] = useState(emailFromUrl);
+  const [password, setPassword] = useState('');
+  const [showPass, setShowPass] = useState(false);
+
+  // ── Email verification ──
+  const [verificationCode, setVerificationCode] = useState(codeFromUrl);
+  const [emailVerifying, setEmailVerifying] = useState(false);
+  const [emailSending, setEmailSending] = useState(false);
+  const [emailStatus, setEmailStatus] = useState('');
+  const [emailStatusType, setEmailStatusType] = useState<'' | 'success' | 'error' | 'info'>('');
+  const [autoVerifyAttempted, setAutoVerifyAttempted] = useState(false);
+
+  // ── TOTP (only if the user has 2FA enabled) ──
   const [totpCode, setTotpCode] = useState('');
   const [showRecovery, setShowRecovery] = useState(false);
   const [recoveryInput, setRecoveryInput] = useState('');
 
-  // Setup state
-  const [qrUrl, setQrUrl] = useState('');
-  const [secret, setSecret] = useState('');
-  const [setupCode, setSetupCode] = useState('');
-  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
-  const [copied, setCopied] = useState(false);
-
-  const { login, twoFAChallenge, setup2FA, enable2FA, verifyTOTP, useRecoveryCode } = useAuth();
-  const navigate = useNavigate();
-
-  // React to context challenge state changes
+  // React to a 2FA challenge raised by the context during login()
   useEffect(() => {
-    if (!twoFAChallenge || step !== 'credentials') return;
-    if (twoFAChallenge.type === 'needs_totp') {
-      setStep('totp');
-    } else if (twoFAChallenge.type === 'needs_setup') {
-      setStep('setup_qr');
-    }
-  }, [twoFAChallenge, step]);
+    if (twoFAChallenge?.type === 'needs_totp') setStep('totp');
+  }, [twoFAChallenge]);
 
-  // When the app becomes authenticated, navigate away
-  const { isAuthenticated } = useAuth();
+  // Navigate away once authenticated
   useEffect(() => {
     if (isAuthenticated) navigate('/explore');
   }, [isAuthenticated, navigate]);
 
+  // ── Credentials submit ──
   const handleCredentials = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -52,45 +71,89 @@ export default function Login() {
     setLoading(true);
     try {
       await login(email, password);
-      // navigation handled by the isAuthenticated effect or the twoFAChallenge effect
+      // login() may: authenticate, raise a TOTP challenge (handled by effect),
+      // or throw EMAIL_NOT_VERIFIED which we catch below.
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Login failed. Please try again.');
+      if (err instanceof ApiError && (err.status === 403 || (err.data as { code?: string })?.code === 'EMAIL_NOT_VERIFIED')) {
+        // Account exists but email isn't verified — send them to the verify step.
+        setStep('email_verification');
+        void handleResendCode(email);
+      } else {
+        setError(err instanceof ApiError ? err.message : 'Login failed. Please try again.');
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  const handleLoadQR = async () => {
+  
+  const handleGoogle = async (credential: string) => {
     setError('');
     setLoading(true);
     try {
-      const result = await setup2FA();
-      setQrUrl(result.qrUrl);
-      setSecret(result.secret);
-      setStep('setup_confirm');
+      await googleAuth(credential);
+      navigate('/explore');
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to load QR code');
+      setError(err instanceof ApiError ? err.message : 'Google sign-in failed.');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleEnable = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    if (setupCode.length !== 6) { setError('Enter the 6-digit code from your authenticator app'); return; }
-    setLoading(true);
+  // ── Email verification ──
+  const handleVerifyEmail = useCallback(async (overrideEmail?: string, overrideCode?: string) => {
+    const emailVal = (overrideEmail ?? email).trim();
+    const codeVal = (overrideCode ?? verificationCode).trim();
+
+    if (!emailVal || !validateEmail(emailVal)) { setEmailStatus('Please enter a valid email.'); setEmailStatusType('error'); return; }
+    if (!codeVal) { setEmailStatus('Please enter the verification code.'); setEmailStatusType('error'); return; }
+
+    setEmailVerifying(true);
+    setEmailStatus('Verifying your email...'); setEmailStatusType('info');
     try {
-      const result = await enable2FA(setupCode);
-      setRecoveryCodes(result.recoveryCodes);
-      setStep('recovery_codes');
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Invalid code. Please try again.');
+      const r = await api.post<ApiResponse>('/api/auth/verify-email', { email: emailVal, code: codeVal });
+      if (r.success) {
+        setEmailStatus('Email verified! Signing you in...'); setEmailStatusType('success');
+        // Email is confirmed; complete sign-in with the password they already entered.
+        if (password) {
+          await login(emailVal, password);
+        } else {
+          window.setTimeout(() => setStep('credentials'), 800);
+        }
+      } else {
+        setEmailStatus(r.message || 'Verification failed.'); setEmailStatusType('error');
+      }
+    } catch (e) {
+      setEmailStatus(e instanceof ApiError ? e.message : 'Verification failed.'); setEmailStatusType('error');
     } finally {
-      setLoading(false);
+      setEmailVerifying(false);
+    }
+  }, [email, verificationCode, password, login]);
+
+  // Auto-verify when arriving from an email link
+  useEffect(() => {
+    if (autoVerifyAttempted || !emailFromUrl || !codeFromUrl) return;
+    setAutoVerifyAttempted(true);
+    setStep('email_verification');
+    void handleVerifyEmail(emailFromUrl, codeFromUrl);
+  }, [autoVerifyAttempted, emailFromUrl, codeFromUrl, handleVerifyEmail]);
+
+  const handleResendCode = async (overrideEmail?: string) => {
+    const emailVal = (overrideEmail ?? email).trim();
+    if (!emailVal || !validateEmail(emailVal)) { setEmailStatus('Please enter a valid email.'); setEmailStatusType('error'); return; }
+    setEmailSending(true);
+    setEmailStatus('Sending a new code...'); setEmailStatusType('info');
+    try {
+      const r = await api.post<ApiResponse>('/api/auth/resend-verification', { email: emailVal });
+      setEmailStatus(r.message || 'New code sent!'); setEmailStatusType('success');
+    } catch (e) {
+      setEmailStatus(e instanceof ApiError ? e.message : 'Failed to resend code.'); setEmailStatusType('error');
+    } finally {
+      setEmailSending(false);
     }
   };
 
+  // ── TOTP ──
   const handleVerifyTOTP = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -119,20 +182,21 @@ export default function Login() {
     }
   };
 
-  const copyRecoveryCodes = () => {
-    navigator.clipboard.writeText(recoveryCodes.join('\n'));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+  const statusStyles = {
+    success: 'bg-green-500/10 border-green-500/30 text-green-400',
+    error: 'bg-danger/10 border-danger/30 text-danger',
+    info: 'bg-brand/10 border-brand/30 text-brand',
+    '': 'hidden',
+  } as const;
 
-  // ── Step: credentials ────────────────────────────────────────────────────
+  // ── Step: credentials ──
   if (step === 'credentials') {
     return (
       <div className="max-w-sm mx-auto py-12">
         <div className="text-center mb-8">
           <LogIn className="w-10 h-10 text-brand mx-auto mb-3" />
           <h1 className="text-2xl font-bold text-text">Welcome Back</h1>
-          <p className="text-sm text-text-muted">Sign in to your Drauwper account</p>
+          <p className="text-sm text-text-muted">Sign in to your Prolifer8 account</p>
         </div>
         <form onSubmit={handleCredentials} className="bg-surface-2 rounded-2xl p-6 space-y-4">
           {error && (
@@ -158,6 +222,15 @@ export default function Login() {
             className="w-full py-2.5 rounded-lg bg-brand text-white font-semibold text-sm hover:bg-brand-dark transition-colors disabled:opacity-50">
             {loading ? 'Signing in…' : 'Sign In'}
           </button>
+
+          <div className="flex items-center gap-2 py-1">
+            <div className="flex-1 h-px bg-surface-3" />
+            <span className="text-xs text-text-muted">or</span>
+            <div className="flex-1 h-px bg-surface-3" />
+          </div>
+
+          <GoogleSignInButton onCredential={handleGoogle} />
+
           <div className="text-xs text-text-muted text-center space-y-1">
             <p>Don&apos;t have an account?{' '}<Link to="/register" className="text-brand hover:underline">Register</Link></p>
             <p><Link to="/forgot-password" className="text-brand hover:underline">Forgot password?</Link></p>
@@ -167,7 +240,60 @@ export default function Login() {
     );
   }
 
-  // ── Step: TOTP verify ────────────────────────────────────────────────────
+  // ── Step: email verification ──
+  if (step === 'email_verification') {
+    return (
+      <div className="max-w-sm mx-auto py-12">
+        <div className="text-center mb-8">
+          <Mail className="w-10 h-10 text-brand mx-auto mb-3" />
+          <h1 className="text-2xl font-bold text-text">Verify Your Email</h1>
+          <p className="text-sm text-text-muted">Enter the code we sent to {email || 'your email'}</p>
+        </div>
+        <div className="bg-surface-2 rounded-2xl p-6 space-y-4">
+          {emailStatus && (
+            <div className={`border rounded-xl px-3 py-2.5 text-sm flex items-start gap-2 ${statusStyles[emailStatusType]}`}>
+              {emailStatusType === 'success' ? <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />
+                : emailStatusType === 'error' ? <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                  : <Loader2 className="w-4 h-4 mt-0.5 shrink-0 animate-spin" />}
+              <span>{emailStatus}</span>
+            </div>
+          )}
+          <div>
+            <label className="block text-xs text-text-muted mb-1">Verification Code</label>
+            <input
+              type="text" inputMode="numeric" value={verificationCode}
+              onChange={(e) => setVerificationCode(e.target.value.trim())}
+              disabled={emailVerifying}
+              placeholder="Enter the code from your email"
+              className="w-full bg-surface-3 border border-surface-3 rounded-lg px-3 py-2.5 text-sm text-text focus:outline-none focus:border-brand disabled:opacity-70"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleVerifyEmail()}
+            disabled={emailVerifying}
+            className="w-full py-2.5 rounded-lg bg-brand text-white font-semibold text-sm hover:bg-brand-dark transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {emailVerifying ? <><Loader2 className="w-4 h-4 animate-spin" /> Verifying...</> : 'Verify Email'}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleResendCode()}
+            disabled={emailSending || emailVerifying}
+            className="w-full py-2.5 rounded-lg bg-surface-3 text-text font-medium text-sm hover:bg-surface transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {emailSending ? <><Loader2 className="w-4 h-4 animate-spin" /> Sending...</> : <><RefreshCcw className="w-4 h-4" /> Resend Code</>}
+          </button>
+          <button type="button" onClick={() => setStep('credentials')} className="w-full text-xs text-text-muted hover:text-brand text-center">
+            Back to sign in
+          </button>
+          <p className="text-xs text-text-muted text-center">Check your inbox and spam folder.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Step: TOTP (only reached if the account has 2FA enabled) ──
   if (step === 'totp') {
     return (
       <div className="max-w-sm mx-auto py-12">
@@ -218,98 +344,5 @@ export default function Login() {
     );
   }
 
-  // ── Step: 2FA setup — scan QR ─────────────────────────────────────────────
-  if (step === 'setup_qr') {
-    return (
-      <div className="max-w-sm mx-auto py-12">
-        <div className="text-center mb-8">
-          <QrCode className="w-10 h-10 text-brand mx-auto mb-3" />
-          <h1 className="text-2xl font-bold text-text">Set Up 2FA</h1>
-          <p className="text-sm text-text-muted">Your account requires two-factor authentication</p>
-        </div>
-        <div className="bg-surface-2 rounded-2xl p-6 space-y-4 text-center">
-          {error && (
-            <div className="bg-danger/10 border border-danger/30 text-danger text-sm rounded-lg px-3 py-2">{error}</div>
-          )}
-          <p className="text-sm text-text-muted">
-            Download <strong className="text-text">Google Authenticator</strong> or <strong className="text-text">Authy</strong>, then tap the button below to get your QR code.
-          </p>
-          <button onClick={handleLoadQR} disabled={loading}
-            className="w-full py-2.5 rounded-lg bg-brand text-white font-semibold text-sm hover:bg-brand-dark transition-colors disabled:opacity-50">
-            {loading ? 'Generating QR…' : 'Generate QR Code'}
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Step: 2FA setup — confirm code ───────────────────────────────────────
-  if (step === 'setup_confirm') {
-    return (
-      <div className="max-w-sm mx-auto py-12">
-        <div className="text-center mb-8">
-          <QrCode className="w-10 h-10 text-brand mx-auto mb-3" />
-          <h1 className="text-2xl font-bold text-text">Scan QR Code</h1>
-          <p className="text-sm text-text-muted">Scan with your authenticator app, then confirm</p>
-        </div>
-        <div className="bg-surface-2 rounded-2xl p-6 space-y-4">
-          {error && (
-            <div className="bg-danger/10 border border-danger/30 text-danger text-sm rounded-lg px-3 py-2">{error}</div>
-          )}
-          {qrUrl && (
-            <div className="flex justify-center">
-              <img src={qrUrl} alt="2FA QR Code" className="w-48 h-48 rounded-lg" />
-            </div>
-          )}
-          <details className="text-xs text-text-muted">
-            <summary className="cursor-pointer hover:text-brand">Can&apos;t scan? Enter manually</summary>
-            <p className="mt-1 font-mono bg-surface-3 rounded px-2 py-1 break-all select-all">{secret}</p>
-          </details>
-          <form onSubmit={handleEnable} className="space-y-3">
-            <div>
-              <label className="block text-xs text-text-muted mb-1">Confirm — enter 6-digit code</label>
-              <input type="text" inputMode="numeric" maxLength={6} value={setupCode}
-                onChange={(e) => setSetupCode(e.target.value.replace(/\D/g, ''))}
-                placeholder="000000" autoFocus
-                className="w-full bg-surface-3 border border-surface-3 rounded-lg px-3 py-3 text-xl text-center tracking-widest text-text font-mono focus:outline-none focus:border-brand" />
-            </div>
-            <button type="submit" disabled={loading}
-              className="w-full py-2.5 rounded-lg bg-brand text-white font-semibold text-sm hover:bg-brand-dark transition-colors disabled:opacity-50">
-              {loading ? 'Activating…' : 'Activate 2FA'}
-            </button>
-          </form>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Step: recovery codes ─────────────────────────────────────────────────
-  if (step === 'recovery_codes') {
-    return (
-      <div className="max-w-sm mx-auto py-12">
-        <div className="text-center mb-8">
-          <KeyRound className="w-10 h-10 text-brand mx-auto mb-3" />
-          <h1 className="text-2xl font-bold text-text">Save Recovery Codes</h1>
-          <p className="text-sm text-text-muted">Store these somewhere safe — each can only be used once</p>
-        </div>
-        <div className="bg-surface-2 rounded-2xl p-6 space-y-4">
-          <div className="bg-surface-3 rounded-lg p-3 space-y-1">
-            {recoveryCodes.map((c) => (
-              <p key={c} className="font-mono text-sm text-text tracking-wider">{c}</p>
-            ))}
-          </div>
-          <button onClick={copyRecoveryCodes}
-            className="w-full flex items-center justify-center gap-2 py-2 rounded-lg border border-surface-3 text-sm text-text-muted hover:text-text hover:border-brand transition-colors">
-            {copied ? <><Check className="w-4 h-4 text-success" /> Copied!</> : <><Copy className="w-4 h-4" /> Copy All</>}
-          </button>
-          <p className="text-xs text-text-muted text-center">
-            2FA is now active on your account. You will be redirected shortly.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   return null;
 }
-

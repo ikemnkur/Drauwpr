@@ -12,11 +12,6 @@ const { authenticator } = require('otplib');
 const QRCode = require('qrcode');
 const crypto = require('crypto');
 
-
-const { OAuth2Client } = require('google-auth-library');
-const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-
-
 // const multer = require('multer');
 const axios = require('axios');
 const fs = require('fs');
@@ -144,7 +139,6 @@ const corsOptions = {
       // "https://servers4sqldb.uc.r.appspot.com",
       // "https://orca-app-j32vd.ondigitalocean.app",
       // "https://monkfish-app-mllt8.ondigitalocean.app/",
-      "https://69960e6b8b6451108f18d9560221fb5e.r2.cloudflarestorage.com",
       "https://editor-pavement-encircle.ngrok-free.dev",
       "http://localhost:5173",
       "http://localhost:5174",
@@ -492,265 +486,78 @@ server.get(PROXY + '/api/crypto-rate', async (req, res) => {
 // Authentication Routes
 // ----------------------------------------------------
 
-
-
-// ----------------------------------------------------
-// Authentication Routes
-// ----------------------------------------------------
-
 // Custom authentication route
 server.post(PROXY + '/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
 
+    // Validate input
     if (!email || !password) {
-      return res.status(400).json({ success: false, message: 'Email and password are required' });
+      return res.status(400).json({
+        success: false,
+        message: 'Email and password are required'
+      });
     }
 
-    const users = await knex('userData').where('email', email).select('*');
+    const users = await knex('userData')
+      .where('email', email)
+      .select('*');
+
     const user = users[0];
 
-    console.log("User found:", user );
-
     if (!user) {
-      return res.status(401).json({ success: false, message: 'Invalid credentials' });
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials'
+      });
     }
 
+    // Check if user is banned
     if (user.isBanned) {
-      return res.status(403).json({ success: false, message: 'Account is banned', banReason: user.banReason });
-    }
-
-    // Google-only accounts have no usable password hash — guide them to the right button
-    if (!user.passwordHash) {
       return res.status(403).json({
         success: false,
-        code: 'USE_GOOGLE_SIGNIN',
-        message: 'This account uses Sign in with Google. Please use that option.',
+        message: 'Account is banned',
+        banReason: user.banReason
       });
     }
 
+    // Compare password with hash
     const isValidPassword = await bcrypt.compare(password, user.passwordHash);
-    if (!isValidPassword) {
-      return res.status(401).json({ success: false, message: 'Invalid credentials' });
-    }
 
-    // ── Email verification gate ──
-    // Adjust the column/flag to match your schema. This assumes an `emailVerified`
-    // boolean; if you instead track it via the `verification` field, swap the check.
-    if (!user.verification) {
-      return res.status(403).json({
-        success: false,
-        code: 'EMAIL_NOT_VERIFIED',
-        message: 'Please verify your email before signing in.',
-      });
-    }
+    if (isValidPassword) {
+      // Update last login
+      const currentDateTime = new Date().toISOString().slice(0, 19).replace('T', ' ');
+      await knex('userData')
+        .where('email', email)
+        .update({ loginStatus: true, lastLogin: currentDateTime });
 
-    // Update last login
-    const currentDateTime = new Date().toISOString().slice(0, 19).replace('T', ' ');
-    await knex('userData').where('email', email).update({ loginStatus: true, lastLogin: currentDateTime });
-
-    // ── 2FA is OPTIONAL — only challenge users who have enabled it ──
-    if (user.twoFactorEnabled) {
+      // Issue a short-lived temp token for the 2FA step
       const tempToken = jwt.sign(
-        { id: user.id, email: user.email, stage: 'pre_2fa' },
+        { id: user.id, email: user.email, stage: user.twoFactorEnabled ? 'pre_2fa' : 'pre_2fa_setup' },
         process.env.JWT_SECRET,
         { expiresIn: '10m' }
       );
+
+      if (!user.twoFactorEnabled) {
+        return res.json({ requires2FASetup: true, tempToken });
+      }
       return res.json({ requiresTOTP: true, tempToken });
+    } else {
+      res.status(401).json({
+        success: false,
+        message: 'Invalid credentials'
+      });
     }
-
-    // ── Default path: issue a full session ──
-    const token = jwt.sign(
-      { id: user.id, email: user.email, username: user.username, credits: user.credits },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
-    );
-
-    const userData = { ...user };
-    delete userData.passwordHash;
-
-    return res.json({
-      success: true,
-      token,
-      tokenExpiry: new Date(Date.now() + 7 * 24 * 3600 * 1000),
-      user: userData,
-      accountType: user.accountType,
-      message: 'Login successful',
-    });
   } catch (error) {
     console.error('Login error:', error);
-    return res.status(500).json({ success: false, message: 'Server error occurred during login' });
-  }
-});
-
-server.post(PROXY + '/api/auth/google', async (req, res) => {
-  try {
-    const { credential } = req.body;
-    if (!credential) {
-      return res.status(400).json({ success: false, message: 'Missing Google credential' });
-    }
-
-    // Verify the ID token against Google's public keys + your client ID
-    let payload;
-    try {
-      const ticket = await googleClient.verifyIdToken({
-        idToken: credential,
-        audience: process.env.GOOGLE_CLIENT_ID,
-      });
-      payload = ticket.getPayload();
-    } catch (e) {
-      return res.status(401).json({ success: false, message: 'Invalid Google token' });
-    }
-
-    // Optional but recommended: require a verified email
-    if (!payload.email_verified) {
-      return res.status(403).json({ success: false, message: 'Google email not verified' });
-    }
-
-    const { email, given_name, family_name, picture, sub: googleId } = payload;
-
-    // Look up existing user by email
-    const existing = await knex('userData').where('email', email).first();
-
-    if (existing) {
-      if (existing.isBanned) {
-        return res.status(403).json({ success: false, message: 'Account is banned' });
-      }
-      // Issue your normal session token. If you keep 2FA for password users,
-      // you can skip it for Google sign-in since Google already authenticated them.
-      const token = jwt.sign(
-        { id: existing.id, email: existing.email },
-        process.env.JWT_SECRET,
-        { expiresIn: '7d' }
-      );
-      await knex('userData').where('id', existing.id).update({
-        loginStatus: true,
-        lastLogin: new Date().toISOString().slice(0, 19).replace('T', ' '),
-        updatedAt: Date.now(),
-      });
-      return res.status(200).json({ success: true, token });
-    }
-
-    // Create a new user (no password — this is a Google-only account)
-    const generateId = () => Math.random().toString(36).substring(2, 12).toUpperCase();
-    const userId = generateId();
-    const currentTime = Date.now();
-    const currentDateTime = new Date().toISOString().slice(0, 19).replace('T', ' ');
-
-    // Derive a unique-ish username from the email local part
-    let baseUsername = (email.split('@')[0] || 'user').replace(/[^a-zA-Z0-9_]/g, '');
-    let username = baseUsername;
-    let n = 0;
-    while (await knex('userData').where('username', username).first()) {
-      n += 1;
-      username = `${baseUsername}${n}`;
-    }
-
-    const insertData = {
-      id: userId,
-      loginStatus: true,
-      lastLogin: currentDateTime,
-      accountType: 'free',
-      username,
-      email,
-      firstName: given_name || '',
-      lastName: family_name || '',
-      phoneNumber: '',
-      birthDate: null,
-      encryptionKey: `enc_key_${currentTime}`,
-      credits: 100,
-      reportCount: 0,
-      isBanned: false,
-      banReason: '',
-      banDate: null,
-      banDuration: null,
-      createdAt: currentTime,
-      updatedAt: currentTime,
-      passwordHash: '',            // no local password
-      googleId,                    // store the Google subject id (see note below)
-      authProvider: 'google',      // optional: track how they signed up
-      twoFactorEnabled: false,
-      twoFactorSecret: '',
-      recoveryCodes: JSON.stringify([]),
-      profilePicture: picture || `https://i.pravatar.cc/150?img=${Math.floor(Math.random() * 70) + 1}`,
-      bio: '',
-      socialLinks: JSON.stringify({}),
-      verification: 'true',        // Google verified the email
-    };
-
-    const { sql, values } = buildInsert('userData', insertData);
-    await knex.raw(sql, values);
-
-    const token = jwt.sign(
-      { id: userId, email },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
-
-    return res.status(201).json({ success: true, token });
-  } catch (error) {
-    console.error('Google auth error:', error);
-    return res.status(500).json({ success: false, message: 'Server error during Google sign-in' });
+    res.status(500).json({
+      success: false,
+      message: 'Server error occurred during login'
+    });
   }
 });
 
 
-
-const DEFAULT_EMAIL_NOTIFICATION_PREFS = {
-  marketing: false,
-  productUpdates: true,
-  security: true,
-  activity: true,
-};
-
-const ACCOUNT_TYPE_VALUES = new Set(['personal', 'creator', 'business', 'private']);
-let accountSettingsColumnsEnsured = false;
-const pendingPhoneOtps = new Map();
-const pendingAccount2FASetups = new Map();
-
-function normalizeAccountType(value) {
-  const normalized = String(value || '').trim().toLowerCase();
-  return ACCOUNT_TYPE_VALUES.has(normalized) ? normalized : null;
-}
-
-function parseEmailNotificationPrefs(raw) {
-  try {
-    const parsed = typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {});
-    return {
-      marketing: Boolean(parsed.marketing),
-      productUpdates: parsed.productUpdates == null ? true : Boolean(parsed.productUpdates),
-      security: parsed.security == null ? true : Boolean(parsed.security),
-      activity: parsed.activity == null ? true : Boolean(parsed.activity),
-    };
-  } catch {
-    return { ...DEFAULT_EMAIL_NOTIFICATION_PREFS };
-  }
-}
-
-async function ensureAccountSettingsColumns() {
-  if (accountSettingsColumnsEnsured) return;
-
-  const [rows] = await knex.raw(
-    `SELECT COLUMN_NAME FROM information_schema.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE()
-       AND TABLE_NAME = 'userData'
-       AND COLUMN_NAME IN ('accountType', 'smsAlertsEnabled', 'phoneVerified', 'emailNotifications')`
-  );
-
-  const existing = new Set((rows || []).map((r) => r.COLUMN_NAME));
-  const alters = [];
-
-  if (!existing.has('accountType')) alters.push('ADD COLUMN accountType VARCHAR(32) DEFAULT NULL');
-  if (!existing.has('smsAlertsEnabled')) alters.push('ADD COLUMN smsAlertsEnabled TINYINT(1) NOT NULL DEFAULT 0');
-  if (!existing.has('phoneVerified')) alters.push('ADD COLUMN phoneVerified TINYINT(1) NOT NULL DEFAULT 0');
-  if (!existing.has('emailNotifications')) alters.push('ADD COLUMN emailNotifications TEXT DEFAULT NULL');
-
-  if (alters.length > 0) {
-    await knex.raw(`ALTER TABLE userData ${alters.join(', ')}`);
-  }
-
-  accountSettingsColumnsEnsured = true;
-}
 
 // Custom fetch account details route
 server.post(PROXY + '/api/user', authenticateToken, async (req, res) => {
@@ -850,8 +657,6 @@ server.put(PROXY + '/api/users/profile', authenticateToken, async (req, res) => 
     const { email } = req.user; // Get email from authenticated token
     const { bio, bioVideoUrl, bannerUrl, profilePicture, socialLinks } = req.body;
 
-    // const normalizedBannerRef = normalizeStoredAssetReference(bannerUrl);
-
     // Validate input (you can add more validation as needed)
     if (!email) {
       return res.status(400).json({
@@ -859,8 +664,6 @@ server.put(PROXY + '/api/users/profile', authenticateToken, async (req, res) => 
         message: 'Email is required'
       });
     }
-
-    console.log("Banner URL:", bannerUrl, "Normalized:", normalizedBannerRef);
 
     // Update user profile in the database
     await knex('userData')
@@ -1887,8 +1690,7 @@ const ensurePromoSubmissionsTable = async () => {
       title VARCHAR(150) NOT NULL,
       description TEXT,
       targetDropId VARCHAR(255) DEFAULT NULL,
-      mediaUrl VARCHAR(500) DEFAULT NULL,
-      targetUrl VARCHAR(500) DEFAULT NULL,
+      mediaUrl TEXT,
       ctaText VARCHAR(255) DEFAULT NULL,
       budgetUsd DECIMAL(10,2) DEFAULT 0,
       assetPath VARCHAR(255) DEFAULT NULL,
@@ -4188,6 +3990,7 @@ FetchRecentTransactionsCronByChain('SOL');
 
 
 
+// Google Could Strage configuration for banner uploads
 
 // ######################## POST TRANSACTION SCREENSHOT ###############################
 // todo: change the route below to /transaction-screenshot
@@ -4195,29 +3998,10 @@ FetchRecentTransactionsCronByChain('SOL');
 const db = require('./config/db');
 // const path = require('path');
 const Busboy = require('busboy'); // v1+ exports a function, not a class
-// const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
-// const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { setDefaultResultOrder } = require('dns');
 const { waitForDebugger } = require('inspector');
-
-//  CloudFlare R2 Storage configuration for banner uploads:
-const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
-const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
-const { randomUUID } = require('crypto');
-
-const r2 = new S3Client({
-  region: 'auto',
-  endpoint: process.env.R2_ENDPOINT, // https://<acct>.r2.cloudflarestorage.com
-  credentials: {
-    accessKeyId: process.env.R2_ACCESS_KEY_ID,
-    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
-  },
-  // avoids the CRC32 checksum header issue you hit earlier with browser PUTs
-  requestChecksumCalculation: 'WHEN_REQUIRED',
-});
-const R2_BUCKET = process.env.R2_BUCKET;          // e.g. prolifer8-app
-const R2_PUBLIC_BASE = process.env.R2_PUBLIC_BASE; // your public/CDN base for thumbnails
-
 
 const RAW_R2_ENDPOINT = process.env.R2_ENDPOINT || process.env.R2_S3_ENDPOINT || '';
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || '';
@@ -4267,6 +4051,7 @@ function publicUrl(bucket, filepath) {
   }
   return `/${bucket}/${encodeURI(objectPath)}`;
 }
+
 
 // // ######################## POST TRANSACTION SCREENSHOT ###############################
 // // todo: change the route below to /transaction-screenshot
@@ -4582,6 +4367,14 @@ server.post(PROXY + '/api/profile-picture/:username', authenticateToken, async (
     return res.status(400).json({ message: 'Invalid multipart/form-data request' });
   }
 
+  // let uploadDone = false;
+  // let writeStream;
+  // let gcsFilePath = '';
+  // let mimeTypeGlobal = '';
+  // let hadFile = false;
+  // let aborted = false;
+
+
   let uploadDone = false;
   let gcsFilePath = '';
   let mimeTypeGlobal = '';
@@ -4591,6 +4384,7 @@ server.post(PROXY + '/api/profile-picture/:username', authenticateToken, async (
   if (!storage) {
     return res.status(503).json({ message: 'Cloud storage not configured' });
   }
+
 
   busboy.on('file', (fieldname, file, info) => {
     hadFile = true;
@@ -4626,25 +4420,30 @@ server.post(PROXY + '/api/profile-picture/:username', authenticateToken, async (
     gcsFilePath = `${DEST_PREFIX}/profile_pics/${finalName}`;
     mimeTypeGlobal = mimeType || 'application/octet-stream';
 
-    const chunks = [];
-    file.on('data', (chunk) => chunks.push(chunk));
+    const bucket = storage.bucket(BUCKET_NAME);
+    const gcsFile = bucket.file(gcsFilePath);
 
-    file.on('error', (err) => {
-      console.error('Upload stream error:', err);
+    writeStream = gcsFile.createWriteStream({
+      metadata: { contentType: mimeTypeGlobal },
+      resumable: false,
+      validation: 'md5',
+    });
+
+    file.pipe(writeStream);
+
+    writeStream.on('error', (err) => {
+      console.error('GCS write error:', err);
       if (!uploadDone) {
         uploadDone = true;
         return res.status(500).json({ message: 'Upload failed' });
       }
     });
 
-    file.on('end', async () => {
+    writeStream.on('finish', async () => {
       try {
-        await storage.send(new PutObjectCommand({
-          Bucket: BUCKET_NAME,
-          Key: gcsFilePath,
-          Body: Buffer.concat(chunks),
-          ContentType: mimeTypeGlobal,
-        }));
+        await bucket.file(gcsFilePath).makePublic().catch((err) => {
+          if (err && err.code !== 400) throw err;
+        });
 
         const imageUrl = publicUrl(BUCKET_NAME, gcsFilePath);
 
@@ -4715,6 +4514,7 @@ server.post(PROXY + '/api/profile-picture/:username', authenticateToken, async (
 
   req.pipe(busboy);
 });
+
 
 // // Basic RESTful routes for all tables
 // server.get(PROXY + '/api/table/:table', async (req, res) => {

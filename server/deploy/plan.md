@@ -12,10 +12,10 @@ Add one HTTP block on port 80 for all four domains that redirects to HTTPS.
 Add one HTTPS block per domain with consistent proxy headers, timeouts, and upload size limits.
 Apply your confirmed upstream map:
 server.key-ching.com -> 127.0.0.1:2999
-server.scramblurr.com -> 127.0.0.1:3000
+server.faceblurr.com -> 127.0.0.1:3000
 server.drauwper.com -> 127.0.0.1:4000
 server.iota-chat.com -> 127.0.0.1:5000
-Under server.scramblurr.com only, expose /py -> 127.0.0.1:5000.
+Under server.faceblurr.com only, expose /py -> 127.0.0.1:5000.
 Remove legacy path proxies you no longer want: /kcs, /app1, /iota.
 Add a final catch-all default host block for unknown Host headers.
 Phase 3: Hosts and deployment alignment.
@@ -24,12 +24,12 @@ Fix deployment naming mismatch between deploy.sh and nginx-videoscrambler.conf, 
 Keep guarded reload behavior: test Nginx syntax first, reload only when valid.
 Phase 4: Verification and rollback readiness.
 Validate Nginx syntax, reload, and verify each domain returns from its intended upstream.
-Verify /py is reachable only on server.scramblurr.com.
+Verify /py is reachable only on server.faceblurr.com.
 Verify listeners/processes for 2999, 3000, 4000, and 5000.
 Keep rollback procedure ready: restore backup default config and reload Nginx if any host fails.
 Relevant files
 
-default — full rewrite to multi-domain, per-domain upstreams, and scramblurr-only /py.
+default — full rewrite to multi-domain, per-domain upstreams, and faceblurr-only /py.
 hosts — remove domain-to-127.0.0.1 entries for VPS deployment.
 deploy.sh — align copied Nginx filename and keep safe test-before-reload.
 nginx-videoscrambler.conf — replace or rename to your neutral multi-site template.
@@ -39,14 +39,14 @@ Nginx syntax check passes with no duplicate listen/server_name conflicts.
 Reload succeeds and service stays healthy.
 HTTPS checks pass for all four domains.
 Host-based routing returns correct backend per domain.
-/py route works on server.scramblurr.com and is absent on the other three.
+/py route works on server.faceblurr.com and is absent on the other three.
 Port listeners/process health confirms all mapped backends are up.
 Decisions captured
 
 Testing setup, not production hardening.
 HTTPS enabled now for all four domains.
 Domain map is fixed as provided, with future changes expected later.
-Legacy proxy paths removed except scramblurr /py.
+Legacy proxy paths removed except faceblurr /py.
 Redis is not exposed publicly via Nginx.
 Plan is saved in /memories/session/plan.md and ready for handoff. If you want, I can revise this once more to include a zero-downtime cutover sequence (staged enable, canary host test, then full switch).
 

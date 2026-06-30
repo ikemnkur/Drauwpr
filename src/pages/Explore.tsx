@@ -1,8 +1,9 @@
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { Flame, Clock, Users, Search, Star, Sparkles, Megaphone, TrendingUp, ChevronRight, User } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { api } from '../lib/api';
+import { censorTitle, isMatureContent } from '../lib/contentSafety';
 import { mapDrop, type ServerDrop } from '../hooks/useData';
 import type { Drop } from '../types';
 
@@ -13,6 +14,7 @@ function DropCard({ drop, badge }: { drop: Drop; badge?: string }) {
   const hours = Math.floor((remaining % 86400) / 3600);
   const goalPct = Math.min((drop.currentContributions / drop.goalAmount) * 100, 100);
   const linkTo = drop.status === 'dropped' ? `/drop/${drop.id}/download` : `/drop/${drop.id}`;
+  const mature = isMatureContent(drop.mature);
 
   return (
     <Link

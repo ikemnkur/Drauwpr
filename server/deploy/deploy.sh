@@ -114,4 +114,4 @@ pm2 logs $NODE_APP_NAME --lines 5 --nostream
 echo ""
 echo "🌐 Application URLs:"
 echo "   Node.js: http://142.93.82.161"
-echo "   Python route (if enabled): https://server.scramblurr.com/py"
+echo "   Python route (if enabled): https://server.faceblurr.com/py"

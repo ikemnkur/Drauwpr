@@ -114,7 +114,7 @@ const server = http.createServer(async (req, res) => {
       const html = buildHtml(name);
 
       const info = await transporter.sendMail({
-        from: `"${process.env.EMAIL_FROM_NAME || 'Drauwper'}" <${process.env.EMAIL_FROM || 'no-reply@scramblurr.com'}>`,
+        from: `"${process.env.EMAIL_FROM_NAME || 'Drauwper'}" <${process.env.EMAIL_FROM || 'no-reply@faceblurr.com'}>`,
         to,
         subject: 'Welcome to Drauwper! 🔥',
         html,
