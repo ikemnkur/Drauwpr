@@ -662,7 +662,7 @@ export default function Explore() {
         open={adDetailsModalOpen}
         ad={activeSponsoredAd}
         countdown={0}
-        variant={activeSponsoredAd?.submissionType === 'post_sponsorship' ? 'post_sponsorship' : 'ad'}
+        variant={activeSponsoredAd?.submissionType === 'post_sponsorship' ? 'drop_sponsorship' : 'ad'}
         onClose={() => setAdDetailsModalOpen(false)}
         onPrimaryAction={openAdTarget}
         resolveAssetUrl={resolveAssetUrl}

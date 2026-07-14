@@ -3,7 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 import { api } from '../lib/api';
 import { mapDrop, type ServerDrop } from '../hooks/useData';
 import type { Drop } from '../types';
-import { Flame, Tag, HardDrive, Users, Zap, ArrowRight, Lock, CheckCircle2 } from 'lucide-react';
+import { Flame, Tag, HardDrive, ArrowRight, CheckCircle2 } from 'lucide-react';
 import AnalogClock from '../components/AnalogClock';
 import { estimateRealSecondsRemaining } from '../engine/burnRate';
 
