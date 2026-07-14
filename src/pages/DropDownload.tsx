@@ -8,7 +8,7 @@ import PriceDisplay from '../components/PriceDisplay';
 import ContributorList from '../components/ContributorList';
 import ReviewForm from '../components/ReviewForm';
 import type { Drop, Contributor, Review } from '../types';
-import { Download, Tag, HardDrive, ThumbsUp, ThumbsDown, Star, Check, Loader2, Lock, ChevronDown, ChevronUp, Share2, Link2, AtSign, MessageCircle, Globe, Send } from 'lucide-react';
+import { Download, Tag, HardDrive, ThumbsUp, ThumbsDown, Star, Check, Loader2, Lock, ChevronDown, ChevronUp, Share2, Link2,  MessageCircle, Send } from 'lucide-react';
 import XIcon from '@mui/icons-material/X';
 import FacebookIcon from '@mui/icons-material/Facebook';
 

@@ -91,6 +91,8 @@ export interface CreatorProfile {
   totalDrops: number;
   totalCreditsEarned: number;
   joined: number;
+  likesReceived60d?: number;
+  dislikesReceived60d?: number;
   bioVideoUrl?: string;      // YouTube embed URL
   bannerUrl?: string;        // Profile banner image URL
   socialLinks?: SocialLinks;

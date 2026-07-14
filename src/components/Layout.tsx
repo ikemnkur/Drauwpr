@@ -2,17 +2,17 @@ import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
 import {
   Flame,
-  CreditCard,
+  // CreditCard,
   User,
   HelpCircle,
-  History,
+  // History,
   LogIn,
   Megaphone,
   Compass,
   ArrowBigDownDash,
   Bell,
   X,
-  Music,
+  // Music,
   ChevronUp,
   ChevronDown,
 } from 'lucide-react';

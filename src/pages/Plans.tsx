@@ -90,7 +90,7 @@ const PLANS: Plan[] = [
 
 export default function Plans() {
   const { user } = useAuth();
-  const currentPlan = (user?.accountType ?? 'free').toLowerCase();
+  const currentPlan = (user?.accountPlan ?? 'free').toLowerCase();
   const [economy, setEconomy] = useState(DEFAULT_ECONOMY_SETTINGS);
 
   useEffect(() => {

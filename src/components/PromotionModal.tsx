@@ -18,7 +18,7 @@ export interface SponsoredPromo {
 
 type MediaKind = 'image' | 'video' | 'audio';
 
-type PromotionModalVariant = 'ad' | 'post_sponsorship';
+type PromotionModalVariant = 'ad' | 'drop_sponsorship';
 
 interface PromotionModalProps {
   open: boolean;
@@ -96,7 +96,7 @@ export default function PromotionModal({
           <video
             src={resolvedMediaUrl}
             className="w-full h-full object-cover"
-            controls={variant === 'post_sponsorship'}
+            controls={variant === 'drop_sponsorship'}
             autoPlay={variant === 'ad'}
             muted={variant === 'ad'}
             playsInline

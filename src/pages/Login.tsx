@@ -2,8 +2,8 @@ import { useEffect, useState, useMemo, useCallback } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import GoogleSignInButton from '../components/GoogleSignInButton';
 import {
-  LogIn, Eye, EyeOff, ShieldCheck, KeyRound, Mail,
-  Loader2, RefreshCcw, CheckCircle, CheckCircle2, AlertCircle,
+  LogIn, Eye, EyeOff, ShieldCheck, Mail,
+  Loader2, RefreshCcw, CheckCircle2, AlertCircle,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { api, ApiError } from '../lib/api';

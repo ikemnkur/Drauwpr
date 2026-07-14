@@ -20,6 +20,8 @@ interface ServerProfile {
   createdAt: string;
   followerCount: number;
   followingCount: number;
+  likesReceived60d?: number;
+  dislikesReceived60d?: number;
   bannerUrl?: string | null;
   bioVideoUrl?: string | null;
   socialLinks?: string | SocialLinks | null;
@@ -40,6 +42,8 @@ function mapProfile(s: ServerProfile): CreatorProfile {
     totalDrops: s.totalDropsCreated ?? 0,
     totalCreditsEarned: s.totalCreditsEarned ?? 0,
     joined: new Date(s.createdAt).getTime(),
+    likesReceived60d: s.likesReceived60d ?? 0,
+    dislikesReceived60d: s.dislikesReceived60d ?? 0,
     bannerUrl: s.bannerUrl || undefined,
     bioVideoUrl: s.bioVideoUrl || undefined,
     socialLinks,
@@ -124,6 +128,11 @@ export default function UserProfile() {
 
   const activeDrops = userDrops.filter((d) => d.status === 'active' || d.status === 'pending');
   const pastDrops = userDrops.filter((d) => d.status === 'dropped' || d.status === 'expired');
+  const releasedDrops = userDrops.filter((d) => d.status === 'dropped');
+  const totalDrops = userDrops.length;
+  const qualityRating = releasedDrops.length > 0
+    ? releasedDrops.reduce((sum, drop) => sum + Number(drop.avgRating ?? 0), 0) / releasedDrops.length
+    : null;
   const avatarFallback = `https://picsum.photos/seed/user-avatar-${profile.id}/240/240`;
   const bannerFallback = `https://picsum.photos/seed/user-banner-${profile.id}/1600/400`;
   const avatarSrc = (profile.avatar || '').trim() || avatarFallback;
@@ -135,8 +144,8 @@ export default function UserProfile() {
     day: 'numeric',
   });
 
-  const ratingColor =
-    profile.rating >= 80 ? 'text-green-500' : profile.rating >= 50 ? 'text-yellow-500' : 'text-red-500';
+  const qualityColor =
+    qualityRating == null ? 'text-text-muted' : qualityRating >= 80 ? 'text-green-500' : qualityRating >= 50 ? 'text-yellow-500' : 'text-red-500';
   const reportHref = `/help?report=1&targetId=${encodeURIComponent(profile.id)}&targetUsername=${encodeURIComponent(profile.username)}`;
 
   return (
@@ -272,28 +281,96 @@ export default function UserProfile() {
         </div>
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="bg-surface rounded-xl border border-surface-3 p-4 text-center">
-          <Star className={`w-5 h-5 mx-auto mb-1 ${ratingColor}`} />
-          <p className={`text-2xl font-bold ${ratingColor}`}>{profile.rating}%</p>
-          <p className="text-xs text-text-muted">Rating</p>
-        </div>
-        <div className="bg-surface rounded-xl border border-surface-3 p-4 text-center">
-          <Users className="w-5 h-5 mx-auto mb-1 text-brand" />
-          <p className="text-2xl font-bold text-text">{followerCount.toLocaleString()}</p>
-          <p className="text-xs text-text-muted">Followers</p>
-        </div>
-        <div className="bg-surface rounded-xl border border-surface-3 p-4 text-center">
-          <Package className="w-5 h-5 mx-auto mb-1 text-brand" />
-          <p className="text-2xl font-bold text-text">{profile.totalDrops}</p>
-          <p className="text-xs text-text-muted">Drops</p>
-        </div>
-        <div className="bg-surface rounded-xl border border-surface-3 p-4 text-center">
-          <CreditCard className="w-5 h-5 mx-auto mb-1 text-green-500" />
-          <p className="text-2xl font-bold text-text">{(profile.totalCreditsEarned / 1000).toFixed(0)}K</p>
-          <p className="text-xs text-text-muted">Credits Earned</p>
-        </div>
+      {/* Stats Table */}
+      <div className="bg-surface rounded-2xl border border-surface-3 overflow-hidden">
+        <table className="w-full">
+          <tbody>
+            <tr className="border-b border-surface-3/80">
+              <td className="px-4 py-4 align-top">
+                <div className="flex items-start gap-3">
+                  <Star className={`mt-0.5 w-5 h-5 shrink-0 ${qualityColor}`} />
+                  <div>
+                    <p className="text-sm font-semibold text-text">Quality Rating</p>
+                    <p className="text-xs text-text-muted">Average quality rating from released/dropped drops</p>
+                  </div>
+                </div>
+              </td>
+              <td className={`px-4 py-4 align-top text-right text-lg font-bold whitespace-nowrap ${qualityColor}`}>
+                {qualityRating == null ? '--' : `${qualityRating.toFixed(1)}%`}
+              </td>
+            </tr>
+            <tr className="border-b border-surface-3/80">
+              <td className="px-4 py-4 align-top">
+                <div className="flex items-start gap-3">
+                  <Users className="mt-0.5 w-5 h-5 shrink-0 text-brand" />
+                  <div>
+                    <p className="text-sm font-semibold text-text">Followers</p>
+                    <p className="text-xs text-text-muted">People following this creator</p>
+                  </div>
+                </div>
+              </td>
+              <td className="px-4 py-4 align-top text-right text-lg font-bold text-text whitespace-nowrap">
+                {followerCount.toLocaleString()}
+              </td>
+            </tr>
+            <tr className="border-b border-surface-3/80">
+              <td className="px-4 py-4 align-top">
+                <div className="flex items-start gap-3">
+                  <Package className="mt-0.5 w-5 h-5 shrink-0 text-brand" />
+                  <div>
+                    <p className="text-sm font-semibold text-text">Drops</p>
+                    <p className="text-xs text-text-muted">Total drops published by this creator</p>
+                  </div>
+                </div>
+              </td>
+              <td className="px-4 py-4 align-top text-right text-lg font-bold text-text whitespace-nowrap">
+                {totalDrops.toLocaleString()}
+              </td>
+            </tr>
+            <tr className="border-b border-surface-3/80">
+              <td className="px-4 py-4 align-top">
+                <div className="flex items-start gap-3">
+                  <CreditCard className="mt-0.5 w-5 h-5 shrink-0 text-green-500" />
+                  <div>
+                    <p className="text-sm font-semibold text-text">Credits Earned</p>
+                    <p className="text-xs text-text-muted">Total credits earned across drops</p>
+                  </div>
+                </div>
+              </td>
+              <td className="px-4 py-4 align-top text-right text-lg font-bold text-text whitespace-nowrap">
+                {(profile.totalCreditsEarned / 1000).toFixed(0)}K
+              </td>
+            </tr>
+            <tr className="border-b border-surface-3/80">
+              <td className="px-4 py-4 align-top">
+                <div className="flex items-start gap-3">
+                  <Heart className="mt-0.5 w-5 h-5 shrink-0 text-red-400" />
+                  <div>
+                    <p className="text-sm font-semibold text-text">Likes Received</p>
+                    <p className="text-xs text-text-muted">Last 60 days across this creator&apos;s drops</p>
+                  </div>
+                </div>
+              </td>
+              <td className="px-4 py-4 align-top text-right text-lg font-bold text-text whitespace-nowrap">
+                {(profile.likesReceived60d ?? 0).toLocaleString()}
+              </td>
+            </tr>
+            <tr>
+              <td className="px-4 py-4 align-top">
+                <div className="flex items-start gap-3">
+                  <Heart className="mt-0.5 w-5 h-5 shrink-0 text-slate-400" />
+                  <div>
+                    <p className="text-sm font-semibold text-text">Dislikes Received</p>
+                    <p className="text-xs text-text-muted">Last 60 days across this creator&apos;s drops</p>
+                  </div>
+                </div>
+              </td>
+              <td className="px-4 py-4 align-top text-right text-lg font-bold text-text whitespace-nowrap">
+                {(profile.dislikesReceived60d ?? 0).toLocaleString()}
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
       {/* Active Drops */}

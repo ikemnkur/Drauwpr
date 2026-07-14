@@ -143,6 +143,18 @@ const WALLET_TX_TYPE_FALLBACKS = {
   stall_purchase: 'admin_adjustment',
 };
 
+async function resolveUserByIdentifier(pool, identifier) {
+  const value = String(identifier || '').trim();
+  if (!value) return null;
+
+  const [[row]] = await pool.query(
+    'SELECT id, username FROM userData WHERE id = ? OR username = ? LIMIT 1',
+    [value, value]
+  );
+
+  return row || null;
+}
+
 async function ensureWalletTransactionTypeCompatibility(db) {
   try {
     const [rows] = await db.query("SHOW COLUMNS FROM walletTransactions LIKE 'type'");
@@ -2185,14 +2197,31 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
    */
   server.get(PROXY + '/api/users/:id', async (req, res) => {
     try {
+      const user = await resolveUserByIdentifier(pool, req.params.id);
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
       const [rows] = await pool.query(
         `SELECT id, username, profilePicture, bio, accountType, accountPlan,
                 totalDropsCreated, totalCreditsEarned, creatorRating, createdAt,
                 bannerUrl, bioVideoUrl, socialLinks,
                 (SELECT COUNT(*) FROM followers WHERE followeeId = userData.id) AS followerCount,
-                (SELECT COUNT(*) FROM followers WHERE followerId = userData.id) AS followingCount
+                (SELECT COUNT(*) FROM followers WHERE followerId = userData.id) AS followingCount,
+                (SELECT COUNT(*)
+                 FROM dropReviews r
+                 JOIN drops d ON d.id = r.dropId
+                 WHERE d.creatorId = userData.id
+                   AND r.isHidden = 0
+                   AND r.liked = 1
+                   AND r.created_at >= (NOW() - INTERVAL 60 DAY)) AS likesReceived60d,
+                (SELECT COUNT(*)
+                 FROM dropReviews r
+                 JOIN drops d ON d.id = r.dropId
+                 WHERE d.creatorId = userData.id
+                   AND r.isHidden = 0
+                   AND r.liked = 0
+                   AND r.created_at >= (NOW() - INTERVAL 60 DAY)) AS dislikesReceived60d
          FROM userData WHERE id = ?`,
-        [req.params.id]
+        [user.id]
       );
       if (!rows.length) return res.status(404).json({ error: 'User not found' });
       res.json(rows[0]);
@@ -2208,9 +2237,12 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
    */
   server.get(PROXY + '/api/users/:id/drops', async (req, res) => {
     try {
+      const user = await resolveUserByIdentifier(pool, req.params.id);
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
       const { status } = req.query;
       let where = 'd.creatorId = ? AND d.isPublic = 1';
-      const params = [req.params.id];
+      const params = [user.id];
       if (status) {
         where += ' AND d.status = ?';
         params.push(status);
@@ -2300,7 +2332,9 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
   server.get(PROXY + '/api/users/:id/am-i-following', authenticateToken, async (req, res) => {
     try {
       const followerId = req.user.id;
-      const followeeId = req.params.id;
+      const targetUser = await resolveUserByIdentifier(pool, req.params.id);
+      if (!targetUser) return res.status(404).json({ error: 'User not found' });
+      const followeeId = targetUser.id;
       if (followerId === followeeId) return res.json({ following: false });
 
       const [[existing]] = await pool.query(
@@ -2321,7 +2355,9 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
   server.post(PROXY + '/api/users/:id/follow', authenticateToken, async (req, res) => {
     try {
       const followerId = req.user.id;
-      const followeeId = req.params.id;
+      const targetUser = await resolveUserByIdentifier(pool, req.params.id);
+      if (!targetUser) return res.status(404).json({ error: 'User not found' });
+      const followeeId = targetUser.id;
       if (followerId === followeeId) return res.status(400).json({ error: 'Cannot follow yourself' });
 
       const [[existing]] = await pool.query(
@@ -2354,13 +2390,16 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
    */
   server.get(PROXY + '/api/users/:id/followers', async (req, res) => {
     try {
+      const user = await resolveUserByIdentifier(pool, req.params.id);
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
       const [rows] = await pool.query(
         `SELECT u.id, u.username, u.profilePicture, u.bio
          FROM followers f
          JOIN userData u ON u.id = f.followerId
          WHERE f.followeeId = ?
          ORDER BY f.createdAt DESC LIMIT 100`,
-        [req.params.id]
+        [user.id]
       );
       res.json(rows);
     } catch (err) {
@@ -2374,13 +2413,16 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
    */
   server.get(PROXY + '/api/users/:id/following', async (req, res) => {
     try {
+      const user = await resolveUserByIdentifier(pool, req.params.id);
+      if (!user) return res.status(404).json({ error: 'User not found' });
+
       const [rows] = await pool.query(
         `SELECT u.id, u.username, u.profilePicture, u.bio
          FROM followers f
          JOIN userData u ON u.id = f.followeeId
          WHERE f.followerId = ?
          ORDER BY f.createdAt DESC LIMIT 100`,
-        [req.params.id]
+        [user.id]
       );
       res.json(rows);
     } catch (err) {

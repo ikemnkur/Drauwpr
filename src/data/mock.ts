@@ -13,7 +13,8 @@ export const mockUser: User = {
   joined: NOW - 30 * DAY,
   verification: '',
   accountStatus: '',
-  accountType: ''
+  // accountType: '',
+  accountPlan: ''
 };
 
 export const mockDrops: Drop[] = [
