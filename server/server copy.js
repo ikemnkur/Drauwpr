@@ -1398,7 +1398,7 @@ server.post(PROXY + '/api/promo-submissions', authenticateToken, async (req, res
       const mediaUrl = String(fields.mediaUrl || '').trim() || null;
       const ctaText = String(fields.ctaText || '').trim() || null;
       const contactEmail = String(fields.contactEmail || req.user?.email || '').trim();
-      const budgetUsd = Number(fields.budgetUsd || 0) || 0;
+      const budgetCredits = Number(fields.budgetCredits || 0) || 0;
       const tags = String(fields.tags || '').trim() || null;
 
       if (!['ad', 'drop_sponsorship'].includes(submissionType)) {
@@ -1432,7 +1432,7 @@ server.post(PROXY + '/api/promo-submissions', authenticateToken, async (req, res
         target_url: targetUrl,
         mediaUrl,
         ctaText,
-        budgetUsd,
+        budgetCredits,
         assetPath,
         tags,
         status: 'pending',
@@ -1587,7 +1587,7 @@ server.get(PROXY + '/api/promo-submissions/me/export', authenticateToken, async 
       .select('*');
 
     const headers = [
-      'id', 'submissionType', 'status', 'title', 'targetDropId', 'budgetUsd',
+      'id', 'submissionType', 'status', 'title', 'targetDropId', 'budgetCredits',
       'impressions', 'clicks', 'likes', 'neutrals', 'dislikes', 'tags', 'created_at', 'updated_at',
     ];
     const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
@@ -1692,7 +1692,7 @@ const ensurePromoSubmissionsTable = async () => {
       targetDropId VARCHAR(255) DEFAULT NULL,
       mediaUrl TEXT,
       ctaText VARCHAR(255) DEFAULT NULL,
-      budgetUsd DECIMAL(10,2) DEFAULT 0,
+      budgetCredits DECIMAL(10,2) DEFAULT 0,
       assetPath VARCHAR(255) DEFAULT NULL,
       status VARCHAR(40) NOT NULL DEFAULT 'pending',
       adminNotes TEXT,

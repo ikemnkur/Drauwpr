@@ -43,7 +43,7 @@ CREATE TABLE `promoSubmissions` (
   `targetDropId` varchar(255) DEFAULT NULL,
   `mediaUrl` text,
   `ctaText` varchar(255) DEFAULT NULL,
-  `budgetUsd` decimal(10,2) DEFAULT '0.00',
+  `budgetCredits` decimal(10,2) DEFAULT '0.00',
   `assetPath` varchar(255) DEFAULT NULL,
   `status` varchar(40) NOT NULL DEFAULT 'pending',
   `adminNotes` text,

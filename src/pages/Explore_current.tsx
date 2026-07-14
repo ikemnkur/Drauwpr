@@ -2,7 +2,6 @@ import { Link, useLocation } from 'react-router-dom';
 import { Flame, Clock, Users, Search, Star, Sparkles, Megaphone, TrendingUp, ChevronRight, User } from 'lucide-react';
 import { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
-import { useAuth } from '../context/AuthContext';
 import { api } from '../lib/api';
 import PromotionModal from '../components/PromotionModal';
 import { mapDrop, type ServerDrop } from '../hooks/useData';
@@ -232,10 +231,6 @@ interface FeaturedResponse {
   topCreators: TopCreator[];
 }
 
-interface FollowingUser {
-  id: string;
-}
-
 function ProfileCard({ creator }: { creator: CreatorPreview }) {
   const topTags = creator.tags.slice(0, 3);
   return (
@@ -268,12 +263,10 @@ function ProfileCard({ creator }: { creator: CreatorPreview }) {
 
 export default function Explore() {
   const location = useLocation();
-  const { user } = useAuth();
   const { drops } = useApp();
   const API_BASE = import.meta.env.VITE_API_URL || '';
   const [search, setSearch] = useState('');
   const [searchTab, setSearchTab] = useState<SearchTab>('drops');
-  const [following, setFollowing] = useState<Drop[]>([]);
   const [featured, setFeatured] = useState<Drop[]>([]);
   const [hottest, setHottest] = useState<Drop[]>([]);
   const [newest, setNewest] = useState<Drop[]>([]);
@@ -281,7 +274,6 @@ export default function Explore() {
   const [sponsoredPromos, setSponsoredPromos] = useState<SponsoredPromo[]>([]);
   const [activeSponsoredAdId, setActiveSponsoredAdId] = useState<string | null>(null);
   const [adDetailsModalOpen, setAdDetailsModalOpen] = useState(false);
-  const [followedCreatorIds, setFollowedCreatorIds] = useState<string[]>([]);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -351,46 +343,6 @@ export default function Explore() {
 
     return () => { cancelled = true; };
   }, [drops]);
-
-  useEffect(() => {
-    if (!user?.id) {
-      setFollowedCreatorIds([]);
-      return;
-    }
-
-    let cancelled = false;
-    api.get<FollowingUser[]>(`/api/users/${user.id}/following`)
-      .then((rows) => {
-        if (cancelled) return;
-        setFollowedCreatorIds((rows || []).map((r) => r.id).filter(Boolean));
-      })
-      .catch(() => {
-        if (!cancelled) setFollowedCreatorIds([]);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [user?.id]);
-
-  useEffect(() => {
-    if (!followedCreatorIds.length) {
-      setFollowing([]);
-      return;
-    }
-
-    const idSet = new Set(followedCreatorIds);
-    const pool = [...drops, ...featured, ...hottest, ...newest];
-    const byId = new Map<string, Drop>();
-    pool.forEach((d) => byId.set(d.id, d));
-
-    const activeFollowing = [...byId.values()]
-      .filter((d) => d.isPublic && d.status === 'active' && idSet.has(d.creatorId))
-      .sort((a, b) => b.momentum - a.momentum || b.burnRate - a.burnRate)
-      .slice(0, 4);
-
-    setFollowing(activeFollowing);
-  }, [followedCreatorIds, drops, featured, hottest, newest]);
 
   const recommended = useMemo(() => [...drops].sort((a, b) => b.contributorCount - a.contributorCount), [drops]);
 
@@ -555,19 +507,6 @@ export default function Explore() {
               ))}
             </div>
           </section>
-
-          {/* TODO: Implement this later */}
-           {/* ── Following ── */}
-          {following.length > 0 && (
-            <section>
-              <SectionHeader icon={Star} title="Drops from Users You Follow" />
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                {following.slice(0, 4).map((d) => (
-                  <DropCard key={d.id} drop={d} badge="Following" />
-                ))}
-              </div>
-            </section>
-          )}
 
           {/* ── Sponsored ── */}
           <section>

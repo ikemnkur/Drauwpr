@@ -59,6 +59,9 @@ export default function DropFeature() {
   const [showCelebration, setShowCelebration] = useState(false);
   const [showExpiredModal, setShowExpiredModal] = useState(false);
   const celebrationFired = useRef(false);
+  const prevProjectedDayKeyRef = useRef<string>('');
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [dropDayPulse, setDropDayPulse] = useState(false);
   const [copiedInline, setCopiedInline] = useState(false);
   const [stallExpiresAt, setStallExpiresAt] = useState<number | null>(null);
   const [stallScheduledDropTime, setStallScheduledDropTime] = useState<number | null>(null);
@@ -140,8 +143,13 @@ export default function DropFeature() {
 
   useEffect(() => {
     if (!sponsoredAd) return;
-    void api.post(`/api/promotions/${sponsoredAd.id}/impression`, {}).catch(() => {});
+    void api.post(`/api/promotions/${sponsoredAd.id}/impression`, {}).catch(() => { });
   }, [sponsoredAd]);
+
+  useEffect(() => {
+    const iv = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(iv);
+  }, []);
 
   const fetchContributors = useCallback(() => {
     if (!id) return;
@@ -208,6 +216,34 @@ export default function DropFeature() {
     return () => { cancelled = true; };
   }, [id, localDrop]);
 
+  useEffect(() => {
+    if (!drop) return;
+
+    const effectiveScheduledDropTime = stallScheduledDropTime ?? drop.scheduledDropTime;
+    const clockSecondsFromSchedule = Math.max(0, (effectiveScheduledDropTime - nowMs) / 1000);
+    const effectiveExpiresAt = stallExpiresAt ?? drop.expiresAt;
+    const estimatedReal = estimateRealSecondsRemaining(
+      clockSecondsFromSchedule,
+      drop.burnRate,
+      nowMs,
+      drop.createdAt,
+      effectiveExpiresAt,
+    );
+    const projectedDropDate = new Date(nowMs + estimatedReal * 1000);
+    const projectedDayKey = `${projectedDropDate.getFullYear()}-${projectedDropDate.getMonth() + 1}-${projectedDropDate.getDate()}`;
+
+    if (!prevProjectedDayKeyRef.current) {
+      prevProjectedDayKeyRef.current = projectedDayKey;
+      return;
+    }
+    if (prevProjectedDayKeyRef.current === projectedDayKey) return;
+
+    prevProjectedDayKeyRef.current = projectedDayKey;
+    setDropDayPulse(true);
+    const timeout = window.setTimeout(() => setDropDayPulse(false), 1000);
+    return () => window.clearTimeout(timeout);
+  }, [drop, nowMs, stallScheduledDropTime, stallExpiresAt]);
+
   if (loading) {
     return (
       <div className="text-center py-20">
@@ -226,16 +262,16 @@ export default function DropFeature() {
   }
 
   const effectiveScheduledDropTime = stallScheduledDropTime ?? drop.scheduledDropTime;
-  const clockSecondsFromSchedule = Math.max(0, (effectiveScheduledDropTime - Date.now()) / 1000);
+  const clockSecondsFromSchedule = Math.max(0, (effectiveScheduledDropTime - nowMs) / 1000);
   const effectiveExpiresAt = stallExpiresAt ?? drop.expiresAt;
   const estimatedReal = estimateRealSecondsRemaining(
     clockSecondsFromSchedule,
     drop.burnRate,
-    Date.now(),
+    nowMs,
     drop.createdAt,
     effectiveExpiresAt,
   );
-  const totalMinutesLeft = Math.max(0, (effectiveExpiresAt - Date.now()) / 60_000);
+  const totalMinutesLeft = Math.max(0, (effectiveExpiresAt - nowMs) / 60_000);
   const goalMet = drop.currentContributions >= drop.goalAmount;
 
   const uniqueContributorCount = contributors.length > 0 ? contributors.length : drop.contributorCount;
@@ -243,7 +279,7 @@ export default function DropFeature() {
     ?? (contributors.length > 0 ? Math.max(...contributors.map(c => c.timestamp)) : null);
   const lastBurnLabel = lastBurnMs
     ? (() => {
-      const diff = Math.abs((Date.now() - lastBurnMs) / 1000 + 5*3600);
+      const diff = Math.abs((nowMs - lastBurnMs) / 1000 + 5 * 3600);
       // if (diff < 60) return 'just now';  
       if (diff < 60) return `${Math.floor(diff)}s ago`;;
       if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
@@ -256,15 +292,33 @@ export default function DropFeature() {
     ? Math.floor(drop.currentContributions / drop.contributorCount)
     : 0;
 
-  const dropDate = new Date(drop.scheduledDropTime);
-  const trailerEmbedUrl = toYouTubeEmbed(drop.trailerUrl ?? '');
-  const calYear = dropDate.getFullYear();
-  const calMonth = dropDate.getMonth();
-  const calDropDay = dropDate.getDate();
+  const projectedDropDate = new Date(nowMs + estimatedReal * 1000);
+  const bannerRaw = String(drop.thumbnailUrl || '').trim();
+  const bannerUrl = bannerRaw
+    ? (/^https?:\/\//i.test(bannerRaw)
+      ? bannerRaw
+      : bannerRaw.startsWith('/')
+        ? `${API_BASE}${bannerRaw}`
+        : `${API_BASE}/${bannerRaw}`)
+    : '';
+  const trailerRaw = String(drop.trailerUrl || '').trim();
+  const trailerEmbedUrl = toYouTubeEmbed(trailerRaw);
+  const trailerDirectUrl = trailerEmbedUrl
+    ? ''
+    : trailerRaw
+      ? (/^https?:\/\//i.test(trailerRaw)
+        ? trailerRaw
+        : trailerRaw.startsWith('/')
+          ? `${API_BASE}${trailerRaw}`
+          : `${API_BASE}/${trailerRaw}`)
+      : '';
+  const calYear = projectedDropDate.getFullYear();
+  const calMonth = projectedDropDate.getMonth();
+  const calDropDay = projectedDropDate.getDate();
   const calFirstDay = new Date(calYear, calMonth, 1).getDay();
   const calDays = new Date(calYear, calMonth + 1, 0).getDate();
-  const calMonthLabel = dropDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-  const todayDate = new Date();
+  const calMonthLabel = projectedDropDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const todayDate = new Date(nowMs);
   const isSameMonth = todayDate.getMonth() === calMonth && todayDate.getFullYear() === calYear;
   const todayDay = isSameMonth ? todayDate.getDate() : -1;
 
@@ -272,28 +326,30 @@ export default function DropFeature() {
     <div className="max-w-5xl mx-auto">
 
       {/* ── Banner ── */}
-      <div className="mb-4">
-        <button
-          onClick={() => setShowBanner((v) => !v)}
-          className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text transition mb-2"
-        >
-          <Image className="w-3.5 h-3.5" />
-          Banner
-          {showBanner ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-        </button>
-        {showBanner && (
-          <div className="w-full h-40 bg-surface-2 rounded-2xl overflow-hidden">
-            <img
-              src={drop.thumbnailUrl || `https://picsum.photos/seed/${drop.id}/1280/240`}
-              alt={`${drop.title} banner`}
-              className="w-full h-full object-cover"
-            />
-          </div>
-        )}
-      </div>
+      {bannerUrl && (
+        <div className="mb-4">
+          <button
+            onClick={() => setShowBanner((v) => !v)}
+            className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text transition mb-2"
+          >
+            <Image className="w-3.5 h-3.5" />
+            Banner
+            {showBanner ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          </button>
+          {showBanner && (
+            <div className="w-full h-40 bg-surface-2 rounded-2xl overflow-hidden">
+              <img
+                src={bannerUrl}
+                alt={`${drop.title} banner`}
+                className="w-full h-full object-cover"
+              />
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Trailer ── */}
-      {trailerEmbedUrl && (
+      {(trailerEmbedUrl || trailerDirectUrl) && (
         <div className="mb-6">
           <button
             onClick={() => setShowTrailer((v) => !v)}
@@ -305,20 +361,29 @@ export default function DropFeature() {
           </button>
           {showTrailer && (
             <div className="aspect-video bg-surface-2 rounded-2xl overflow-hidden">
-              <iframe
-                src={trailerEmbedUrl}
-                title="Drop trailer"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                allowFullScreen
-                className="w-full h-full"
-              />
+              {trailerEmbedUrl ? (
+                <iframe
+                  src={trailerEmbedUrl}
+                  title="Drop trailer"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                  className="w-full h-full"
+                />
+              ) : (
+                <video
+                  src={trailerDirectUrl}
+                  controls
+                  preload="metadata"
+                  className="w-full h-full"
+                />
+              )}
             </div>
           )}
         </div>
       )}
 
       {/* Title row */}
-      
+
       <div className="flex flex-col md:flex-row md:items-start justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-text mb-1">{drop.title}</h1>
@@ -337,28 +402,38 @@ export default function DropFeature() {
             </Link>
             <span className="flex items-center gap-1"><HardDrive className="w-4 h-4" /> {drop.fileSize}</span>
             <span className="flex items-center gap-1"><Tag className="w-4 h-4" /> {drop.fileType}</span>
+           
+           
+
+          </div>
+          <div className="mt-2"> 
+           {/* <br/> */}
+             {/* Description */}
+            <span className="text-sm text-text-muted mt-8 leading-relaxed">{drop.description}</span>
           </div>
         </div>
-        <div className="flex flex-col items-end gap-3">
-          <button
-            onClick={() => setShowShareModal(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-surface-3 text-text-muted hover:text-brand hover:border-brand/40 text-sm transition"
-          >
-            <Share2 className="w-4 h-4" />
-            Share
-          </button>
-          <div className="flex gap-2 flex-wrap justify-end">
-          {drop.tags.map((t) => (
-            <span key={t} className="bg-surface-2 text-text-muted text-xs px-2 py-0.5 rounded-full">
-              #{t}
-            </span>
-          ))}
+        <div className="w-full md:w-auto overflow-x-auto">
+          <div className="min-w-[280px] grid grid-cols-10 items-start gap-3">
+            <div className="col-span-9 flex gap-2 flex-wrap">
+              {drop.tags.map((t) => (
+                <span key={t} className="bg-surface-2 text-text-muted text-xs px-2 py-0.5 rounded-full">
+                  #{t}
+                </span>
+              ))}
+            </div>
+            <div className="col-span-1 flex justify-end">
+              <button
+                onClick={() => setShowShareModal(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-surface-3 text-text-muted hover:text-brand hover:border-brand/40 text-sm transition"
+              >
+                <Share2 className="w-4 h-4" />
+               
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Description */}
-      <p className="text-sm text-text-muted mb-8 leading-relaxed">{drop.description}</p>
 
       {/* Main grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -402,7 +477,7 @@ export default function DropFeature() {
                       className={[
                         'w-6 h-6 flex items-center justify-center rounded-lg text-[11px] font-mono transition',
                         isDropDay
-                          ? 'bg-brand text-white font-bold ring-2 ring-brand/40 scale-110'
+                          ? `bg-brand text-white font-bold ring-2 ring-brand/40 scale-110 ${dropDayPulse ? 'animate-pulse' : ''}`
                           : isToday
                             ? 'bg-surface-3 text-text font-semibold'
                             : 'text-text-muted hover:text-text',
@@ -416,10 +491,10 @@ export default function DropFeature() {
 
               <div className="mt-2 text-center border-[2px] border-brand/40 rounded-xl px-3 py-1.5">
                 <p className="text-xs font-bold text-brand">
-                  🔥 {dropDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                  🔥 {projectedDropDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
                 </p>
                 <p className="text-[10px] text-text-muted mt-0.5">
-                  {drop.scheduledDropTime > Date.now() ? 'estimated drop' : 'drop date'}
+                  {estimatedReal > 0 ? 'estimated drop' : 'drop date'}
                 </p>
               </div>
             </div>
@@ -453,15 +528,15 @@ export default function DropFeature() {
           {/* Burn Rate + Goal */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {/* Todo: only show the BurnRateGauge if Goal has been met 100% else show Expiration Gauge */}
-            
+
             {(goalMet
               ? <BurnRateGauge rate={drop.burnRate} goalPct={Math.min((drop.currentContributions / drop.goalAmount) * 100, 100)} />
               : <ExpirationGauge
-                  createdAt={drop.createdAt}
-                  expiresAt={drop.expiresAt}
-                  currentContributions={drop.currentContributions}
-                  goalAmount={drop.goalAmount}
-                />
+                createdAt={drop.createdAt}
+                expiresAt={drop.expiresAt}
+                currentContributions={drop.currentContributions}
+                goalAmount={drop.goalAmount}
+              />
             )}
 
             {/* <BurnRateGauge rate={drop.burnRate} goalPct={Math.min((drop.currentContributions / drop.goalAmount) * 100, 100)} />
@@ -601,7 +676,7 @@ export default function DropFeature() {
                 <a
                   href={target}
                   className={classes}
-                  onClick={() => { void api.post(`/api/promotions/${sponsoredAd.id}/click`, {}).catch(() => {}); }}
+                  onClick={() => { void api.post(`/api/promotions/${sponsoredAd.id}/click`, {}).catch(() => { }); }}
                 >
                   {content}
                 </a>
@@ -609,7 +684,7 @@ export default function DropFeature() {
                 <Link
                   to={target}
                   className={classes}
-                  onClick={() => { void api.post(`/api/promotions/${sponsoredAd.id}/click`, {}).catch(() => {}); }}
+                  onClick={() => { void api.post(`/api/promotions/${sponsoredAd.id}/click`, {}).catch(() => { }); }}
                 >
                   {content}
                 </Link>
@@ -618,8 +693,8 @@ export default function DropFeature() {
           )}
 
 
-        
-            
+
+
         </div>
       </div>
 

@@ -145,6 +145,7 @@ const corsOptions = {
       // "https://orca-app-j32vd.ondigitalocean.app",
       // "https://monkfish-app-mllt8.ondigitalocean.app/",
       "https://69960e6b8b6451108f18d9560221fb5e.r2.cloudflarestorage.com",
+      "https://69960e6b8b6451108f18d9560221fb5e.r2.cloudflarestorage.com",
       "https://editor-pavement-encircle.ngrok-free.dev",
       "http://localhost:5173",
       "http://localhost:5174",
@@ -510,7 +511,7 @@ server.post(PROXY + '/api/auth/login', async (req, res) => {
     const users = await knex('userData').where('email', email).select('*');
     const user = users[0];
 
-    console.log("User found:", user );
+    console.log("User found:", user);
 
     if (!user) {
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
@@ -888,10 +889,304 @@ server.put(PROXY + '/api/users/profile', authenticateToken, async (req, res) => 
 
 
 
+server.post(PROXY + '/api/account/settings', authenticateToken, async (req, res) => {
+  try {
+    await ensureAccountSettingsColumns();
+
+    const userId = String(req.user?.id || '').trim();
+    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+
+    const row = await knex('userData')
+      .where('id', userId)
+      .select('accountType', 'accountPlan', 'phoneNumber', 'smsAlertsEnabled', 'twoFactorEnabled', 'emailNotifications')
+      .first();
+
+    if (!row) return res.status(404).json({ message: 'User not found' });
+
+    return res.json({
+      phoneNumber: row.phoneNumber || '',
+      smsAlertsEnabled: Boolean(row.smsAlertsEnabled),
+      accountType: row.accountType || row.accountPlan || 'personal',
+      twoFactorEnabled: Boolean(row.twoFactorEnabled),
+      emailNotifications: parseEmailNotificationPrefs(row.emailNotifications),
+    });
+  } catch (error) {
+    console.error('POST /api/account/settings error:', error);
+    return res.status(500).json({ message: 'Failed to load account settings' });
+  }
+});
+
+server.post(PROXY + '/api/account/account-type', authenticateToken, async (req, res) => {
+  try {
+    await ensureAccountSettingsColumns();
+
+    const userId = String(req.user?.id || '').trim();
+    const accountType = normalizeAccountType(req.body?.accountPlan || req.body?.accountType);
+    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+    if (!accountType) return res.status(400).json({ message: 'Invalid account type' });
+
+    await knex('userData').where('id', userId).update({ accountType });
+    return res.json({ success: true, accountType });
+  } catch (error) {
+    console.error('POST /api/account/account-type error:', error);
+    return res.status(500).json({ message: 'Failed to update account type' });
+  }
+});
+
+
+server.post(PROXY + '/api/account/phone/send-otp', authenticateToken, async (req, res) => {
+  try {
+    await ensurePhoneVerificationTable();
+
+    const userId = String(req.user?.id || '').trim();
+    const email = String(req.user?.email || '').trim();
+    const phoneNumber = String(req.body?.phoneNumber || '').trim();
+    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+    if (!phoneNumber || phoneNumber.length < 7) {
+      return res.status(400).json({ message: 'Enter a valid phone number' });
+    }
+
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    const createdAt = new Date();
+
+    await knex('phoneVerifications')
+      .where(function () {
+        this.where('userID', userId);
+        if (email) this.orWhere('email', email);
+      })
+      .del();
+
+    const [insertedId] = await knex('phoneVerifications').insert({
+      userID: userId,
+      email: email || null,
+      phone: phoneNumber,
+      code,
+      expiresAt: formatDateTimeForMySQLLocal(expiresAt),
+      createdAt: formatDateTimeForMySQLLocal(createdAt),
+      used: 0,
+    });
+
+    pendingPhoneOtps.set(userId, {
+      phoneNumber,
+      code,
+      expiresAt: expiresAt.getTime(),
+      recordId: insertedId,
+    });
+
+    console.log(`[SMS OTP][DEV] userId=${userId} phone=${phoneNumber} code=${code}`);
+    return res.json({ success: true, message: 'Verification code sent' });
+  } catch (error) {
+    console.error('POST /api/account/phone/send-otp error:', error);
+    return res.status(500).json({ message: 'Failed to send verification code' });
+  }
+});
+
+
+server.post(PROXY + '/api/account/phone/verify-otp', authenticateToken, async (req, res) => {
+  try {
+    await ensureAccountSettingsColumns();
+    await ensurePhoneVerificationTable();
+
+    const userId = String(req.user?.id || '').trim();
+    const phoneNumber = String(req.body?.phoneNumber || '').trim();
+    const code = String(req.body?.code || '').trim();
+    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+
+    const pending = pendingPhoneOtps.get(userId);
+    if (!pending || pending.expiresAt < Date.now()) {
+      pendingPhoneOtps.delete(userId);
+      return res.status(400).json({ message: 'Verification code expired. Request a new code.' });
+    }
+
+    if (pending.phoneNumber !== phoneNumber) {
+      return res.status(400).json({ message: 'Phone number does not match verification request' });
+    }
+
+    if (pending.code !== code) {
+      return res.status(400).json({ message: 'Invalid verification code' });
+    }
+
+    await knex('userData')
+      .where('id', userId)
+      .update({ phoneNumber, phoneVerified: 1 });
+
+    if (pending.recordId) {
+      await knex('phoneVerifications')
+        .where('id', pending.recordId)
+        .update({ used: 1 });
+    } else {
+      await knex('phoneVerifications')
+        .where({ userID: userId, phone: phoneNumber, code })
+        .orderBy('createdAt', 'desc')
+        .limit(1)
+        .update({ used: 1 });
+    }
+
+    pendingPhoneOtps.delete(userId);
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('POST /api/account/phone/verify-otp error:', error);
+    return res.status(500).json({ message: 'Failed to verify phone number' });
+  }
+});
+
+server.post(PROXY + '/api/account/sms-alerts', authenticateToken, async (req, res) => {
+  try {
+    await ensureAccountSettingsColumns();
+
+    const userId = String(req.user?.id || '').trim();
+    const smsAlertsEnabled = Boolean(req.body?.smsAlertsEnabled);
+    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+
+    await knex('userData').where('id', userId).update({ smsAlertsEnabled: smsAlertsEnabled ? 1 : 0 });
+    return res.json({ success: true, smsAlertsEnabled });
+  } catch (error) {
+    console.error('POST /api/account/sms-alerts error:', error);
+    return res.status(500).json({ message: 'Failed to save SMS preferences' });
+  }
+});
+
+server.post(PROXY + '/api/account/email-notifications', authenticateToken, async (req, res) => {
+  try {
+    await ensureAccountSettingsColumns();
+
+    const userId = String(req.user?.id || '').trim();
+    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+
+    const prefs = parseEmailNotificationPrefs(req.body?.emailNotifications);
+    await knex('userData').where('id', userId).update({ emailNotifications: JSON.stringify(prefs) });
+    return res.json({ success: true, emailNotifications: prefs });
+  } catch (error) {
+    console.error('POST /api/account/email-notifications error:', error);
+    return res.status(500).json({ message: 'Failed to save email notification preferences' });
+  }
+});
+
+server.post(PROXY + '/api/account/change-password', authenticateToken, async (req, res) => {
+  try {
+    const userId = String(req.user?.id || '').trim();
+    const currentPassword = String(req.body?.currentPassword || '');
+    const newPassword = String(req.body?.newPassword || '');
+
+    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ message: 'Current and new passwords are required' });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ message: 'New password must be at least 6 characters' });
+    }
+
+    const userRow = await knex('userData').where('id', userId).select('passwordHash').first();
+    if (!userRow) return res.status(404).json({ message: 'User not found' });
+
+    if (!userRow.passwordHash) {
+      return res.status(400).json({ message: 'This account does not have a local password. Use password reset instead.' });
+    }
+
+    const isValid = await bcrypt.compare(currentPassword, userRow.passwordHash);
+    if (!isValid) {
+      return res.status(400).json({ message: 'Current password is incorrect' });
+    }
+
+    const saltRounds = 10;
+    const passwordHash = await bcrypt.hash(newPassword, saltRounds);
+    await knex('userData').where('id', userId).update({ passwordHash });
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('POST /api/account/change-password error:', error);
+    return res.status(500).json({ message: 'Failed to change password' });
+  }
+});
+
+server.post(PROXY + '/api/account/2fa/setup', authenticateToken, async (req, res) => {
+  try {
+    const userId = String(req.user?.id || '').trim();
+    const email = String(req.user?.email || '').trim();
+    if (!userId || !email) return res.status(401).json({ message: 'Unauthorized' });
+
+    const secret = authenticator.generateSecret();
+    const otpauthUrl = authenticator.keyuri(email, 'Prolifer8', secret);
+    const qrUrl = await QRCode.toDataURL(otpauthUrl);
+
+    pendingAccount2FASetups.set(userId, {
+      secret,
+      expiresAt: Date.now() + 10 * 60 * 1000,
+    });
+
+    return res.json({ qrUrl, secret });
+  } catch (error) {
+    console.error('POST /api/account/2fa/setup error:', error);
+    return res.status(500).json({ message: 'Failed to start 2FA setup' });
+  }
+});
+
+server.post(PROXY + '/api/account/2fa/enable', authenticateToken, async (req, res) => {
+  try {
+    const userId = String(req.user?.id || '').trim();
+    const code = String(req.body?.code || '').trim();
+    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+    if (!code) return res.status(400).json({ message: 'Code is required' });
+
+    const pending = pendingAccount2FASetups.get(userId);
+    if (!pending || pending.expiresAt < Date.now()) {
+      pendingAccount2FASetups.delete(userId);
+      return res.status(400).json({ message: '2FA setup expired. Start setup again.' });
+    }
+
+    if (!authenticator.verify({ token: code, secret: pending.secret })) {
+      return res.status(400).json({ message: 'Invalid authenticator code' });
+    }
+
+    const recoveryCodes = Array.from({ length: 8 }, () =>
+      [
+        crypto.randomBytes(2).toString('hex'),
+        crypto.randomBytes(2).toString('hex'),
+        crypto.randomBytes(2).toString('hex'),
+        crypto.randomBytes(2).toString('hex'),
+      ].join('-').toUpperCase()
+    );
+
+    await knex('userData').where('id', userId).update({
+      twoFactorEnabled: true,
+      twoFactorSecret: pending.secret,
+      recoveryCodes: JSON.stringify(recoveryCodes),
+    });
+
+    pendingAccount2FASetups.delete(userId);
+    return res.json({ success: true, recoveryCodes });
+  } catch (error) {
+    console.error('POST /api/account/2fa/enable error:', error);
+    return res.status(500).json({ message: 'Failed to enable 2FA' });
+  }
+});
+
+server.post(PROXY + '/api/account/2fa/disable', authenticateToken, async (req, res) => {
+  try {
+    const userId = String(req.user?.id || '').trim();
+    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+
+    await knex('userData').where('id', userId).update({
+      twoFactorEnabled: false,
+      twoFactorSecret: '',
+      recoveryCodes: null,
+    });
+
+    pendingAccount2FASetups.delete(userId);
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('POST /api/account/2fa/disable error:', error);
+    return res.status(500).json({ message: 'Failed to disable 2FA' });
+  }
+});
+
+
+
 // Custom registration route
 server.post(PROXY + '/api/auth/register', async (req, res) => {
   try {
-    const { username, email, password, firstName, lastName, accountType, birthDate } = req.body;
+    const { username, email, password, firstName, lastName, accountPlan, birthDate } = req.body;
 
     // Validate required fields
     if (!username || !email || !password || !firstName) {
@@ -970,7 +1265,7 @@ server.post(PROXY + '/api/auth/register', async (req, res) => {
       id: userId,
       loginStatus: true,
       lastLogin: currentDateTime,
-      accountType: accountType || 'free',
+      accountPlan: accountPlan || 'free',
       username: username,
       email: email,
       firstName: firstName,
@@ -996,12 +1291,12 @@ server.post(PROXY + '/api/auth/register', async (req, res) => {
     };
 
     // await pool.execute(
-    //   'INSERT INTO userData (id, loginStatus, lastLogin, accountType, username, email, firstName, lastName, phoneNumber, birthDate, encryptionKey, credits, reportCount, isBanned, banReason, banDate, banDuration, createdAt, updatedAt, passwordHash, twoFactorEnabled, twoFactorSecret, recoveryCodes, profilePicture, bio, socialLinks, verification, amount1, amount2, cryptoAmounts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    //   'INSERT INTO userData (id, loginStatus, lastLogin, accountPlan, username, email, firstName, lastName, phoneNumber, birthDate, encryptionKey, credits, reportCount, isBanned, banReason, banDate, banDuration, createdAt, updatedAt, passwordHash, twoFactorEnabled, twoFactorSecret, recoveryCodes, profilePicture, bio, socialLinks, verification, amount1, amount2, cryptoAmounts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     //   [
     //     newUser.id,
     //     newUser.loginStatus,
     //     newUser.lastLogin,
-    //     newUser.accountType,
+    //     newUser.accountPlan,
     //     newUser.username,
     //     newUser.email,
     //     newUser.firstName,
@@ -1040,7 +1335,7 @@ server.post(PROXY + '/api/auth/register', async (req, res) => {
       id: newUser.id,
       loginStatus: newUser.loginStatus,
       lastLogin: newUser.lastLogin,
-      accountType: newUser.accountType,
+      accountPlan: newUser.accountPlan,
       username: newUser.username,
       email: newUser.email,
       firstName: newUser.firstName,
@@ -1119,7 +1414,7 @@ async function buildFullAuthResponse(userId) {
     token,
     tokenExpiry: new Date(Date.now() + 7 * 24 * 3600 * 1000),
     user: { id: user.id, username: user.username, email: user.email, credits: user.credits },
-    accountType: user.accountType,
+    accountPlan: user.accountPlan,
     message: 'Login successful',
     verification: {
       verified: false,
@@ -1560,23 +1855,141 @@ server.post(PROXY + '/api/auth/verification-docs/:username', authenticateToken, 
   req.pipe(busboy);
 });
 
+/**
+ * POST /api/auth/verification-docs/:username
+ * Upload face pic and ID photo for identity verification.
+ * Files stored locally in server/uploads/verification/ — ephemeral, deleted after manual review.
+ */
+server.post(PROXY + '/api/auth/verification-docs/:username', authenticateToken, async (req, res) => {
+  const { username } = req.params;
+  let busboy;
+  try {
+    busboy = Busboy({ headers: req.headers, limits: { fileSize: 5 * 1024 * 1024, files: 2 } });
+  } catch (e) {
+    console.error('Failed to init Busboy:', e);
+    return res.status(400).json({ message: 'Invalid multipart/form-data request' });
+  }
+
+  // Local ephemeral directory
+  const uploadDir = path.join(__dirname, 'uploads', 'verification', username);
+  fs.mkdirSync(uploadDir, { recursive: true });
+
+  let uploadDone = false;
+  const savedFiles = {};
+  let pendingWrites = 0;
+  let aborted = false;
+
+  busboy.on('file', (fieldname, file, info) => {
+    if (fieldname !== 'facePic' && fieldname !== 'idPhoto') {
+      file.resume();
+      return;
+    }
+
+    const { filename: rawFilename, mimeType } = info || {};
+    const originalName =
+      typeof rawFilename === 'string' && rawFilename.trim() ? rawFilename.trim() : 'doc';
+
+    const extFromName = path.extname(originalName).toLowerCase().replace('.', '');
+    const extOk = !!extFromName && ALLOWED.test(extFromName);
+    const mimeOk = ALLOWED.test((mimeType || '').split('/').pop() || '');
+
+    if (!extOk && !mimeOk) {
+      file.resume();
+      if (!aborted) {
+        aborted = true;
+        if (!uploadDone) {
+          uploadDone = true;
+          return res.status(400).json({ message: 'Error: Images Only!' });
+        }
+      }
+      return;
+    }
+
+    pendingWrites++;
+
+    const ext = extOk ? `.${extFromName}` : (MIME_TO_EXT[(mimeType || '').toLowerCase()] || '.jpg');
+    const localFileName = `${fieldname}_${uuidv4()}${ext}`;
+    const localPath = path.join(uploadDir, localFileName);
+
+    const writeStream = fs.createWriteStream(localPath);
+    file.pipe(writeStream);
+
+    writeStream.on('error', (err) => {
+      console.error('Local write error:', err);
+      pendingWrites--;
+      if (!uploadDone) {
+        uploadDone = true;
+        return res.status(500).json({ message: 'Upload failed' });
+      }
+    });
+
+    writeStream.on('finish', async () => {
+      savedFiles[fieldname] = '/' + path.relative(__dirname, localPath).replace(/\\/g, '/');
+      pendingWrites--;
+
+      if (pendingWrites === 0 && !uploadDone) {
+        uploadDone = true;
+        try {
+          await ensureVerificationReviewColumns();
+          await knex('userData')
+            .where('username', username)
+            .update({
+              verification: 'pending',
+              verificationFacePath: savedFiles.facePic || null,
+              verificationIdPath: savedFiles.idPhoto || null,
+              verificationDocsStatus: 'pending',
+              verificationDocsNotes: null,
+              verificationDocsReviewedAt: null,
+              verificationDocsReviewedBy: null,
+            });
+
+          return res.status(200).json({
+            success: true,
+            message: 'Verification documents uploaded for review',
+            files: Object.keys(savedFiles),
+          });
+        } catch (err) {
+          console.error('DB update error:', err);
+          return res.status(500).json({ message: 'Server error' });
+        }
+      }
+    });
+  });
+
+  busboy.on('error', (err) => {
+    console.error('Busboy error:', err);
+    if (!uploadDone) { uploadDone = true; return res.status(400).json({ message: 'Malformed upload' }); }
+  });
+
+  busboy.on('finish', () => {
+    if (aborted) return;
+    if (pendingWrites === 0 && Object.keys(savedFiles).length === 0 && !uploadDone) {
+      uploadDone = true;
+      return res.status(400).json({ message: 'No files uploaded' });
+    }
+  });
+
+  req.pipe(busboy);
+});
+
 server.post(PROXY + '/api/promo-submissions', authenticateToken, async (req, res) => {
   await ensurePromoSubmissionsTable();
 
   let busboy;
   try {
-    busboy = Busboy({ headers: req.headers, limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
+    busboy = Busboy({ headers: req.headers, limits: { fileSize: 10 * 1024 * 1024, files: 2 } });
   } catch (e) {
     console.error('Promo submission init error:', e);
     return res.status(400).json({ message: 'Invalid multipart/form-data request' });
   }
 
+  const submissionId = uuidv4();
   const folderName = String(req.user?.username || req.user?.id || 'user').replace(/[^a-zA-Z0-9_-]/g, '_');
-  const uploadDir = path.join(__dirname, 'uploads', 'promo-submissions', folderName);
-  fs.mkdirSync(uploadDir, { recursive: true });
+  const submissionFolder = `uploads/promo-submissions/${folderName}/${submissionId}`;
 
   const fields = {};
   let assetPath = null;
+  let thumbnailImg = null;
   let pendingWrites = 0;
   let uploadFinished = false;
   let responded = false;
@@ -1587,6 +2000,7 @@ server.post(PROXY + '/api/promo-submissions', authenticateToken, async (req, res
 
     try {
       const submissionType = String(fields.submissionType || '').trim();
+      const normalizedSubmissionType = submissionType === 'drop_sponsorship' ? 'post_sponsorship' : submissionType;
       const mediaType = String(fields.mediaType || '').trim();
       const title = String(fields.title || '').trim();
       const description = String(fields.description || '').trim();
@@ -1595,10 +2009,10 @@ server.post(PROXY + '/api/promo-submissions', authenticateToken, async (req, res
       const mediaUrl = String(fields.mediaUrl || '').trim() || null;
       const ctaText = String(fields.ctaText || '').trim() || null;
       const contactEmail = String(fields.contactEmail || req.user?.email || '').trim();
-      const budgetUsd = Number(fields.budgetUsd || 0) || 0;
+      const budgetCredits = Number(fields.budgetCredits || 0) || 0;
       const tags = String(fields.tags || '').trim() || null;
 
-      if (!['ad', 'drop_sponsorship'].includes(submissionType)) {
+      if (!['ad', 'post_sponsorship'].includes(normalizedSubmissionType)) {
         return res.status(400).json({ message: 'Invalid submission type' });
       }
       if (!['image', 'video_link', 'audio'].includes(mediaType)) {
@@ -1610,34 +2024,37 @@ server.post(PROXY + '/api/promo-submissions', authenticateToken, async (req, res
       if (mediaType === 'video_link' && !mediaUrl) {
         return res.status(400).json({ message: 'A video link is required for video submissions' });
       }
-      if ((mediaType === 'image' || mediaType === 'audio') && !assetPath && !mediaUrl) {
-        return res.status(400).json({ message: 'Please upload a file or provide a media link' });
+      if (!thumbnailImg) {
+        return res.status(400).json({ message: 'A thumbnail image is required for promo submissions' });
+      }
+      if (mediaType === 'audio' && !assetPath && !mediaUrl) {
+        return res.status(400).json({ message: 'Please upload an audio file or provide an audio link' });
       }
 
-      const id = uuidv4();
       await knex('promoSubmissions').insert({
-        id,
+        id: submissionId,
         userId: String(req.user?.id || ''),
         username: String(req.user?.username || ''),
         email: String(req.user?.email || ''),
         contactEmail,
-        submissionType,
+        submissionType: normalizedSubmissionType,
         mediaType,
         title,
         description,
-        targetDropId,
+        targetDropId: targetDropId,
         target_url: targetUrl,
         mediaUrl,
         ctaText,
-        budgetUsd,
-        assetPath,
+        budgetCredits,
+        assetPath: mediaType === 'audio' ? assetPath : null,
+        thumbnailImg,
         tags,
         status: 'pending',
       });
 
       return res.status(200).json({
         success: true,
-        id,
+        id: submissionId,
         message: 'Promo submission received and queued for admin review',
       });
     } catch (err) {
@@ -1651,32 +2068,76 @@ server.post(PROXY + '/api/promo-submissions', authenticateToken, async (req, res
   });
 
   busboy.on('file', (fieldname, file, info) => {
-    if (fieldname !== 'asset') {
+    if (fieldname !== 'asset' && fieldname !== 'thumbnail') {
       file.resume();
       return;
     }
 
     pendingWrites++;
-    const originalName = String(info?.filename || 'asset').trim() || 'asset';
+    const originalName = String(info?.filename || fieldname).trim() || fieldname;
     const ext = path.extname(originalName) || '.bin';
-    const localFileName = `${Date.now()}_${uuidv4()}${ext}`;
-    const localPath = path.join(uploadDir, localFileName);
-    const writeStream = fs.createWriteStream(localPath);
+    const objectKey = `${submissionFolder}/${fieldname}_${Date.now()}_${uuidv4()}${ext}`;
+    const contentType = String(info?.mimeType || '').trim() || 'application/octet-stream';
+    const chunks = [];
 
-    file.pipe(writeStream);
-
-    writeStream.on('finish', () => {
-      assetPath = '/' + path.relative(__dirname, localPath).replace(/\\/g, '/');
-      pendingWrites--;
-      void finalize();
-    });
-
-    writeStream.on('error', (err) => {
-      console.error('Promo asset write error:', err);
+    if (fieldname === 'thumbnail' && !/^image\//i.test(contentType)) {
+      file.resume();
       pendingWrites--;
       if (!responded) {
         responded = true;
-        return res.status(500).json({ message: 'Failed to store uploaded asset' });
+        return res.status(400).json({ message: 'Thumbnail must be an image file' });
+      }
+      return;
+    }
+
+    file.on('data', (chunk) => {
+      chunks.push(chunk);
+    });
+
+    file.on('end', async () => {
+      try {
+        if (!storage || !BUCKET_NAME) {
+          pendingWrites--;
+          if (!responded) {
+            responded = true;
+            return res.status(500).json({ message: 'Cloud storage is not configured for promo uploads' });
+          }
+          return;
+        }
+
+        const body = Buffer.concat(chunks);
+        await storage.send(new PutObjectCommand({
+          Bucket: BUCKET_NAME,
+          Key: objectKey,
+          Body: body,
+          ContentType: contentType,
+        }));
+
+        if (fieldname === 'thumbnail') {
+          // Persist a directly renderable Cloudflare URL for promo thumbnails.
+          thumbnailImg = publicUrl(BUCKET_NAME, objectKey);
+        } else {
+          // Persist a directly renderable Cloudflare URL for promo audio assets.
+          assetPath = publicUrl(BUCKET_NAME, objectKey);
+        }
+        pendingWrites--;
+        void finalize();
+      } catch (err) {
+        console.error('Promo asset upload error:', err);
+        pendingWrites--;
+        if (!responded) {
+          responded = true;
+          return res.status(500).json({ message: 'Failed to upload promo asset to cloud storage' });
+        }
+      }
+    });
+
+    file.on('error', (err) => {
+      console.error('Promo asset stream error:', err);
+      pendingWrites--;
+      if (!responded) {
+        responded = true;
+        return res.status(500).json({ message: 'Failed to read uploaded promo asset' });
       }
     });
   });
@@ -1696,6 +2157,7 @@ server.post(PROXY + '/api/promo-submissions', authenticateToken, async (req, res
 
   req.pipe(busboy);
 });
+
 
 server.get(PROXY + '/api/promo-submissions/me', authenticateToken, async (req, res) => {
   try {
@@ -1717,7 +2179,7 @@ server.get(PROXY + '/api/promo-submissions/me', authenticateToken, async (req, r
 
       acc.total += 1;
       if (r.submissionType === 'ad') acc.ads += 1;
-      if (r.submissionType === 'drop_sponsorship') acc.sponsorships += 1;
+      if (r.submissionType === 'drop_sponsorship' || r.submissionType === 'drop_sponsorship') acc.sponsorships += 1;
       acc.impressions += impressions;
       acc.clicks += clicks;
       acc.likes += likes;
@@ -1737,6 +2199,15 @@ server.get(PROXY + '/api/promo-submissions/me', authenticateToken, async (req, r
 
     const ctr = summary.impressions > 0 ? (summary.clicks / summary.impressions) * 100 : 0;
 
+    const resolvePromoAssetUrl = (value) => {
+      const raw = String(value || '').trim();
+      if (!raw) return raw;
+      if (/^https?:\/\//i.test(raw)) return raw;
+
+      const objectPath = normalizeStoredAssetReference(raw);
+      return objectPath ? publicUrl(BUCKET_NAME, objectPath) : raw;
+    };
+
     res.json({
       summary: {
         ...summary,
@@ -1747,6 +2218,10 @@ server.get(PROXY + '/api/promo-submissions/me', authenticateToken, async (req, r
         const clicks = toNum(r.clicks);
         return {
           ...r,
+          assetPath: resolvePromoAssetUrl(r.assetPath),
+          thumbnailImg: resolvePromoAssetUrl(r.thumbnailImg),
+          thumbnailPath: resolvePromoAssetUrl(r.thumbnailPath || r.thumbnailImg),
+          mediaUrl: resolvePromoAssetUrl(r.mediaUrl),
           ctrPct: impressions > 0 ? Number(((clicks / impressions) * 100).toFixed(2)) : 0,
         };
       }),
@@ -1754,6 +2229,194 @@ server.get(PROXY + '/api/promo-submissions/me', authenticateToken, async (req, r
   } catch (err) {
     console.error('GET /api/promo-submissions/me error:', err);
     res.status(500).json({ error: 'Failed to fetch promo performance' });
+  }
+});
+
+server.delete(PROXY + '/api/promo-submissions/:id', authenticateToken, async (req, res) => {
+  try {
+    await ensurePromoSubmissionsTable();
+    const id = String(req.params.id || '');
+    const userId = String(req.user?.id || '');
+
+    const row = await knex('promoSubmissions').where({ id, userId }).first();
+    if (!row) return res.status(404).json({ error: 'Promo item not found' });
+
+    await knex('promoSubmissions').where({ id, userId }).del();
+    res.json({ success: true, id });
+  } catch (err) {
+    console.error('DELETE /api/promo-submissions/:id error:', err);
+    res.status(500).json({ error: 'Failed to delete promo item' });
+  }
+});
+
+server.patch(PROXY + '/api/promo-submissions/:id/pause', authenticateToken, async (req, res) => {
+  try {
+    await ensurePromoSubmissionsTable();
+    const id = String(req.params.id || '');
+    const userId = String(req.user?.id || '');
+    const shouldPause = Boolean(req.body?.paused);
+
+    const row = await knex('promoSubmissions').where({ id, userId }).first();
+    if (!row) return res.status(404).json({ error: 'Promo item not found' });
+
+    const currentStatus = String(row.status || '').toLowerCase();
+    const nextStatus = shouldPause ? 'paused' : 'approved';
+
+    if (shouldPause) {
+      if (currentStatus !== 'approved') {
+        return res.status(400).json({ error: 'Only approved promos can be paused' });
+      }
+    } else {
+      if (currentStatus !== 'paused') {
+        return res.status(400).json({ error: 'Only paused promos can be resumed' });
+      }
+    }
+
+    await knex('promoSubmissions')
+      .where({ id, userId })
+      .update({ status: nextStatus });
+
+    res.json({ success: true, id, status: nextStatus });
+  } catch (err) {
+    console.error('PATCH /api/promo-submissions/:id/pause error:', err);
+    res.status(500).json({ error: 'Failed to update promo status' });
+  }
+});
+
+server.get(PROXY + '/api/promo-submissions/me/export', authenticateToken, async (req, res) => {
+  try {
+    await ensurePromoSubmissionsTable();
+    const userId = String(req.user?.id || '');
+    const rows = await knex('promoSubmissions')
+      .where('userId', userId)
+      .orderBy('created_at', 'desc')
+      .select('*');
+
+    const headers = [
+      'id', 'submissionType', 'status', 'title', 'targetPostId', 'budgetCredits',
+      'impressions', 'clicks', 'likes', 'neutrals', 'dislikes', 'tags', 'created_at', 'updated_at',
+    ];
+    const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const lines = [
+      headers.map(esc).join(','),
+      ...rows.map((r) => headers.map((h) => esc(r[h])).join(',')),
+    ];
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="promo-performance.csv"');
+    res.send(lines.join('\n'));
+  } catch (err) {
+    console.error('GET /api/promo-submissions/me/export error:', err);
+    res.status(500).json({ error: 'Failed to export promo performance' });
+  }
+});
+
+
+server.get(PROXY + '/api/promo-submissions/me', authenticateToken, async (req, res) => {
+  try {
+    await ensurePromoSubmissionsTable();
+    const userId = String(req.user?.id || '');
+
+    const rows = await knex('promoSubmissions')
+      .where('userId', userId)
+      .orderBy('created_at', 'desc')
+      .select('*');
+
+    const toNum = (v) => Number(v || 0);
+    const summary = rows.reduce((acc, r) => {
+      const impressions = toNum(r.impressions);
+      const clicks = toNum(r.clicks);
+      const likes = toNum(r.likes);
+      const neutrals = toNum(r.neutrals);
+      const dislikes = toNum(r.dislikes);
+
+      acc.total += 1;
+      if (r.submissionType === 'ad') acc.ads += 1;
+      if (r.submissionType === 'drop_sponsorship' || r.submissionType === 'post_sponsorship') acc.sponsorships += 1;
+      acc.impressions += impressions;
+      acc.clicks += clicks;
+      acc.likes += likes;
+      acc.neutrals += neutrals;
+      acc.dislikes += dislikes;
+      return acc;
+    }, {
+      total: 0,
+      ads: 0,
+      sponsorships: 0,
+      impressions: 0,
+      clicks: 0,
+      likes: 0,
+      neutrals: 0,
+      dislikes: 0,
+    });
+
+    const ctr = summary.impressions > 0 ? (summary.clicks / summary.impressions) * 100 : 0;
+
+    const resolvePromoAssetUrl = (value) => {
+      const raw = String(value || '').trim();
+      if (!raw) return raw;
+      if (/^https?:\/\//i.test(raw)) return raw;
+
+      const objectPath = normalizeStoredAssetReference(raw);
+      return objectPath ? publicUrl(BUCKET_NAME, objectPath) : raw;
+    };
+
+    res.json({
+      summary: {
+        ...summary,
+        ctrPct: Number(ctr.toFixed(2)),
+      },
+      items: rows.map((r) => {
+        const impressions = toNum(r.impressions);
+        const clicks = toNum(r.clicks);
+        return {
+          ...r,
+          assetPath: resolvePromoAssetUrl(r.assetPath),
+          thumbnailImg: resolvePromoAssetUrl(r.thumbnailImg),
+          thumbnailPath: resolvePromoAssetUrl(r.thumbnailPath || r.thumbnailImg),
+          mediaUrl: resolvePromoAssetUrl(r.mediaUrl),
+          ctrPct: impressions > 0 ? Number(((clicks / impressions) * 100).toFixed(2)) : 0,
+        };
+      }),
+    });
+  } catch (err) {
+    console.error('GET /api/promo-submissions/me error:', err);
+    res.status(500).json({ error: 'Failed to fetch promo performance' });
+  }
+});
+
+
+server.patch(PROXY + '/api/promo-submissions/:id/pause', authenticateToken, async (req, res) => {
+  try {
+    await ensurePromoSubmissionsTable();
+    const id = String(req.params.id || '');
+    const userId = String(req.user?.id || '');
+    const shouldPause = Boolean(req.body?.paused);
+
+    const row = await knex('promoSubmissions').where({ id, userId }).first();
+    if (!row) return res.status(404).json({ error: 'Promo item not found' });
+
+    const currentStatus = String(row.status || '').toLowerCase();
+    const nextStatus = shouldPause ? 'paused' : 'approved';
+
+    if (shouldPause) {
+      if (currentStatus !== 'approved') {
+        return res.status(400).json({ error: 'Only approved promos can be paused' });
+      }
+    } else {
+      if (currentStatus !== 'paused') {
+        return res.status(400).json({ error: 'Only paused promos can be resumed' });
+      }
+    }
+
+    await knex('promoSubmissions')
+      .where({ id, userId })
+      .update({ status: nextStatus });
+
+    res.json({ success: true, id, status: nextStatus });
+  } catch (err) {
+    console.error('PATCH /api/promo-submissions/:id/pause error:', err);
+    res.status(500).json({ error: 'Failed to update promo status' });
   }
 });
 
@@ -1784,7 +2447,7 @@ server.get(PROXY + '/api/promo-submissions/me/export', authenticateToken, async 
       .select('*');
 
     const headers = [
-      'id', 'submissionType', 'status', 'title', 'targetDropId', 'budgetUsd',
+      'id', 'submissionType', 'status', 'title', 'targetDropId', 'budgetCredits',
       'impressions', 'clicks', 'likes', 'neutrals', 'dislikes', 'tags', 'created_at', 'updated_at',
     ];
     const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
@@ -1859,6 +2522,24 @@ const createEmailVerificationRecord = async (email, code) => {
   return { expiresAt };
 };
 
+
+const ensurePhoneVerificationTable = async () => {
+  await knex.raw(
+    `CREATE TABLE IF NOT EXISTS phoneVerifications (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      userID VARCHAR(12) DEFAULT NULL,
+      email VARCHAR(100) DEFAULT NULL,
+      phone VARCHAR(16) DEFAULT NULL,
+      code VARCHAR(10) DEFAULT NULL,
+      expiresAt DATETIME DEFAULT NULL,
+      createdAt DATETIME DEFAULT NULL,
+      used TINYINT(1) DEFAULT 0,
+      INDEX idx_email (email),
+      INDEX idx_expires (expiresAt)
+    )`
+  );
+};
+
 const ensurePasswordResetTable = async () => {
   await knex.raw(
     `CREATE TABLE IF NOT EXISTS passwordResets (
@@ -1890,8 +2571,9 @@ const ensurePromoSubmissionsTable = async () => {
       mediaUrl VARCHAR(500) DEFAULT NULL,
       targetUrl VARCHAR(500) DEFAULT NULL,
       ctaText VARCHAR(255) DEFAULT NULL,
-      budgetUsd DECIMAL(10,2) DEFAULT 0,
+      budgetCredits DECIMAL(10,2) DEFAULT 0,
       assetPath VARCHAR(255) DEFAULT NULL,
+      thumbnailImg VARCHAR(255) DEFAULT NULL,
       status VARCHAR(40) NOT NULL DEFAULT 'pending',
       adminNotes TEXT,
       clicks INT DEFAULT 0,
@@ -1914,7 +2596,7 @@ const ensurePromoSubmissionsTable = async () => {
     `SELECT COLUMN_NAME FROM information_schema.COLUMNS
      WHERE TABLE_SCHEMA = DATABASE()
        AND TABLE_NAME = 'promoSubmissions'
-       AND COLUMN_NAME IN ('clicks', 'dislikes', 'likes', 'neutrals', 'impressions', 'billedImpressions', 'billedClicks', 'tags')`
+       AND COLUMN_NAME IN ('clicks', 'dislikes', 'likes', 'neutrals', 'impressions', 'billedImpressions', 'billedClicks', 'tags', 'thumbnailImg', 'assetPath')`
   );
 
   const existing = new Set((cols || []).map((col) => col.COLUMN_NAME));
@@ -1927,6 +2609,8 @@ const ensurePromoSubmissionsTable = async () => {
   if (!existing.has('billedImpressions')) alters.push('ADD COLUMN billedImpressions INT DEFAULT 0');
   if (!existing.has('billedClicks')) alters.push('ADD COLUMN billedClicks INT DEFAULT 0');
   if (!existing.has('tags')) alters.push('ADD COLUMN tags TINYTEXT');
+  if (!existing.has('thumbnailImg')) alters.push('ADD COLUMN thumbnailImg VARCHAR(255) DEFAULT NULL');
+  if (!existing.has('assetPath')) alters.push('ADD COLUMN assetPath VARCHAR(255) DEFAULT NULL');
 
   if (alters.length > 0) {
     await knex.raw(`ALTER TABLE promoSubmissions ${alters.join(', ')}`);
@@ -2283,6 +2967,83 @@ server.post(PROXY + '/api/auth/resend-verification', async (req, res) => {
     });
   }
 });
+
+
+server.post(PROXY + '/api/auth/phone-verification-status', authenticateToken, async (req, res) => {
+  try {
+    const email = String(req.body?.email || '').trim();
+    const phone = String(req.body?.phone || '').trim();
+    const tokenUserId = String(req.user?.id || '').trim();
+    const userId = tokenUserId || String(req.body?.userId || '').trim();
+
+    if (!email && !phone && !userId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Provide at least one of email, phone, or userId'
+      });
+    }
+
+    await ensurePhoneVerificationTable();
+
+    const rows = await knex('phoneVerifications')
+      .where('used', 1)
+      .modify((qb) => {
+        qb.where(function () {
+          if (userId) this.orWhere('userID', userId);
+          if (email) this.orWhere('email', email);
+          if (phone) this.orWhere('phone', phone);
+        });
+      })
+      .select('id')
+      .orderBy('createdAt', 'desc')
+      .limit(1);
+
+    return res.json({
+      success: true,
+      verified: rows.length > 0
+    });
+  } catch (error) {
+    console.error('Phone verification status error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error occurred while checking phone verification status'
+    });
+  }
+});
+
+
+server.post(PROXY + '/api/auth/email-verification-status', authenticateToken, async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is required'
+      });
+    }
+
+    await ensureEmailVerificationTable();
+
+    const rows = await knex('emailVerifications')
+      .where({ email, used: 1 })
+      .select('id')
+      .orderBy('createdAt', 'desc')
+      .limit(1);
+
+    return res.json({
+      success: true,
+      verified: rows.length > 0
+    });
+  } catch (error) {
+    console.error('Email verification status error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error occurred while checking email verification status'
+    });
+  }
+});
+
 
 // Custom email verification route
 server.post(PROXY + '/api/auth/verify-email', async (req, res) => {
@@ -2860,7 +3621,7 @@ server.post(PROXY + '/api/userData', async (req, res) => {
       id: userId,
       loginStatus: newUser.loginStatus,
       lastLogin: formatDateTimeForMySQL(newUser.lastLogin),
-      accountType: newUser.accountType,
+      accountPlan: newUser.accountPlan,
       username: newUser.username,
       email: newUser.email,
       firstName: newUser.firstName,
@@ -4201,7 +4962,7 @@ const { setDefaultResultOrder } = require('dns');
 const { waitForDebugger } = require('inspector');
 
 //  CloudFlare R2 Storage configuration for banner uploads:
-const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, DeleteObjectCommand, PutBucketCorsCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { randomUUID } = require('crypto');
 
@@ -4248,9 +5009,34 @@ const storage = R2_ENDPOINT && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY
   })
   : null;
 
-const BUCKET_NAME = process.env.R2_BUCKET || endpointBucketFromPath || process.env.GCS_BUCKET || 'prolifer8-app';
+const BUCKET_NAME = process.env.R2_BUCKET || process.env.R2_BUCKET_NAME || endpointBucketFromPath || process.env.GCS_BUCKET || 'prolifer8-app';
 const DEST_PREFIX = process.env.STORAGE_PREFIX || process.env.GCS_PREFIX || 'storage_folder'; // "folder" inside bucket
-const PUBLIC_STORAGE_BASE_URL = (process.env.R2_PUBLIC_BASE_URL || '').replace(/\/$/, '');
+
+function normalizeUrlCandidate(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw.replace(/\/$/, '');
+  return `https://${raw.replace(/^\/+/, '').replace(/\/$/, '')}`;
+}
+
+function selectPublicStorageBaseUrl() {
+  const isProd = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
+
+  const envSpecific = isProd
+    ? (process.env.STORAGE_PUBLIC_PROD_BASE_URL || process.env.R2_PUBLIC_PROD_BASE_URL || process.env.R2_CUSTOM_DOMAIN_URL || process.env.R2_CUSTOM_DOMAIN)
+    : (process.env.STORAGE_PUBLIC_DEV_BASE_URL || process.env.R2_PUBLIC_DEV_BASE_URL || process.env.R2_DEV_PUBLIC_BASE_URL || process.env.R2_DEV_BASE_URL);
+
+  const general = process.env.STORAGE_PUBLIC_BASE_URL
+    || process.env.R2_PUBLIC_BASE_URL
+    || process.env.R2_PUBLIC_BASE
+    || process.env.R2_CUSTOM_DOMAIN_URL
+    || process.env.R2_CUSTOM_DOMAIN
+    || '';
+
+  return normalizeUrlCandidate(envSpecific || general);
+}
+
+const PUBLIC_STORAGE_BASE_URL = selectPublicStorageBaseUrl();
 
 if (!storage) {
   console.warn('⚠️  Cloud storage disabled: set R2_ENDPOINT, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY');
@@ -4267,6 +5053,50 @@ function publicUrl(bucket, filepath) {
   }
   return `/${bucket}/${encodeURI(objectPath)}`;
 }
+
+function parseCorsOrigins() {
+  const raw = String(
+    process.env.R2_CORS_ORIGINS
+    || process.env.APP_ORIGIN
+    || 'http://localhost:5173,http://localhost:5174,http://localhost:3000'
+  );
+
+  const origins = raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+  return origins.length ? origins : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000'];
+}
+
+async function configureR2BucketCors() {
+  if (!storage || !BUCKET_NAME) return;
+
+  try {
+    const allowedOrigins = parseCorsOrigins();
+
+    await storage.send(new PutBucketCorsCommand({
+      Bucket: BUCKET_NAME,
+      CORSConfiguration: {
+        CORSRules: [
+          {
+            AllowedOrigins: allowedOrigins,
+            AllowedMethods: ['GET', 'HEAD', 'PUT', 'POST', 'DELETE'],
+            AllowedHeaders: ['*'],
+            ExposeHeaders: ['ETag', 'Content-Length', 'Content-Type', 'x-amz-request-id'],
+            MaxAgeSeconds: 3600,
+          },
+        ],
+      },
+    }));
+
+    console.log(`✅ R2 bucket CORS configured for ${BUCKET_NAME}: ${allowedOrigins.join(', ')}`);
+  } catch (err) {
+    console.error('⚠️ Failed to configure R2 bucket CORS:', err.message || err);
+  }
+}
+
+void configureR2BucketCors();
 
 // // ######################## POST TRANSACTION SCREENSHOT ###############################
 // // todo: change the route below to /transaction-screenshot
@@ -4530,7 +5360,587 @@ server.post(PROXY + '/api/upload/transaction-screenshot/:username/:txHash', auth
   });
 
   req.pipe(busboy);
+  
 });
+
+
+
+// ────────────────────────────── PROFILE PICTURE UPLOAD ─────────────────────────────
+
+/**
+ * POST /api/users/profile-upload-url
+ * Returns a short-lived signed R2 upload URL for profile avatar/banner uploads.
+ * Body: { kind: 'avatar' | 'banner', contentType: string }
+ */
+server.post(PROXY + '/api/users/profile-upload-url', authenticateToken, async (req, res) => {
+  try {
+    if (!storage || !BUCKET_NAME) {
+      return res.status(503).json({ message: 'Cloud storage not configured' });
+    }
+
+    const userId = String(req.user?.id || '').trim();
+    const kind = String(req.body?.kind || '').trim().toLowerCase();
+    const contentType = String(req.body?.contentType || '').trim().toLowerCase();
+
+    if (!userId) {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
+    if (!['avatar', 'banner'].includes(kind)) {
+      return res.status(400).json({ message: 'Invalid upload kind' });
+    }
+
+    const allowedImageTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+    if (!allowedImageTypes.has(contentType)) {
+      return res.status(400).json({ message: 'Unsupported image type' });
+    }
+
+    const ext = MIME_TO_EXT[contentType] || '.webp';
+    const safePrefix = String(DEST_PREFIX || 'storage_folder').replace(/^\/+|\/+$/g, '');
+    const objectKey = `${safePrefix}/profiles/${userId}/${kind}/${randomUUID()}${ext}`;
+
+    const command = new PutObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: objectKey,
+      ContentType: contentType,
+    });
+
+    const uploadUrl = await getSignedUrl(storage, command, { expiresIn: 300 });
+    const fileUrl = publicUrl(BUCKET_NAME, objectKey);
+
+    console.log(`Successfully generated upload URL for user ${userId} (${kind}): ${fileUrl}`);
+
+    return res.json({
+      success: true,
+      uploadUrl,
+      fileUrl,
+      objectKey,
+      expiresIn: 300,
+    });
+  } catch (error) {
+    console.error('POST /api/users/profile-upload-url error:', error);
+    return res.status(500).json({ message: 'Failed to create upload URL' });
+  }
+});
+
+/**
+ * POST /api/users/profile/avatar-upload
+ * Multipart upload endpoint used by EditProfile page.
+ * Stores avatar in R2 and updates userData.profilePicture.
+ */
+server.post(PROXY + '/api/users/profile/avatar-upload', authenticateToken, async (req, res) => {
+  let busboy;
+  try {
+    busboy = Busboy({ headers: req.headers, limits: { fileSize: 2 * 1024 * 1024, files: 1 } });
+  } catch (e) {
+    console.error('Failed to init Busboy (avatar-upload):', e);
+    return res.status(400).json({ message: 'Invalid multipart/form-data request' });
+  }
+
+  const userId = String(req.user?.id || '').trim();
+  if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+  if (!storage || !BUCKET_NAME) return res.status(503).json({ message: 'Cloud storage not configured' });
+
+  let responded = false;
+  let sawFile = false;
+
+  busboy.on('file', (fieldname, file, info) => {
+    sawFile = true;
+    if (fieldname !== 'image') {
+      file.resume();
+      if (!responded) {
+        responded = true;
+        return res.status(400).json({ message: 'Expected file field: image' });
+      }
+      return;
+    }
+
+    const { filename: rawFilename, mimeType } = info || {};
+    const safeMime = String(mimeType || '').toLowerCase();
+    const extFromMime = MIME_TO_EXT[safeMime] || '';
+    const extFromName = path.extname(String(rawFilename || '')).toLowerCase();
+    const ext = extFromMime || extFromName;
+
+    const allowedImageMimes = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif']);
+    if (!allowedImageMimes.has(safeMime) || !ext) {
+      file.resume();
+      if (!responded) {
+        responded = true;
+        return res.status(400).json({ message: 'Unsupported image type' });
+      }
+      return;
+    }
+
+    const objectKey = `${DEST_PREFIX}/profiles/${userId}/avatar/${randomUUID()}${ext}`;
+    const chunks = [];
+
+    file.on('data', (chunk) => chunks.push(chunk));
+    file.on('error', (err) => {
+      console.error('Avatar upload stream error:', err);
+      if (!responded) {
+        responded = true;
+        return res.status(500).json({ message: 'Upload failed' });
+      }
+    });
+
+    file.on('end', async () => {
+      try {
+        await storage.send(new PutObjectCommand({
+          Bucket: BUCKET_NAME,
+          Key: objectKey,
+          Body: Buffer.concat(chunks),
+          ContentType: safeMime,
+          CacheControl: 'public, max-age=31536000, immutable',
+        }));
+
+        const imageUrl = publicUrl(BUCKET_NAME, objectKey);
+        await knex('userData').where('id', userId).update({ profilePicture: imageUrl });
+
+        if (!responded) {
+          responded = true;
+          return res.status(200).json({ success: true, url: imageUrl, path: objectKey });
+        }
+      } catch (err) {
+        console.error('Avatar upload post-processing error:', err);
+        if (!responded) {
+          responded = true;
+          return res.status(500).json({ message: 'Server error' });
+        }
+      }
+    });
+  });
+
+  busboy.on('error', (err) => {
+    console.error('Busboy error (avatar-upload):', err);
+    if (!responded) {
+      responded = true;
+      return res.status(400).json({ message: 'Malformed upload' });
+    }
+  });
+
+  busboy.on('finish', () => {
+    if (!sawFile && !responded) {
+      responded = true;
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
+  });
+
+  req.pipe(busboy);
+});
+
+/**
+ * POST /api/users/profile/banner-upload
+ * Multipart upload endpoint used by EditProfile page.
+ * Stores banner in R2 and updates userData.bannerUrl.
+ */
+server.post(PROXY + '/api/users/profile/banner-upload', authenticateToken, async (req, res) => {
+  let busboy;
+  try {
+    busboy = Busboy({ headers: req.headers, limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
+  } catch (e) {
+    console.error('Failed to init Busboy (banner-upload):', e);
+    return res.status(400).json({ message: 'Invalid multipart/form-data request' });
+  }
+
+  const userId = String(req.user?.id || '').trim();
+  if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+  if (!storage || !BUCKET_NAME) return res.status(503).json({ message: 'Cloud storage not configured' });
+
+  let responded = false;
+  let sawFile = false;
+
+  busboy.on('file', (fieldname, file, info) => {
+    sawFile = true;
+    if (fieldname !== 'image') {
+      file.resume();
+      if (!responded) {
+        responded = true;
+        return res.status(400).json({ message: 'Expected file field: image' });
+      }
+      return;
+    }
+
+    const { filename: rawFilename, mimeType } = info || {};
+    const safeMime = String(mimeType || '').toLowerCase();
+    const extFromMime = MIME_TO_EXT[safeMime] || '';
+    const extFromName = path.extname(String(rawFilename || '')).toLowerCase();
+    const ext = extFromMime || extFromName;
+
+    const allowedImageMimes = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif']);
+    if (!allowedImageMimes.has(safeMime) || !ext) {
+      file.resume();
+      if (!responded) {
+        responded = true;
+        return res.status(400).json({ message: 'Unsupported image type' });
+      }
+      return;
+    }
+
+    const objectKey = `${DEST_PREFIX}/profiles/${userId}/banner/${randomUUID()}${ext}`;
+    const chunks = [];
+
+    file.on('data', (chunk) => chunks.push(chunk));
+    file.on('error', (err) => {
+      console.error('Banner upload stream error:', err);
+      if (!responded) {
+        responded = true;
+        return res.status(500).json({ message: 'Upload failed' });
+      }
+    });
+
+    file.on('end', async () => {
+      try {
+        await storage.send(new PutObjectCommand({
+          Bucket: BUCKET_NAME,
+          Key: objectKey,
+          Body: Buffer.concat(chunks),
+          ContentType: safeMime,
+          CacheControl: 'public, max-age=31536000, immutable',
+        }));
+
+        const imageUrl = publicUrl(BUCKET_NAME, objectKey);
+        await knex('userData').where('id', userId).update({ bannerUrl: imageUrl });
+
+        if (!responded) {
+          responded = true;
+          return res.status(200).json({ success: true, url: imageUrl, path: objectKey });
+        }
+      } catch (err) {
+        console.error('Banner upload post-processing error:', err);
+        if (!responded) {
+          responded = true;
+          return res.status(500).json({ message: 'Server error' });
+        }
+      }
+    });
+  });
+
+  busboy.on('error', (err) => {
+    console.error('Busboy error (banner-upload):', err);
+    if (!responded) {
+      responded = true;
+      return res.status(400).json({ message: 'Malformed upload' });
+    }
+  });
+
+  busboy.on('finish', () => {
+    if (!sawFile && !responded) {
+      responded = true;
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
+  });
+
+  req.pipe(busboy);
+});
+
+/**
+ * POST /api/profile-picture/:username
+ * Accepts a multipart/form-data upload for a user's profile picture.
+ * Stores the image in Google Cloud Storage and updates the user's profilePicture field.
+ */
+server.post(PROXY + '/api/profile-picture/:username', authenticateToken, async (req, res) => {
+  const { username } = req.params;
+  let busboy;
+  try {
+    busboy = Busboy({ headers: req.headers, limits: { fileSize: 2 * 1024 * 1024 } }); // 2 MB
+  } catch (e) {
+    console.error('Failed to init Busboy:', e);
+    return res.status(400).json({ message: 'Invalid multipart/form-data request' });
+  }
+
+  let uploadDone = false;
+  let gcsFilePath = '';
+  let mimeTypeGlobal = '';
+  let hadFile = false;
+  let aborted = false;
+
+  if (!storage) {
+    return res.status(503).json({ message: 'Cloud storage not configured' });
+  }
+
+  busboy.on('file', (fieldname, file, info) => {
+    hadFile = true;
+    const { filename: rawFilename, mimeType } = info || {};
+    const originalName =
+      typeof rawFilename === 'string' && rawFilename.trim() ? rawFilename.trim() : 'profile';
+
+    // Validate by ext and mime
+    const extFromName = path.extname(originalName).toLowerCase().replace('.', '');
+    const extOk = !!extFromName && ALLOWED.test(extFromName);
+    const mimeOk = ALLOWED.test((mimeType || '').split('/').pop() || '');
+
+    if (!extOk && !mimeOk) {
+      file.resume();
+      aborted = true;
+      return res.status(400).json({ message: 'Error: Images Only!' });
+    }
+
+    const base = path
+      .basename(originalName)
+      .replace(/\s+/g, '_')
+      .replace(/[^A-Za-z0-9._-]/g, '');
+
+    const resolvedExt =
+      (extOk ? `.${extFromName}` : (MIME_TO_EXT[(mimeType || '').toLowerCase()] || '')) || '';
+
+    let finalBase = base;
+    if (!resolvedExt || !base.toLowerCase().endsWith(resolvedExt.toLowerCase())) {
+      finalBase = `${base}${resolvedExt}`;
+    }
+
+    const finalName = `${uuidv4()}_${finalBase}`;
+    gcsFilePath = `${DEST_PREFIX}/profile_pics/${finalName}`;
+    mimeTypeGlobal = mimeType || 'application/octet-stream';
+
+    const chunks = [];
+    file.on('data', (chunk) => chunks.push(chunk));
+
+    file.on('error', (err) => {
+      console.error('Upload stream error:', err);
+      if (!uploadDone) {
+        uploadDone = true;
+        return res.status(500).json({ message: 'Upload failed' });
+      }
+    });
+
+    file.on('end', async () => {
+      try {
+        await storage.send(new PutObjectCommand({
+          Bucket: BUCKET_NAME,
+          Key: gcsFilePath,
+          Body: Buffer.concat(chunks),
+          ContentType: mimeTypeGlobal,
+        }));
+
+        const imageUrl = publicUrl(BUCKET_NAME, gcsFilePath);
+
+        // Update user profilePicture in DB
+        await knex('userData')
+          .where('username', username)
+          .update({ profilePicture: imageUrl });
+
+        console.log(`Updated profile picture for user ${username} to: ${imageUrl}`);
+
+        if (!uploadDone) {
+          uploadDone = true;
+          return res.status(200).json({
+            success: true,
+            message: 'Profile picture uploaded successfully',
+            url: imageUrl
+          });
+        }
+      } catch (err) {
+        console.error('Post-upload error:', err);
+        if (!uploadDone) {
+          uploadDone = true;
+          return res.status(500).json({ message: 'Server error' });
+        }
+      }
+    });
+  });
+
+  busboy.on('error', (err) => {
+    console.error('Busboy error:', err);
+    if (!uploadDone) {
+      uploadDone = true;
+      return res.status(400).json({ message: 'Malformed upload' });
+    }
+  });
+
+  busboy.on('partsLimit', () => {
+    aborted = true;
+    if (!uploadDone) {
+      uploadDone = true;
+      return res.status(400).json({ message: 'Too many parts in form data' });
+    }
+  });
+
+  busboy.on('filesLimit', () => {
+    aborted = true;
+    if (!uploadDone) {
+      uploadDone = true;
+      return res.status(400).json({ message: 'Too many files' });
+    }
+  });
+
+  busboy.on('fieldsLimit', () => {
+    aborted = true;
+    if (!uploadDone) {
+      uploadDone = true;
+      return res.status(400).json({ message: 'Too many fields' });
+    }
+  });
+
+  busboy.on('finish', () => {
+    if (aborted) return;
+    if (!hadFile && !uploadDone) {
+      uploadDone = true;
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
+  });
+
+  req.pipe(busboy);
+});
+
+
+// ────────────────────────────── PROFILE PICTURE UPLOAD ─────────────────────────────
+
+/**
+ * POST /api/profile-banner/:username
+ * Accepts a multipart/form-data upload for a user's profile banner.
+ * Stores the image in Cloudflare R2 and updates userData.bannerUrl with the object path.
+ */
+server.post(PROXY + '/api/profile-banner/:username', authenticateToken, async (req, res) => {
+  const { username } = req.params;
+  let busboy;
+  try {
+    busboy = Busboy({ headers: req.headers, limits: { fileSize: 2 * 1024 * 1024 } }); // 2 MB
+  } catch (e) {
+    console.error('Failed to init Busboy:', e);
+    return res.status(400).json({ message: 'Invalid multipart/form-data request' });
+  }
+
+  let uploadDone = false;
+  let gcsFilePath = '';
+  let mimeTypeGlobal = '';
+  let hadFile = false;
+  let aborted = false;
+
+  if (!storage) {
+    return res.status(503).json({ message: 'Cloud storage not configured' });
+  }
+
+  busboy.on('file', (fieldname, file, info) => {
+    hadFile = true;
+    const { filename: rawFilename, mimeType } = info || {};
+    const originalName =
+      typeof rawFilename === 'string' && rawFilename.trim() ? rawFilename.trim() : 'profile';
+
+    // Validate by ext and mime
+    const extFromName = path.extname(originalName).toLowerCase().replace('.', '');
+    const extOk = !!extFromName && ALLOWED.test(extFromName);
+    const mimeOk = ALLOWED.test((mimeType || '').split('/').pop() || '');
+
+    if (!extOk && !mimeOk) {
+      file.resume();
+      aborted = true;
+      return res.status(400).json({ message: 'Error: Images Only!' });
+    }
+
+    const base = path
+      .basename(originalName)
+      .replace(/\s+/g, '_')
+      .replace(/[^A-Za-z0-9._-]/g, '');
+
+    const resolvedExt =
+      (extOk ? `.${extFromName}` : (MIME_TO_EXT[(mimeType || '').toLowerCase()] || '')) || '';
+
+    let finalBase = base;
+    if (!resolvedExt || !base.toLowerCase().endsWith(resolvedExt.toLowerCase())) {
+      finalBase = `${base}${resolvedExt}`;
+    }
+
+    const finalName = `${uuidv4()}_${finalBase}`;
+    gcsFilePath = `${DEST_PREFIX}/profile_banners/${finalName}`;
+    mimeTypeGlobal = mimeType || 'application/octet-stream';
+
+    const chunks = [];
+    file.on('data', (chunk) => chunks.push(chunk));
+
+    file.on('error', (err) => {
+      console.error('Upload stream error:', err);
+      if (!uploadDone) {
+        uploadDone = true;
+        return res.status(500).json({ message: 'Upload failed' });
+      }
+    });
+
+    file.on('end', async () => {
+      try {
+        await storage.send(new PutObjectCommand({
+          Bucket: BUCKET_NAME,
+          Key: gcsFilePath,
+          Body: Buffer.concat(chunks),
+          ContentType: mimeTypeGlobal,
+        }));
+
+        const imageUrl = publicUrl(BUCKET_NAME, gcsFilePath);
+        const bannerPath = gcsFilePath;
+
+        // Update user bannerUrl in DB
+        await knex('userData')
+          .where('username', username)
+          .update({ bannerUrl: bannerPath });
+
+        console.log(`Updated profile banner for user ${username} to path: ${bannerPath}`);
+
+        if (!uploadDone) {
+          uploadDone = true;
+          return res.status(200).json({
+            success: true,
+            message: 'Profile banner uploaded successfully',
+            path: bannerPath,
+            url: imageUrl
+          });
+        }
+      } catch (err) {
+        console.error('Post-upload error:', err);
+        if (!uploadDone) {
+          uploadDone = true;
+          return res.status(500).json({ message: 'Server error' });
+        }
+      }
+    });
+  });
+
+  busboy.on('error', (err) => {
+    console.error('Busboy error:', err);
+    if (!uploadDone) {
+      uploadDone = true;
+      return res.status(400).json({ message: 'Malformed upload' });
+    }
+  });
+
+  busboy.on('partsLimit', () => {
+    aborted = true;
+    if (!uploadDone) {
+      uploadDone = true;
+      return res.status(400).json({ message: 'Too many parts in form data' });
+    }
+  });
+
+  busboy.on('filesLimit', () => {
+    aborted = true;
+    if (!uploadDone) {
+      uploadDone = true;
+      return res.status(400).json({ message: 'Too many files' });
+    }
+  });
+
+  busboy.on('fieldsLimit', () => {
+    aborted = true;
+    if (!uploadDone) {
+      uploadDone = true;
+      return res.status(400).json({ message: 'Too many fields' });
+    }
+  });
+
+  busboy.on('finish', () => {
+    if (aborted) return;
+    if (!hadFile && !uploadDone) {
+      uploadDone = true;
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
+  });
+
+  req.pipe(busboy);
+});
+
+
+
+// ========================================
+// Billing and Transaction Monitoring Crons
+// ========================================
+
 
 
 
@@ -4715,81 +6125,6 @@ server.post(PROXY + '/api/profile-picture/:username', authenticateToken, async (
 
   req.pipe(busboy);
 });
-
-// // Basic RESTful routes for all tables
-// server.get(PROXY + '/api/table/:table', async (req, res) => {
-//   try {
-//     const table = req.params.table;
-//     const allowedTables = ['userData', 'CreditPurchases', 'redeemCredits', 'earnings', 'actions', 'createdKeys', 'notifications', 'wallet', 'reports', 'supportTickets'];
-
-//     if (!allowedTables.includes(table)) {
-//       return res.status(400).json({ error: 'Invalid table name' });
-//     }
-
-//     const rows = await knex(table).select('*');
-//     res.json(rows);
-//   } catch (error) {
-//     console.error(`Get ${req.params.table} error:`, error);
-//     res.status(500).json({ error: 'Database error' });
-//   }
-// });
-
-// server.get(PROXY + '/api/table/:table/:id', async (req, res) => {
-//   try {
-//     const { table, id } = req.params;
-//     const allowedTables = ['userData', 'CreditPurchases', 'redeemCredits', 'earnings', 'actions', 'notifications', 'wallet', 'reports', 'supportTickets'];
-
-//     if (!allowedTables.includes(table)) {
-//       return res.status(400).json({ error: 'Invalid table name' });
-//     }
-
-//     const rows = await knex(table).where('id', id).select('*');
-
-//     if (rows.length === 0) {
-//       return res.status(404).json({ error: 'Record not found' });
-//     }
-
-//     res.json(rows[0]);
-//   } catch (error) {
-//     console.error(`Get ${req.params.table} by ID error:`, error);
-//     res.status(500).json({ error: 'Database error' });
-//   }
-// });
-
-// server.patch(PROXY + '/api/table/:table/:id', async (req, res) => {
-//   try {
-//     const { table, id } = req.params;
-//     const allowedTables = ['userData', 'CreditPurchases', 'redeemCredits', 'earnings', 'actions', 'createdKeys', 'notifications', 'wallet', 'reports', 'supportTickets'];
-
-//     if (!allowedTables.includes(table)) {
-//       return res.status(400).json({ error: 'Invalid table name' });
-//     }
-
-//     const updateData = req.body;
-//     const columns = Object.keys(updateData);
-//     const values = Object.values(updateData);
-
-//     if (columns.length === 0) {
-//       return res.status(400).json({ error: 'No data to update' });
-//     }
-
-//     const setClause = columns.map(col => `${col} = ?`).join(', ');
-//     const query = `UPDATE ${table} SET ${setClause} WHERE id = ?`;
-
-//     const result = await knex.raw(query, [...values, id]);
-
-//     if (result[0].affectedRows === 0) {
-//       return res.status(404).json({ error: 'Record not found' });
-//     }
-
-//     // Get updated record
-//     const updated = await knex(table).where('id', id).select('*');
-//     res.json(updated[0]);
-//   } catch (error) {
-//     console.error(`Update ${req.params.table} error:`, error);
-//     res.status(500).json({ error: 'Database error - update failed (patch)' });
-//   }
-// });
 
 
 
@@ -5486,139 +6821,6 @@ server.post(PROXY + '/api/upload-drop-media', authenticateToken, async (req, res
   });
 });
 
-
-// Code from FRONTEND_URL
-// log succesful media unscramble event to analytics on back end
-// api.post('/api/analytics/unscramble-event', {
-//   username: userData.username,
-//   userId: userData.id,
-//   creator: decodedParams?.creator || 'unknown',
-//   scrambleType: 'photo',
-//   scrambleLevel: scrambleLevel,
-//   timestamp: new Date().toISOString(),
-//   actionCost: actionCost,
-//   keyId: decodedParams?.keyId || 'unknown',
-//   unscrambleKey: decodedParams ? JSON.stringify(decodedParams) : null,
-//   mediaDetails: {
-//     name: selectedFile?.name || 'unknown',
-//     size: selectedFile?.size || 0,
-//     width: scrambledImageRef.current?.naturalWidth || 0,
-//     height: scrambledImageRef.current?.naturalHeight || 0
-//   }
-// }).catch(err => {
-//   console.error('Failed to log analytics event:', err);
-
-// });
-
-server.post('/api/analytics/unscramble-event', async (req, res) => {
-  try {
-    const { username, userId, actionCost, unscrambleKey, mediaDetails, watermarkParams, scrambleType } = req.body;
-
-    console.log('📊 Log unscramble event:', {
-      "username": username,
-      "userId": userId,
-      // "creator": creator,
-      "actionCost": actionCost,
-      "unscrambleKey": unscrambleKey,
-      "mediaDetails": mediaDetails,
-      "watermarkParams": watermarkParams,
-      "scrambleType": scrambleType
-    });
-
-    let creator = JSON.parse(unscrambleKey)?.creator || 'unknown';
-    console.log('👤 Creator identified as:', creator);
-
-    // CREATE TABLE
-    // `unscrambles` (
-    //   `id` int unsigned NOT NULL AUTO_INCREMENT,
-    //   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    //   `userId` varchar(255) DEFAULT NULL,
-    //   `username` varchar(255) DEFAULT NULL,
-    //   `action_cost` int DEFAULT NULL,
-    //   `creatorId` varchar(255) DEFAULT NULL,
-    //   `keyData` json DEFAULT NULL,
-    //   `mediaDetails` json DEFAULT NULL,
-    //   `watermark_params` json DEFAULT NULL,
-    //   PRIMARY KEY (`id`)
-    // ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci
-    if (scrambleType === 'audio') {
-      await knex('audio_unscrambles').insert({
-        userId: userId || null,
-        username: username || 'anonymous',
-        creator: JSON.stringify(creator) || '{"unknown"}',
-        action_cost: actionCost || 'unknown',
-        keyData: unscrambleKey ? JSON.stringify(unscrambleKey) : null,
-        mediaDetails: mediaDetails ? JSON.stringify(mediaDetails) : null,
-        watermark_params: watermarkParams ? JSON.stringify(watermarkParams) : null
-      });
-    } else if (scrambleType === 'video') {
-
-      await knex('video_unscrambles').insert({
-        userId: userId || null,
-        username: username || 'anonymous',
-        creator: JSON.stringify(creator) || '{"unknown"}',
-        action_cost: actionCost || 'unknown',
-        keyData: unscrambleKey ? JSON.stringify(unscrambleKey) : null,
-        mediaDetails: mediaDetails ? JSON.stringify(mediaDetails) : null,
-        watermark_params: watermarkParams ? JSON.stringify(watermarkParams) : null
-      });
-
-    } else {
-
-      await knex('photo_unscrambles').insert({
-        userId: userId || null,
-        username: username || 'anonymous',
-        creator: JSON.stringify(creator) || '{"unknown"}',
-        action_cost: actionCost || 'unknown',
-        keyData: unscrambleKey ? JSON.stringify(unscrambleKey) : null,
-        mediaDetails: mediaDetails ? JSON.stringify(mediaDetails) : null,
-        watermark_params: watermarkParams ? JSON.stringify(watermarkParams) : null
-      });
-    }
-    res.json({ success: true, message: 'Unscramble event logged successfully' });
-  } catch (error) {
-    console.error('Log unscramble event error:', error);
-    res.status(500).json({ success: false, message: 'Failed to log unscramble event' });
-  }
-});
-
-// server.post('/api/analytics/audio-unscramble-event', async (req, res) => {
-//   try {
-//     const { username, userId, creator, actionCost, unscrambleKey, mediaDetails, watermarkParams } = req.body;
-
-//     // CREATE TABLE
-//     // `unscrambles` (
-//     //   `id` int unsigned NOT NULL AUTO_INCREMENT,
-//     //   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-//     //   `userId` varchar(255) DEFAULT NULL,
-//     //   `username` varchar(255) DEFAULT NULL,
-//     //   `action_cost` int DEFAULT NULL,
-//     //   `creatorId` varchar(255) DEFAULT NULL,
-//     //   `keyData` json DEFAULT NULL,
-//     //   `mediaDetails` json DEFAULT NULL,
-//     //   `watermark_params` json DEFAULT NULL,
-//     //   PRIMARY KEY (`id`)
-//     // ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci
-
-//     await pool.execute(
-//       'INSERT INTO unscrambles (userId, username, creatorId, action_cost, keyData, mediaDetails, watermark_params) VALUES (?, ?, ?, ?, ?, ?, ?)',
-//       [
-//         userId || null,
-//         username || 'anonymous',
-//         creator || 'unknown',
-//         actionCost || 'unknown',
-//         unscrambleKey ? JSON.stringify(unscrambleKey) : null,
-//         mediaDetails ? JSON.stringify(mediaDetails) : null,
-//         watermarkParams ? JSON.stringify(watermarkParams) : null
-//       ]
-//     );
-
-//     res.json({ success: true, message: 'Unscramble event logged successfully' });
-//   } catch (error) {
-//     console.error('Log unscramble event error:', error);
-//     res.status(500).json({ success: false, message: 'Failed to log unscramble event' });
-//   }
-// });
 
 // create a rout that will allow the clients to download video files from the server via file name
 // server.get(PROXY+'/api/download/:filename', (req, res) => {
@@ -7884,11 +9086,56 @@ drauwperRoutes(server, pool, authenticateToken, PROXY, {
   getSignedUrl,
 });
 
+function normalizeStoredAssetReference(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return '';
+
+  // Keep existing path-based references as-is.
+  if (!/^https?:\/\//i.test(raw)) {
+    return raw.replace(/^\/+/, '');
+  }
+
+  const normalizedR2Endpoint = String(R2_ENDPOINT || '').replace(/\/$/, '');
+  const normalizedPublicBase = String(PUBLIC_STORAGE_BASE_URL || '').replace(/\/$/, '');
+  const normalizedBucket = String(BUCKET_NAME || '').trim();
+  const stripBucketPrefix = (value) => {
+    const candidate = String(value || '').replace(/^\/+/, '');
+    if (!normalizedBucket) return candidate;
+    if (candidate.startsWith(`${normalizedBucket}/`)) {
+      return candidate.slice(normalizedBucket.length + 1);
+    }
+    return candidate;
+  };
+
+  // R2 URL format: <endpoint>/<bucket>/<objectPath>
+  if (normalizedR2Endpoint && raw.startsWith(`${normalizedR2Endpoint}/`)) {
+    const afterEndpoint = raw.slice(normalizedR2Endpoint.length + 1);
+    const slash = afterEndpoint.indexOf('/');
+    if (slash > -1) {
+      const bucket = afterEndpoint.slice(0, slash);
+      const objectPath = afterEndpoint.slice(slash + 1);
+      if (!normalizedBucket || bucket === normalizedBucket) {
+        return decodeURIComponent(objectPath).replace(/^\/+/, '');
+      }
+    }
+  }
+
+  // CDN/public base URL format: <publicBase>/<objectPath>
+  if (normalizedPublicBase && raw.startsWith(`${normalizedPublicBase}/`)) {
+    const objectPath = decodeURIComponent(raw.slice(normalizedPublicBase.length + 1));
+    return stripBucketPrefix(objectPath);
+  }
+
+  // Not a known storage URL: keep full URL untouched.
+  return raw;
+}
+
 // ─── Drauwper routes (drops, contributions, reviews, etc.) ───
 // drauwperRoutes(server, pool, authenticateToken, PROXY, { storage, BUCKET_NAME, DEST_PREFIX });
 
 // Serve banner uploads locally (dev fallback when GCS not configured)
 server.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+server.use('/storage_folder', express.static(path.join(__dirname, '..', 'storage_folder')));
 
 // ─── Admin panel (mounted before 404 catch-all) ───
 const adminRouter = createAdminRouter({

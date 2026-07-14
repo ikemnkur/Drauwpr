@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Upload,
@@ -18,15 +18,18 @@ import { api } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
+const PREMIUM_TRAILER_SIZE_LIMIT_MB = 25;
+const TRAILER_PRECOMPRESS_THRESHOLD_MB = 80;
 
 const FILE_TYPES = ['game', 'app', 'document', 'music', 'photo', 'video', 'other', 'link'] as const;
 
 export default function CreateDrop() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const isPremium = (user?.accountType ?? '').toLowerCase() === 'premium';
+  const isPremium = (user?.accountPlan ?? '').toLowerCase() === 'premium';
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bannerInputRef = useRef<HTMLInputElement>(null);
+  const trailerInputRef = useRef<HTMLInputElement>(null);
 
   // Form state
   const [title, setTitle] = useState('');
@@ -38,7 +41,11 @@ export default function CreateDrop() {
   const [goalAmount, setGoalAmount] = useState('');
   const [basePrice, setBasePrice] = useState('');
   const [durationDays, setDurationDays] = useState('7');
+  const [trailerMode, setTrailerMode] = useState<'link' | 'upload'>('link');
   const [trailerUrl, setTrailerUrl] = useState('');
+  const [trailerFile, setTrailerFile] = useState<File | null>(null);
+  const [trailerFileName, setTrailerFileName] = useState('');
+  const [trailerFileSize, setTrailerFileSize] = useState('');
   // 'refund' = credits returned to contributors on expiry | 'keep' = drop stays downloadable
   const [expiryBehaviour, setExpiryBehaviour] = useState<'refund' | 'keep'>('refund');
   const [expiryThreshold, setExpiryThreshold] = useState<number>(0);
@@ -49,15 +56,19 @@ export default function CreateDrop() {
   const [dropFile, setDropFile] = useState<File | null>(null);
   const [dropFileMime, setDropFileMime] = useState('');
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [compressProgress, setCompressProgress] = useState(0);
   const [uploadStep, setUploadStep] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [createdDropId, setCreatedDropId] = useState('');
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
+  const [isFileDragActive, setIsFileDragActive] = useState(false);
+  const [isThumbnailDragActive, setIsThumbnailDragActive] = useState(false);
+  const [isTrailerDragActive, setIsTrailerDragActive] = useState(false);
+  
+
+  const applyDropFile = (f: File) => {
     setFileName(f.name);
     setDropFile(f);
     setDropFileMime(f.type || 'application/octet-stream');
@@ -65,11 +76,129 @@ export default function CreateDrop() {
     setFileSize(mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(1)} MB`);
   };
 
+  const applyBannerFile = (f: File) => {
+    if (!f.type.startsWith('image/')) {
+      setSubmitError('Banner/thumbnail must be an image file.');
+      return;
+    }
+    setSubmitError('');
+    setBannerName(f.name);
+    setBannerFile(f);
+  };
+
+  const applyTrailerFile = (f: File) => {
+    if (!f.type.startsWith('video/')) {
+      setSubmitError('Trailer must be a video file.');
+      return;
+    }
+    if (!isPremium && f.size > PREMIUM_TRAILER_SIZE_LIMIT_MB * 1024 * 1024) {
+      setSubmitError(`Trailer files over ${PREMIUM_TRAILER_SIZE_LIMIT_MB}MB are a Premium feature.`);
+      return;
+    }
+    const maxTrailerMb = 300;
+    if (f.size > maxTrailerMb * 1024 * 1024) {
+      setSubmitError(`Trailer is too large. Max file size is ${maxTrailerMb}MB.`);
+      return;
+    }
+    setSubmitError('');
+    setTrailerFile(f);
+    setTrailerFileName(f.name);
+    const mb = f.size / (1024 * 1024);
+    setTrailerFileSize(mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(1)} MB`);
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setSubmitError('');
+    applyDropFile(f);
+  };
+
   const handleBannerSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    setBannerName(f.name);
-    setBannerFile(f);
+    applyBannerFile(f);
+  };
+
+  const handleTrailerSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    applyTrailerFile(f);
+  };
+
+
+  // Drop zone drag-and-drop handlers for Main file drop area
+  
+  const handleDropZoneDragOver = (e: React.DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  };
+
+  const handleDropFileDragEnter = (e: React.DragEvent<HTMLElement>) => {
+    handleDropZoneDragOver(e);
+    setIsFileDragActive(true);
+  };
+
+  const handleDropFileDragLeave = (e: React.DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsFileDragActive(false);
+  };
+
+  const handleDropFileDrop = (e: React.DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsFileDragActive(false);
+    const f = e.dataTransfer?.files?.[0];
+    if (!f) return;
+    setSubmitError('');
+    applyDropFile(f);
+  };
+
+  // Banner drag-and-drop handlers
+
+  const handleBannerDragEnter = (e: React.DragEvent<HTMLElement>) => {
+    handleDropZoneDragOver(e);
+    setIsThumbnailDragActive(true);
+  };
+
+  const handleBannerDragLeave = (e: React.DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsThumbnailDragActive(false);
+  };
+
+  const handleBannerDrop = (e: React.DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsThumbnailDragActive(false);
+    const f = e.dataTransfer?.files?.[0];
+    if (!f) return;
+    applyBannerFile(f);
+  };
+
+
+  // Trailer drag-and-drop handlers
+
+  const handleTrailerDragEnter = (e: React.DragEvent<HTMLElement>) => {
+    handleDropZoneDragOver(e);
+    setIsTrailerDragActive(true);
+  };
+
+  const handleTrailerDragLeave = (e: React.DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsTrailerDragActive(false);
+  };
+
+  const handleTrailerDrop = (e: React.DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsTrailerDragActive(false);
+    const f = e.dataTransfer?.files?.[0];
+    if (!f) return;
+    applyTrailerFile(f);
   };
 
   const addTag = () => {
@@ -90,6 +219,19 @@ export default function CreateDrop() {
   };
 
   const canSubmit = title.trim() && summary.trim() && fileName && goalAmount && basePrice && !submitting;
+
+  useEffect(() => {
+    if (!submitting || uploadStep !== 'Pre-compressing trailer…') {
+      setCompressProgress(0);
+      return;
+    }
+
+    setCompressProgress(8);
+    const iv = window.setInterval(() => {
+      setCompressProgress((prev) => Math.min(95, prev + Math.max(1, Math.floor((100 - prev) / 12))));
+    }, 280);
+    return () => window.clearInterval(iv);
+  }, [submitting, uploadStep]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -117,7 +259,7 @@ export default function CreateDrop() {
         basePrice: Number(basePrice),
         scheduledDropTime,
         expiresAt,
-        trailerUrl: trailerUrl.trim() || null,
+        trailerUrl: trailerMode === 'link' ? trailerUrl.trim() || null : null,
         expiryBehaviour: isPremium ? expiryBehaviour : 'refund',
         expiryThreshold: (isPremium && expiryBehaviour === 'keep' && expiryThreshold > 0) ? expiryThreshold / 100 : null,
       });
@@ -137,7 +279,31 @@ export default function CreateDrop() {
         });
       }
 
-      // 3. Upload the drop file to GCS
+      // 3. Upload trailer video if selected
+      if (trailerMode === 'upload' && trailerFile) {
+        let trailerToUpload = trailerFile;
+        if (trailerFile.size > TRAILER_PRECOMPRESS_THRESHOLD_MB * 1024 * 1024) {
+          setUploadStep('Pre-compressing trailer…');
+          trailerToUpload = await precompressTrailerVideo(trailerFile);
+          setCompressProgress(100);
+        }
+
+        setUploadStep('Uploading trailer…');
+        const token = localStorage.getItem('drauwper_token');
+        const form = new FormData();
+        form.append('trailer', trailerToUpload, trailerToUpload.name);
+        const response = await fetch(`${API_BASE}/api/drops/${dropId}/trailer`, {
+          method: 'POST',
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          body: form,
+        });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          throw new Error(body.error || 'Trailer upload failed');
+        }
+      }
+
+      // 4. Upload the drop file to GCS
       if (dropFile) {
         const mimeType = dropFileMime || 'application/octet-stream';
 
@@ -157,7 +323,7 @@ export default function CreateDrop() {
         });
       }
 
-      // 4. Publish (draft → pending)
+      // 5. Publish (draft → pending)
       setUploadStep('Publishing…');
       await api.post(`/api/drops/${dropId}/publish`);
 
@@ -206,7 +372,11 @@ export default function CreateDrop() {
               setTags([]);
               setGoalAmount('');
               setBasePrice('');
+              setTrailerMode('link');
               setTrailerUrl('');
+              setTrailerFile(null);
+              setTrailerFileName('');
+              setTrailerFileSize('');
               setDurationDays('7');
               setCreatedDropId('');
               setSubmitError('');
@@ -242,7 +412,14 @@ export default function CreateDrop() {
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="w-full border-2 border-dashed border-surface-3 rounded-xl p-8 flex flex-col items-center gap-2 text-text-muted hover:border-brand/50 hover:text-brand transition group"
+            onDragEnter={handleDropFileDragEnter}
+            onDragOver={handleDropZoneDragOver}
+            onDragLeave={handleDropFileDragLeave}
+            onDrop={handleDropFileDrop}
+            className={`w-full border-2 border-dashed rounded-xl p-8 flex flex-col items-center gap-2 text-text-muted transition group ${isFileDragActive
+                ? 'border-brand bg-brand/5 text-brand'
+                : 'border-surface-3 hover:border-brand/50 hover:text-brand'
+              }`}
           >
             <Upload className="w-8 h-8 group-hover:scale-110 transition-transform" />
             {fileName ? (
@@ -251,21 +428,23 @@ export default function CreateDrop() {
                 <p className="text-xs text-text-muted">{fileSize}</p>
               </div>
             ) : (
-              <p className="text-sm">Click to select a file to drop</p>
+              <p className="text-sm">Click or drag and drop a file to upload</p>
             )}
 
-            <label className="mb-6 flex items-start gap-3 rounded-xl border border-surface-3 bg-surface-2 px-4 py-3">
-              <input
-                type="checkbox"
-                checked={isMature}
-                onChange={(e) => setIsMature(e.target.checked)}
-                className="mt-1 h-4 w-4 rounded border-surface-3 text-brand focus:ring-brand"
-              />
-              <span className="text-sm text-text-muted">
-                Mark this post as mature. Mature posts will be blurred in Explore and More Posts, and common cuss words in the title will be censored.
-              </span>
-            </label>
+
           </button>
+
+          <label className="mb-6 flex items-start gap-3 rounded-xl border border-surface-3 bg-surface-2 px-4 py-3">
+            <input
+              type="checkbox"
+              checked={isMature}
+              onChange={(e) => setIsMature(e.target.checked)}
+              className="mt-1 h-4 w-4 rounded border-surface-3 text-brand focus:ring-brand"
+            />
+            <span className="text-sm text-text-muted">
+              Mark this post as mature to avoid flags. Mature posts will be blurred in Explore and More Posts, and common cuss words in the title will be censored.
+            </span>
+          </label>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
@@ -376,7 +555,7 @@ export default function CreateDrop() {
 
           {/* Banner */}
           <div>
-            <label className="block text-xs text-text-muted mb-1.5">Banner Image</label>
+            <label className="block text-xs text-text-muted mb-1.5">Banner/Thumbnail Image</label>
             <input
               ref={bannerInputRef}
               type="file"
@@ -384,33 +563,107 @@ export default function CreateDrop() {
               className="hidden"
               onChange={handleBannerSelect}
             />
+
             <button
               type="button"
               onClick={() => bannerInputRef.current?.click()}
-              className="w-full border border-dashed border-surface-3 rounded-xl h-32 flex items-center justify-center gap-2 text-text-muted hover:border-brand/50 hover:text-brand transition text-sm"
+              onDragEnter={handleBannerDragEnter}
+              onDragOver={handleDropZoneDragOver}
+              onDragLeave={handleBannerDragLeave}
+              onDrop={handleBannerDrop}
+              className={`w-full border border-dashed rounded-xl h-32 flex items-center justify-center gap-2 text-sm transition ${isThumbnailDragActive
+                  ? 'border-brand bg-brand/5 text-brand'
+                  : 'border-surface-3 text-text-muted hover:border-brand/50 hover:text-brand'
+                }`}
             >
               <Image className="w-5 h-5" />
-              {bannerName || 'Upload banner image (recommended 1200×400)'}
+              {bannerName || 'Click or drag and drop a banner image (recommended 1200x400)'}
             </button>
           </div>
 
-          {/* Trailer URL */}
+          {/* Trailer source mode */}
           <div>
-            <label className="block text-xs text-text-muted mb-1.5">Trailer / Preview Video (YouTube URL)</label>
-            <div className="flex items-center gap-2">
-              <Film className="w-4 h-4 text-text-muted shrink-0" />
-              <input
-                type="url"
-                value={trailerUrl}
-                onChange={(e) => setTrailerUrl(e.target.value)}
-                placeholder="https://www.youtube.com/watch?v=..."
-                className="w-full bg-surface-2 border border-surface-3 rounded-lg px-3 py-2 text-sm text-text placeholder-text-muted/50 focus:outline-none focus:border-brand"
-              />
+            <label className="block text-xs text-text-muted mb-1.5">Trailer Source</label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setTrailerMode('link')}
+                className={`rounded-lg border px-3 py-2 text-sm transition ${trailerMode === 'link'
+                    ? 'border-brand bg-brand/10 text-brand'
+                    : 'border-surface-3 text-text-muted hover:border-brand/50 hover:text-brand'
+                  }`}
+              >
+                Paste Link
+              </button>
+              <button
+                type="button"
+                onClick={() => setTrailerMode('upload')}
+                className={`rounded-lg border px-3 py-2 text-sm transition ${trailerMode === 'upload'
+                    ? 'border-brand bg-brand/10 text-brand'
+                    : 'border-surface-3 text-text-muted hover:border-brand/50 hover:text-brand'
+                  }`}
+              >
+                Upload Video
+              </button>
             </div>
           </div>
 
+          {/* Trailer URL */}
+          {trailerMode === 'link' && (
+            <div>
+              <label className="block text-xs text-text-muted mb-1.5">Trailer / Preview Video URL</label>
+              <div className="flex items-center gap-2">
+                <Film className="w-4 h-4 text-text-muted shrink-0" />
+                <input
+                  type="url"
+                  value={trailerUrl}
+                  onChange={(e) => setTrailerUrl(e.target.value)}
+                  placeholder="https://www.youtube.com/watch?v=..."
+                  className="w-full bg-surface-2 border border-surface-3 rounded-lg px-3 py-2 text-sm text-text placeholder-text-muted/50 focus:outline-none focus:border-brand"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Trailer file upload */}
+          {trailerMode === 'upload' && (
+            <div>
+              <label className="block text-xs text-text-muted mb-1.5">Trailer / Preview Video File</label>
+              <input
+                ref={trailerInputRef}
+                type="file"
+                accept="video/*"
+                className="hidden"
+                onChange={handleTrailerSelect}
+              />
+              <button
+                type="button"
+                onClick={() => trailerInputRef.current?.click()}
+                onDragEnter={handleTrailerDragEnter}
+                onDragOver={handleDropZoneDragOver}
+                onDragLeave={handleTrailerDragLeave}
+                onDrop={handleTrailerDrop}
+                className={`w-full border border-dashed rounded-xl h-24 flex items-center justify-center gap-2 text-sm transition ${isTrailerDragActive
+                  ? 'border-brand bg-brand/5 text-brand'
+                  : 'border-surface-3 text-text-muted hover:border-brand/50 hover:text-brand'
+                  }`}
+              >
+                <Film className="w-5 h-5" />
+                {trailerFileName || 'Choose trailer video (very large videos are pre-compressed before upload)'}
+              </button>
+              {trailerFileSize && (
+                <p className="text-xs text-text-muted mt-2">Selected: {trailerFileSize}</p>
+              )}
+              <p className="text-xs text-text-muted mt-2">
+                {isPremium
+                  ? `Premium: uploads over ${PREMIUM_TRAILER_SIZE_LIMIT_MB}MB allowed. Videos over ${TRAILER_PRECOMPRESS_THRESHOLD_MB}MB will pre-compress in-browser.`
+                  : `Free: trailer uploads are limited to ${PREMIUM_TRAILER_SIZE_LIMIT_MB}MB.`}
+              </p>
+            </div>
+          )}
+
           {/* Video preview */}
-          {trailerUrl && /youtube\.com|youtu\.be/.test(trailerUrl) && (
+          {trailerMode === 'link' && trailerUrl && /youtube\.com|youtu\.be/.test(trailerUrl) && (
             <div className="rounded-xl overflow-hidden border border-surface-3 aspect-video">
               <iframe
                 src={toYouTubeEmbed(trailerUrl)}
@@ -494,10 +747,10 @@ export default function CreateDrop() {
               disabled={!isPremium}
               onClick={() => isPremium && setExpiryBehaviour('refund')}
               className={`relative text-left rounded-xl border-2 p-4 transition ${!isPremium
-                  ? 'border-surface-3 opacity-50 cursor-not-allowed'
-                  : expiryBehaviour === 'refund'
-                    ? 'border-brand bg-brand/10'
-                    : 'border-surface-3 hover:border-surface-3/80'
+                ? 'border-surface-3 opacity-50 cursor-not-allowed'
+                : expiryBehaviour === 'refund'
+                  ? 'border-brand bg-brand/10'
+                  : 'border-surface-3 hover:border-surface-3/80'
                 }`}
             >
               {expiryBehaviour === 'refund' && isPremium && (
@@ -515,10 +768,10 @@ export default function CreateDrop() {
               disabled={!isPremium}
               onClick={() => isPremium && setExpiryBehaviour('keep')}
               className={`relative text-left rounded-xl border-2 p-4 transition ${!isPremium
-                  ? 'border-surface-3 opacity-50 cursor-not-allowed'
-                  : expiryBehaviour === 'keep'
-                    ? 'border-brand bg-brand/10'
-                    : 'border-surface-3 hover:border-surface-3/80'
+                ? 'border-surface-3 opacity-50 cursor-not-allowed'
+                : expiryBehaviour === 'keep'
+                  ? 'border-brand bg-brand/10'
+                  : 'border-surface-3 hover:border-surface-3/80'
                 }`}
             >
               {expiryBehaviour === 'keep' && isPremium && (
@@ -581,6 +834,17 @@ export default function CreateDrop() {
               </div>
             </div>
           )}
+          {submitting && uploadStep === 'Pre-compressing trailer…' && (
+            <div className="w-full">
+              <div className="flex justify-between text-xs text-text-muted mb-1">
+                <span>{uploadStep}</span>
+                <span>{compressProgress}%</span>
+              </div>
+              <div className="h-1.5 bg-surface-3 rounded-full overflow-hidden">
+                <div className="h-full bg-yellow-400 transition-all duration-200" style={{ width: `${compressProgress}%` }} />
+              </div>
+            </div>
+          )}
           <p className="text-xs text-text-muted">
             By creating a drop you agree to the Drauwper Creator Terms.
           </p>
@@ -588,8 +852,8 @@ export default function CreateDrop() {
             type="submit"
             disabled={!canSubmit}
             className={`px-8 py-3 rounded-xl font-semibold text-sm transition flex items-center gap-2 ${canSubmit
-                ? 'bg-brand text-white hover:bg-brand-dark shadow-lg shadow-brand/20'
-                : 'bg-surface-3 text-text-muted cursor-not-allowed'
+              ? 'bg-brand text-white hover:bg-brand-dark shadow-lg shadow-brand/20'
+              : 'bg-surface-3 text-text-muted cursor-not-allowed'
               }`}
           >
             <Flame className="w-4 h-4" />
@@ -621,6 +885,109 @@ function uploadToStorage(
     };
     xhr.onerror = () => reject(new Error('Network error during file upload'));
     xhr.send(file);
+  });
+}
+
+async function precompressTrailerVideo(file: File): Promise<File> {
+  if (!('MediaRecorder' in window)) return file;
+
+  const preferredTypes = [
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm',
+  ];
+  const supportedType = preferredTypes.find((type) => MediaRecorder.isTypeSupported(type));
+  if (!supportedType) return file;
+
+  const objectUrl = URL.createObjectURL(file);
+  const video = document.createElement('video');
+  video.src = objectUrl;
+  video.preload = 'metadata';
+  video.muted = true;
+  video.playsInline = true;
+
+  try {
+    await waitForVideoMetadata(video);
+
+    const targetWidth = Math.min(1280, Math.max(320, video.videoWidth || 1280));
+    const sourceHeight = video.videoHeight || 720;
+    const sourceWidth = video.videoWidth || 1280;
+    const targetHeight = Math.max(180, Math.floor((targetWidth / sourceWidth) * sourceHeight));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return file;
+
+    const stream = canvas.captureStream(24);
+    const recorder = new MediaRecorder(stream, {
+      mimeType: supportedType,
+      videoBitsPerSecond: 2_000_000,
+    });
+
+    const chunks: BlobPart[] = [];
+    recorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) chunks.push(event.data);
+    };
+
+    let drawFrameId = 0;
+    const drawFrame = () => {
+      if (video.paused || video.ended) return;
+      ctx.drawImage(video, 0, 0, targetWidth, targetHeight);
+      drawFrameId = requestAnimationFrame(drawFrame);
+    };
+
+    const completion = new Promise<void>((resolve, reject) => {
+      recorder.onerror = () => reject(new Error('Trailer compression failed.'));
+      recorder.onstop = () => resolve();
+    });
+
+    recorder.start(750);
+    await video.play();
+    drawFrame();
+
+    await new Promise<void>((resolve) => {
+      video.onended = () => resolve();
+    });
+
+    cancelAnimationFrame(drawFrameId);
+    recorder.stop();
+    await completion;
+
+    const compressedBlob = new Blob(chunks, { type: supportedType });
+    if (!compressedBlob.size || compressedBlob.size >= file.size * 0.98) {
+      return file;
+    }
+
+    const baseName = file.name.replace(/\.[^.]+$/, '');
+    return new File([compressedBlob], `${baseName}.webm`, {
+      type: supportedType,
+      lastModified: Date.now(),
+    });
+  } catch {
+    return file;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+function waitForVideoMetadata(video: HTMLVideoElement): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onLoaded = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error('Failed to read trailer metadata.'));
+    };
+    const cleanup = () => {
+      video.removeEventListener('loadedmetadata', onLoaded);
+      video.removeEventListener('error', onError);
+    };
+    video.addEventListener('loadedmetadata', onLoaded);
+    video.addEventListener('error', onError);
   });
 }
 

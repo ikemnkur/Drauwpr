@@ -2,14 +2,15 @@ import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ArrowLeft, User, ShieldCheck, Smartphone, Bell, KeyRound, Trash2,
-  Loader2, Check, AlertCircle, QrCode, Copy, Eye, EyeOff,
+  Loader2, Check, AlertCircle, QrCode, Copy, Eye, EyeOff, Sun, Moon,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { api, ApiError } from '../lib/api';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type SectionId = 'profile' | 'security' | 'phone' | 'notifications' | 'password' | 'danger';
+type SectionId = 'profile' | 'appearance' | 'security' | 'phone' | 'notifications' | 'password' | 'danger';
+type ThemeMode = 'light' | 'dark';
 
 type AccountType = 'business' | 'creator' | 'personal' | 'private';
 
@@ -35,12 +36,15 @@ interface Toast {
 
 const SECTIONS: { id: SectionId; label: string; icon: typeof User }[] = [
   { id: 'profile', label: 'Account Type', icon: User },
+  { id: 'appearance', label: 'Appearance', icon: Sun },
   { id: 'security', label: 'Two-Factor Auth', icon: ShieldCheck },
   { id: 'phone', label: 'Phone & SMS', icon: Smartphone },
   { id: 'notifications', label: 'Email Notifications', icon: Bell },
   { id: 'password', label: 'Password', icon: KeyRound },
   { id: 'danger', label: 'Delete Account', icon: Trash2 },
 ];
+
+const THEME_STORAGE_KEY = 'prolifer8-theme';
 
 const ACCOUNT_TYPES: { value: AccountType; label: string; desc: string }[] = [
   { value: 'personal', label: 'Personal', desc: 'Standard individual account' },
@@ -126,6 +130,7 @@ export default function AccountSettings() {
         {/* ── Content ── */}
         <div className="flex-1 min-w-0">
           {active === 'profile' && <ProfileSection settings={settings} onToast={showToast} />}
+          {active === 'appearance' && <AppearanceSection onToast={showToast} />}
           {active === 'security' && <SecuritySection settings={settings} onToast={showToast} />}
           {active === 'phone' && <PhoneSection settings={settings} onToast={showToast} />}
           {active === 'notifications' && <NotificationsSection settings={settings} onToast={showToast} />}
@@ -134,6 +139,53 @@ export default function AccountSettings() {
         </div>
       </div>
     </div>
+  );
+}
+
+function AppearanceSection({ onToast }: { onToast: (t: Toast) => void }) {
+  const [theme, setTheme] = useState<ThemeMode>(() =>
+    document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
+  );
+
+  const setThemeMode = (nextTheme: ThemeMode) => {
+    setTheme(nextTheme);
+    document.documentElement.dataset.theme = nextTheme;
+    window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+    onToast({ type: 'success', message: `${nextTheme === 'dark' ? 'Dark' : 'Light'} mode enabled` });
+  };
+
+  return (
+    <Card title="Appearance" desc="Choose between light and dark app themes.">
+      <div className="grid sm:grid-cols-2 gap-3">
+        <button
+          type="button"
+          onClick={() => setThemeMode('light')}
+          className={`text-left p-4 rounded-xl border transition-colors ${
+            theme === 'light' ? 'border-brand bg-brand/5' : 'border-surface-3 hover:border-text-muted'
+          }`}
+        >
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-sm font-semibold text-text">Light</span>
+            <Sun className="w-4 h-4 text-brand" />
+          </div>
+          <p className="text-xs text-text-muted">Light background with purple text.</p>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setThemeMode('dark')}
+          className={`text-left p-4 rounded-xl border transition-colors ${
+            theme === 'dark' ? 'border-brand bg-brand/5' : 'border-surface-3 hover:border-text-muted'
+          }`}
+        >
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-sm font-semibold text-text">Dark (Grey)</span>
+            <Moon className="w-4 h-4 text-brand" />
+          </div>
+          <p className="text-xs text-text-muted">Grey dark mode with violet accents.</p>
+        </button>
+      </div>
+    </Card>
   );
 }
 

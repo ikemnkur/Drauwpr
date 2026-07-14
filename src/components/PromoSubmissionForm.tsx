@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Send, CheckCircle2 } from 'lucide-react';
+import { Send, CheckCircle2, X } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 
 type SubmissionType = 'ad' | 'drop_sponsorship';
@@ -19,24 +19,54 @@ export default function PromoSubmissionForm({ fixedType, title, subtitle }: Prop
   const [mediaUrl, setMediaUrl] = useState('');
   const [targetUrl, setTargetUrl] = useState('');
   const [ctaText, setCtaText] = useState('');
-  const [budgetCredits, setbudgetCredits] = useState('');
+  const [budgetCredits, setBudgetCredits] = useState('');
   const [contactEmail, setContactEmail] = useState('');
-  const [tags, setTags] = useState('');
-  const [assetFile, setAssetFile] = useState<File | null>(null);
+  const [tagInput, setTagInput] = useState('');
+  const [tags, setTags] = useState<string[]>([]);
+  const [assetFile, setAssetFile] = useState<File | null>(null); //  used for audio uploads (mp3, wav, etc.)
   const [assetName, setAssetName] = useState('');
+  const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
+  const [thumbnailName, setThumbnailName] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState('');
 
-  const needsUpload = useMemo(() => mediaType === 'image' || mediaType === 'audio', [mediaType]);
-  const canSubmit = campaignTitle.trim() && description.trim() && contactEmail.trim() && !submitting
-    && (fixedType === 'ad' ? !!targetUrl.trim() : true)
-    && (needsUpload ? !!assetFile || !!mediaUrl.trim() : !!mediaUrl.trim());
+  const addTag = () => {
+    const t = tagInput.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+    if (t && !tags.includes(t) && tags.length < 10) {
+      setTags([...tags, t]);
+    }
+    setTagInput('');
+  };
+
+  const removeTag = (t: string) => setTags(tags.filter((x) => x !== t));
+
+  const handleTagKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      addTag();
+    }
+  };
+
+  const canSubmit = useMemo(() => {
+    if (!campaignTitle.trim() || !description.trim() || !contactEmail.trim() || submitting) return false;
+    if (!thumbnailFile) return false;
+    if (fixedType === 'ad' && !targetUrl.trim()) return false;
+    if (mediaType === 'video_link') return !!mediaUrl.trim();
+    if (mediaType === 'audio') return !!assetFile || !!mediaUrl.trim();
+    return true;
+  }, [campaignTitle, description, contactEmail, submitting, thumbnailFile, fixedType, targetUrl, mediaType, mediaUrl, assetFile]);
 
   const onSelectFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] || null;
     setAssetFile(file);
     setAssetName(file?.name || '');
+  };
+
+  const onSelectThumbnail = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] || null;
+    setThumbnailFile(file);
+    setThumbnailName(file?.name || '');
   };
 
   const resetForm = () => {
@@ -46,10 +76,13 @@ export default function PromoSubmissionForm({ fixedType, title, subtitle }: Prop
     setMediaUrl('');
     setTargetUrl('');
     setCtaText('');
-    setbudgetCredits('');
-    setTags('');
+    setBudgetCredits('');
+    setTagInput('');
+    setTags([]);
     setAssetFile(null);
     setAssetName('');
+    setThumbnailFile(null);
+    setThumbnailName('');
     setMediaType('image');
   };
 
@@ -73,7 +106,8 @@ export default function PromoSubmissionForm({ fixedType, title, subtitle }: Prop
       form.append('ctaText', ctaText.trim());
       form.append('budgetCredits', budgetCredits.trim());
       form.append('contactEmail', contactEmail.trim());
-      form.append('tags', tags.trim());
+      form.append('tags', tags.join(','));
+      if (thumbnailFile) form.append('thumbnail', thumbnailFile);
       if (assetFile) form.append('asset', assetFile);
 
       await api.upload('/api/promo-submissions', form);
@@ -94,7 +128,7 @@ export default function PromoSubmissionForm({ fixedType, title, subtitle }: Prop
       </section>
 
       <form onSubmit={handleSubmit} className="bg-surface border border-surface-3 rounded-2xl p-6 space-y-5">
-        
+
 
         {error && (
           <div className="rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">{error}</div>
@@ -107,21 +141,14 @@ export default function PromoSubmissionForm({ fixedType, title, subtitle }: Prop
               value={mediaType}
               onChange={(e) => setMediaType(e.target.value as MediaType)}
               className="w-full rounded-xl border border-surface-3 bg-bg px-3 py-2.5 text-text"
+              style={{ backgroundColor: '#1f2938f0' }}
             >
               <option value="image">Image</option>
               <option value="video_link">Video Link</option>
               <option value="audio">Audio</option>
             </select>
           </div>
-          <div>
-            <label className="block text-sm text-text-muted mb-1">Tags (comma-separated)</label>
-            <input
-              value={tags}
-              onChange={(e) => setTags(e.target.value)}
-              placeholder="fitness, running, music"
-              className="w-full rounded-xl border border-surface-3 bg-bg px-3 py-2.5 text-text"
-            />
-          </div>
+         
         </div>
 
         <div>
@@ -131,6 +158,7 @@ export default function PromoSubmissionForm({ fixedType, title, subtitle }: Prop
             onChange={(e) => setCampaignTitle(e.target.value)}
             placeholder="Spring campaign, featured sponsor, trailer placement..."
             className="w-full rounded-xl border border-surface-3 bg-bg px-3 py-2.5 text-text"
+            style={{ backgroundColor: '#1f293800' }}
           />
         </div>
 
@@ -174,15 +202,15 @@ export default function PromoSubmissionForm({ fixedType, title, subtitle }: Prop
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {(mediaType === 'video_link' || mediaType === 'audio') && (
-          <div>
-            <label className="block text-sm text-text-muted mb-1">Video Link</label>
-            <input
-              value={mediaUrl}
-              onChange={(e) => setMediaUrl(e.target.value)}
-              placeholder={mediaType === 'video_link' ? 'https://youtube.com/...' : 'Optional external asset URL'}
-              className="w-full rounded-xl border border-surface-3 bg-bg px-3 py-2.5 text-text"
-            />
-          </div>
+            <div>
+              <label className="block text-sm text-text-muted mb-1">{mediaType === 'video_link' ? 'Video Link' : 'Audio Link (optional)'}</label>
+              <input
+                value={mediaUrl}
+                onChange={(e) => setMediaUrl(e.target.value)}
+                placeholder={mediaType === 'video_link' ? 'https://youtube.com/...' : 'Optional external asset URL'}
+                className="w-full rounded-xl border border-surface-3 bg-bg px-3 py-2.5 text-text"
+              />
+            </div>
           )}
           <div>
             <label className="block text-sm text-text-muted mb-1">CTA / Promo Text</label>
@@ -195,15 +223,41 @@ export default function PromoSubmissionForm({ fixedType, title, subtitle }: Prop
           </div>
         </div>
 
+         <div>
+            <label className="block text-xs text-text-muted mb-1.5">Tags (up to 10)</label>
+            <div className="flex flex-wrap gap-2 mb-2">
+              {tags.map((t) => (
+                <span
+                  key={t}
+                  className="inline-flex items-center gap-1 bg-surface-2 text-text-muted text-xs px-2.5 py-1 rounded-full"
+                >
+                  #{t}
+                  <button type="button" onClick={() => removeTag(t)} className="hover:text-red-400 transition">
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+            <input
+              value={tagInput}
+              onChange={(e) => setTagInput(e.target.value)}
+              onKeyDown={handleTagKeyDown}
+              onBlur={addTag}
+              placeholder="Type a tag and press Enter"
+              className="w-full rounded-xl border border-surface-3 bg-bg px-3 py-2.5 text-text"
+              style={{ backgroundColor: '#1f293800' }}
+            />
+          </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm text-text-muted mb-1">Budget (USD)</label>
+            <label className="block text-sm text-text-muted mb-1">Budget (Credits)</label>
             <input
               type="number"
               min="0"
               step="0.01"
               value={budgetCredits}
-              onChange={(e) => setbudgetCredits(e.target.value)}
+              onChange={(e) => setBudgetCredits(e.target.value)}
               className="w-full rounded-xl border border-surface-3 bg-bg px-3 py-2.5 text-text"
             />
           </div>
@@ -218,16 +272,31 @@ export default function PromoSubmissionForm({ fixedType, title, subtitle }: Prop
           </div>
         </div>
 
-        <div>
-          <label className="block text-sm text-text-muted mb-1">Upload Asset</label>
+       <div>
+          {/* allow user to select a thumbnail image */}
+          <label className="block text-sm text-text-muted mb-1">Upload AD Thumbnail <span className="text-danger">*</span></label>
           <label className="flex items-center justify-center w-full rounded-xl border border-dashed border-surface-3 bg-bg px-4 py-6 text-center cursor-pointer hover:border-brand transition-colors">
-            <input type="file" className="hidden" accept={mediaType === 'image' ? 'image/*' : mediaType === 'audio' ? 'audio/*' : '*'} onChange={onSelectFile} />
+            <input type="file" className="hidden" accept={'image/*'} onChange={onSelectThumbnail} />
             <div>
               <p className="text-text font-medium">Choose a file</p>
-              <p className="text-sm text-text-muted mt-1">{assetName || 'Image or Audio '}</p>
+              <p className="text-sm text-text-muted mt-1">{thumbnailName || 'Required image file'}</p>
             </div>
           </label>
         </div>
+
+        {mediaType === 'audio' && (
+          <div>
+            <label className="block text-sm text-text-muted mb-1">Upload Audio</label>
+            <label className="flex items-center justify-center w-full rounded-xl border border-dashed border-surface-3 bg-bg px-4 py-6 text-center cursor-pointer hover:border-brand transition-colors">
+              <input type="file" className="hidden" accept={'audio/*'} onChange={onSelectFile} />
+              <div>
+                <p className="text-text font-medium">Choose a file</p>
+                <p className="text-sm text-text-muted mt-1">{assetName || 'Audio file'}</p>
+              </div>
+            </label>
+          </div>
+        )}
+
 
         <button
           type="submit"
@@ -241,14 +310,14 @@ export default function PromoSubmissionForm({ fixedType, title, subtitle }: Prop
       </form>
 
       {submitted && (
-          <div className="flex items-start gap-3 rounded-xl border border-success/30 bg-success/10 px-4 py-3 text-success">
-            <CheckCircle2 className="w-5 h-5 mt-0.5 shrink-0" />
-            <div>
-              <p className="font-semibold">Submission received</p>
-              <p className="text-sm text-text">Your promo request is now pending admin review.</p>
-            </div>
+        <div className="flex items-start gap-3 rounded-xl border border-success/30 bg-success/10 px-4 py-3 text-success">
+          <CheckCircle2 className="w-5 h-5 mt-0.5 shrink-0" />
+          <div>
+            <p className="font-semibold">Submission received</p>
+            <p className="text-sm text-text">Your promo request is now pending admin review.</p>
           </div>
-        )}
+        </div>
+      )}
     </div>
   );
 }

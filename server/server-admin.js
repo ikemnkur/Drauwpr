@@ -527,7 +527,7 @@ module.exports = function createAdminRouter(deps = {}) {
         targetDropId VARCHAR(255) DEFAULT NULL,
         mediaUrl TEXT,
         ctaText VARCHAR(255) DEFAULT NULL,
-        budgetUsd DECIMAL(10,2) DEFAULT 0,
+        budgetCredits DECIMAL(10,2) DEFAULT 0,
         assetPath VARCHAR(255) DEFAULT NULL,
         status VARCHAR(40) NOT NULL DEFAULT 'pending',
         adminNotes TEXT,
@@ -2182,7 +2182,7 @@ module.exports = function createAdminRouter(deps = {}) {
         <td>${escapeHtml(String(row.mediaType || '—'))}</td>
         <td>${previewCell(row)}</td>
         <td>${escapeHtml(String(row.targetDropId || '—'))}</td>
-        <td>$${Number(row.budgetUsd || 0).toFixed(2)}</td>
+        <td>$${Number(row.budgetCredits || 0).toFixed(2)}</td>
         <td>${statusChip(row.status)}</td>
         <td style="font-size:0.82em;color:var(--text2);">${fmtDate(row.created_at)}</td>
         <td>

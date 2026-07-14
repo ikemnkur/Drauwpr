@@ -13,6 +13,7 @@ const { v4: uuidv4 } = require('uuid');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { spawn } = require('child_process');
 
 const {
   DeleteObjectCommand,
@@ -256,6 +257,30 @@ async function ensurePostFlagsTable(db) {
   await db.query(`ALTER TABLE dropFlags ADD COLUMN IF NOT EXISTS description TEXT NOT NULL AFTER reason`);
 }
 
+
+async function ensureUserFlagsTable(db) {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS userFlags (
+      id VARCHAR(36) NOT NULL,
+      userId VARCHAR(10) NOT NULL,
+      flaggedBy VARCHAR(10) NOT NULL,
+      reason ENUM('spam','scam','abuse','harassment','hate','impersonation','explicit','other') NOT NULL,
+      description TEXT NOT NULL,
+      moderatorNote TEXT DEFAULT NULL,
+      status ENUM('open','reviewed','actioned','dismissed') NOT NULL DEFAULT 'open',
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_user_flags_user (userId),
+      KEY idx_user_flags_flagged_by (flaggedBy),
+      KEY idx_user_flags_reason (reason),
+      KEY idx_user_flags_status (status),
+      CONSTRAINT fk_user_flags_user FOREIGN KEY (userId) REFERENCES userData (id) ON DELETE CASCADE,
+      CONSTRAINT fk_user_flags_flagged_by FOREIGN KEY (flaggedBy) REFERENCES userData (id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+  `);
+}
+
 // ──────────────────────────────────────────────────────────────
 module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY = '', gcs = {}) {
   const { storage, BUCKET_NAME, DEST_PREFIX, publicUrl, getSignedUrl } = gcs;
@@ -286,7 +311,253 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
     return value.replace(/^gs:\/\/[^/]+\//, '').replace(/^\/+/, '');
   };
 
+  const cleanPrefix = (value, fallback) => String(value || fallback || '')
+    .replace(/^\/+/, '')
+    .replace(/\/+$/, '');
+
+  // Keep drop binaries under a private prefix and thumbnails under a public prefix.
+  const dropFilePrefix = cleanPrefix(process.env.R2_PRIVATE_DROP_PREFIX, `${DEST_PREFIX || 'storage_folder'}/private/drops`);
+  const thumbnailPrefix = cleanPrefix(process.env.R2_PUBLIC_THUMB_PREFIX, `${DEST_PREFIX || 'storage_folder'}/public/thumbnails`);
+  const trailerPrefix = cleanPrefix(process.env.R2_PUBLIC_TRAILER_PREFIX, `${DEST_PREFIX || 'storage_folder'}/public/trailers`);
+
+  const joinObjectKey = (...parts) => parts
+    .map((part) => String(part || '').trim())
+    .filter(Boolean)
+    .join('/')
+    .replace(/\/\/+/g, '/');
+
+  const safeUnlink = (targetPath) => {
+    if (!targetPath) return;
+    fs.unlink(targetPath, () => { });
+  };
+
+  const isFfmpegAvailable = () => new Promise((resolve) => {
+    const proc = spawn('ffmpeg', ['-version']);
+    proc.on('error', () => resolve(false));
+    proc.on('exit', (code) => resolve(code === 0));
+  });
+
+  const compressVideoWithFfmpeg = (inputPath, outputPath) => new Promise((resolve, reject) => {
+    const args = [
+      '-y',
+      '-i', inputPath,
+      '-c:v', 'libx264',
+      '-preset', 'veryfast',
+      '-crf', '28',
+      '-maxrate', '2500k',
+      '-bufsize', '5000k',
+      '-vf', 'scale=min(1280,iw):-2',
+      '-c:a', 'aac',
+      '-b:a', '128k',
+      '-movflags', '+faststart',
+      outputPath,
+    ];
+    const proc = spawn('ffmpeg', args);
+    let stderr = '';
+    proc.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    proc.on('error', reject);
+    proc.on('exit', (code) => {
+      if (code === 0) return resolve();
+      reject(new Error(stderr || 'ffmpeg compression failed'));
+    });
+  });
+
+  const resolveDropAssetUrl = (raw) => {
+    const value = String(raw || '').trim();
+    if (!value) return null;
+
+    // Relative/object-key refs are always storage refs.
+    if (!/^https?:\/\//i.test(value)) {
+      const objectPath = normalizeObjectKey(value);
+      return toPublicUrl(objectPath) || value;
+    }
+
+    try {
+      const parsed = new URL(value);
+      const pathNoLead = parsed.pathname.replace(/^\/+/, '');
+      const bucketPrefix = `${BUCKET_NAME}/`;
+
+      // Rewrite known R2 API URL forms and bucket-prefixed paths.
+      if (parsed.hostname.endsWith('.r2.cloudflarestorage.com')) {
+        const objectPath = pathNoLead.startsWith(bucketPrefix)
+          ? pathNoLead.slice(bucketPrefix.length)
+          : pathNoLead;
+        return toPublicUrl(decodeURIComponent(objectPath)) || value;
+      }
+
+      if (pathNoLead.startsWith(bucketPrefix)) {
+        const objectPath = pathNoLead.slice(bucketPrefix.length);
+        return toPublicUrl(decodeURIComponent(objectPath)) || value;
+      }
+    } catch {
+      return value;
+    }
+
+    // External URLs (e.g. YouTube trailers) stay unchanged.
+    return value;
+  };
+
+  const normalizeDropMediaFields = (row) => {
+    if (!row || typeof row !== 'object') return row;
+    return {
+      ...row,
+      thumbnailUrl: resolveDropAssetUrl(row.thumbnailUrl),
+      trailerUrl: resolveDropAssetUrl(row.trailerUrl),
+    };
+  };
+
+  const resolveThumbnailUrl = (req, postId, thumbnailValue) => {
+    const value = String(thumbnailValue || '').trim();
+    if (!value) return value;
+    if (/^https?:\/\//i.test(value)) return value;
+    if (value.startsWith('/uploads/')) return buildAbsoluteUrl(req, value);
+    return buildAbsoluteUrl(req, `${PROXY}/api/drops/${postId}/thumbnail`);
+  };
+
+  const resolveProfileAssetUrl = (req, value) => {
+    const raw = String(value || '').trim();
+    if (!raw) return raw;
+    if (/^https?:\/\//i.test(raw)) return raw;
+    if (raw.startsWith('/uploads/')) return buildAbsoluteUrl(req, raw);
+
+    const objectKey = normalizeObjectKey(raw);
+    const resolved = toPublicUrl(objectKey);
+    return resolved || raw;
+  };
+
+  const resolvePromoAssetUrl = (value) => {
+    const raw = String(value || '').trim();
+    if (!raw) return raw;
+    if (/^https?:\/\//i.test(raw)) return raw;
+
+    const objectKey = normalizeObjectKey(raw);
+    const resolved = objectKey ? toPublicUrl(objectKey) : null;
+    return resolved || raw;
+  };
+
+  
+
   ensureWalletTransactionTypeCompatibility(pool).catch(() => { });
+
+   const serializePost = (req, post) => {
+    if (!post) return post;
+    return {
+      ...post,
+      thumbnailUrl: resolveThumbnailUrl(req, post.id, post.thumbnailUrl),
+    };
+  };
+
+  const serializePosts = (req, posts) => (posts || []).map((post) => serializePost(req, post));
+
+  ensureWalletTransactionTypeCompatibility(pool).catch(() => { });
+  // ensurePostReviewsTable(pool).catch((err) => {
+  //   console.warn('⚠️ Failed to ensure postReviews table:', err.message || err);
+  // });
+  // ensurePostFavoritesTable(pool).catch((err) => {
+  //   console.warn('⚠️ Failed to ensure postFavorites table:', err.message || err);
+  // });
+  // ensurePostTipsTable(pool).catch((err) => {
+  //   console.warn('⚠️ Failed to ensure postTips table:', err.message || err);
+  // });
+  // ensureTagInteractionsTable(pool).catch((err) => {
+  //   console.warn('⚠️ Failed to ensure tagInteractions table:', err.message || err);
+  // });
+  // ensurePostViewEventsTable(pool).catch((err) => {
+  //   console.warn('⚠️ Failed to ensure post view events table:', err.message || err);
+  // });
+  // ensurePostCommentsSchema(pool).catch((err) => {
+  //   console.warn('⚠️ Failed to ensure post comments schema:', err.message || err);
+  // });
+  // ensurePostReactionsTable(pool).catch((err) => {
+  //   console.warn('⚠️ Failed to ensure post reactions table:', err.message || err);
+  // });
+  ensurePostFlagsTable(pool).catch((err) => {
+    console.warn('⚠️ Failed to ensure post flags table:', err.message || err);
+  });
+  ensureUserFlagsTable(pool).catch((err) => {
+    console.warn('⚠️ Failed to ensure user flags table:', err.message || err);
+  });
+
+  const UNVERIFIED_INTERACTION_LIMIT = 5;
+  const UNVERIFIED_INTERACTION_WINDOW_MINUTES = 60;
+
+  async function ensureUnverifiedInteractionEventsTable(db) {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS unverifiedInteractionEvents (
+        id VARCHAR(36) NOT NULL,
+        userId VARCHAR(64) NOT NULL,
+        action VARCHAR(64) NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY idx_unverified_interactions_user_created (userId, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+    `);
+  }
+
+  ensureUnverifiedInteractionEventsTable(pool).catch((err) => {
+    console.warn('⚠️ Failed to ensure unverifiedInteractionEvents table:', err.message || err);
+  });
+
+  async function getUserVerificationSnapshot(userId) {
+    const [rows] = await pool.query(
+      'SELECT id, verification, accountType FROM userData WHERE id = ? LIMIT 1',
+      [userId]
+    );
+    return rows?.[0] || null;
+  }
+
+  function isUnverifiedAccount(snapshot) {
+    const verification = String(snapshot?.verification || '').toLowerCase();
+    const accountType = String(snapshot?.accountType || '').toLowerCase();
+    return verification !== 'true' || accountType === 'unverified';
+  }
+
+  async function assertCanCreatePosts(userId) {
+    const snapshot = await getUserVerificationSnapshot(userId);
+    if (!snapshot) return { allowed: false, reason: 'User account not found' };
+    if (isUnverifiedAccount(snapshot)) {
+      return { allowed: false, reason: 'Email verification required before creating posts' };
+    }
+    return { allowed: true };
+  }
+
+  async function consumeUnverifiedInteractionQuota(userId, action) {
+    const snapshot = await getUserVerificationSnapshot(userId);
+    if (!snapshot) {
+      return { blocked: true, status: 404, message: 'User account not found' };
+    }
+
+    if (!isUnverifiedAccount(snapshot)) {
+      return { blocked: false, remaining: null };
+    }
+
+    const [[countRow]] = await pool.query(
+      `SELECT COUNT(*) AS interactionCount
+         FROM unverifiedInteractionEvents
+        WHERE userId = ?
+          AND created_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)`,
+      [userId, UNVERIFIED_INTERACTION_WINDOW_MINUTES]
+    );
+
+    const currentCount = Number(countRow?.interactionCount || 0);
+    if (currentCount >= UNVERIFIED_INTERACTION_LIMIT) {
+      return {
+        blocked: true,
+        status: 429,
+        message: `Unverified accounts are limited to ${UNVERIFIED_INTERACTION_LIMIT} interactions per hour. Verify your email to remove this limit.`,
+      };
+    }
+
+    await pool.query(
+      'INSERT INTO unverifiedInteractionEvents (id, userId, action) VALUES (?, ?, ?)',
+      [uuidv4(), userId, String(action || 'interaction').slice(0, 64)]
+    );
+
+    return { blocked: false, remaining: Math.max(0, UNVERIFIED_INTERACTION_LIMIT - (currentCount + 1)) };
+  }
+
 
   // ============================================================
   //  DROPS — CRUD
@@ -343,7 +614,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
         params
       );
 
-      res.json({ drops: rows, total, page: +page, limit: cap });
+      res.json({ drops: rows.map(normalizeDropMediaFields), total, page: +page, limit: cap });
     } catch (err) {
       console.error('GET /api/drops error:', err);
       res.status(500).json({ error: 'Failed to fetch drops' });
@@ -384,7 +655,12 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
          ORDER BY creatorRating DESC LIMIT 4`
       );
 
-      res.json({ featured, trending, newest, topCreators });
+      res.json({
+        featured: featured.map(normalizeDropMediaFields),
+        trending: trending.map(normalizeDropMediaFields),
+        newest: newest.map(normalizeDropMediaFields),
+        topCreators,
+      });
     } catch (err) {
       console.error('GET /api/drops/featured error:', err);
       res.status(500).json({ error: 'Failed to fetch featured drops' });
@@ -392,6 +668,53 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
   });
 
   /**
+   * GET /api/promotions/sponsored
+   * Returns approved sponsored promos for the Explore page.
+   */
+  // server.get(PROXY + '/api/promotions/sponsored', async (req, res) => {
+  //   try {
+  //     await ensurePromoSubmissionMetricsColumns(pool);
+  //     const limit = Math.min(20, Math.max(1, Number(req.query.limit || 6)));
+  //     const tag = String(req.query.tag || '').trim();
+  //     const hasTag = !!tag;
+  //     const [rows] = await pool.query(
+  //       `SELECT id, userId, username, submissionType, mediaType, title, description,
+  //               targetDropId, target_url, mediaUrl, ctaText, budgetCredits, assetPath, thumbnailPath, thumbnailImg, status,
+  //               clicks, impressions, likes, neutrals, dislikes, tags,
+  //               created_at, updated_at
+  //        FROM promoSubmissions
+  //        WHERE status = 'approved'
+  //          AND (
+  //            (submissionType = 'drop_sponsorship' AND targetDropId IS NOT NULL AND targetDropId <> '')
+  //            OR (submissionType = 'ad' AND target_url IS NOT NULL AND target_url <> '')
+  //          )
+  //          ${hasTag ? 'AND tags IS NOT NULL AND LOWER(tags) LIKE LOWER(?)' : ''}
+  //        ORDER BY updated_at DESC
+  //        LIMIT ?`,
+  //       hasTag ? [`%${tag}%`, limit] : [limit]
+  //     );
+
+  //     const sponsored = rows.map((row) => ({
+  //       ...row,
+  //       assetPath: resolveDropAssetUrl(row.assetPath),
+  //       mediaUrl: resolveDropAssetUrl(row.mediaUrl),
+  //       thumbnailPath: resolveDropAssetUrl(row.thumbnailPath || row.thumbnailImg),
+  //       thumbnailImg: resolveDropAssetUrl(row.thumbnailImg),
+  //     }));
+
+  //     res.json({ sponsored });
+  //   } catch (err) {
+  //     // If promoSubmissions does not exist yet, return an empty list instead of failing Explore.
+  //     if (err && (err.code === 'ER_NO_SUCH_TABLE' || err.errno === 1146)) {
+  //       return res.json({ sponsored: [] });
+  //     }
+  //     console.error('GET /api/promotions/sponsored error:', err);
+  //     res.status(500).json({ error: 'Failed to fetch sponsored promotions' });
+  //   }
+  // });
+
+
+   /**
    * GET /api/promotions/sponsored
    * Returns approved sponsored promos for the Explore page.
    */
@@ -403,13 +726,14 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       const hasTag = !!tag;
       const [rows] = await pool.query(
         `SELECT id, userId, username, submissionType, mediaType, title, description,
-                targetDropId, target_url, mediaUrl, ctaText, budgetUsd, assetPath, status,
+          targetDropId, target_url, mediaUrl, ctaText, budgetCredits, assetPath,
+          thumbnailImg, thumbnailImg AS thumbnailPath, status,
                 clicks, impressions, likes, neutrals, dislikes, tags,
                 created_at, updated_at
          FROM promoSubmissions
          WHERE status = 'approved'
            AND (
-             (submissionType = 'drop_sponsorship' AND targetDropId IS NOT NULL AND targetDropId <> '')
+             (submissionType = 'post_sponsorship' AND targetDropId IS NOT NULL AND targetDropId <> '')
              OR (submissionType = 'ad' AND target_url IS NOT NULL AND target_url <> '')
            )
            ${hasTag ? 'AND tags IS NOT NULL AND LOWER(tags) LIKE LOWER(?)' : ''}
@@ -418,7 +742,18 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
         hasTag ? [`%${tag}%`, limit] : [limit]
       );
 
-      res.json({ sponsored: rows });
+      const sponsored = rows.map((row) => {
+        const resolvedThumbnail = resolvePromoAssetUrl(row.thumbnailImg || row.thumbnailPath || '');
+        return {
+          ...row,
+          assetPath: resolvePromoAssetUrl(row.assetPath),
+          mediaUrl: resolvePromoAssetUrl(row.mediaUrl),
+          thumbnailImg: resolvedThumbnail,
+          thumbnailPath: resolvedThumbnail,
+        };
+      });
+
+      res.json({ sponsored });
     } catch (err) {
       // If promoSubmissions does not exist yet, return an empty list instead of failing Explore.
       if (err && (err.code === 'ER_NO_SUCH_TABLE' || err.errno === 1146)) {
@@ -428,6 +763,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       res.status(500).json({ error: 'Failed to fetch sponsored promotions' });
     }
   });
+
 
   server.post(PROXY + '/api/promotions/:id/impression', async (req, res) => {
     try {
@@ -493,6 +829,91 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
   });
 
   /**
+   * GET /api/drops/:id/thumbnail
+   * Resolves a stored thumbnail key to a short-lived signed URL and redirects to it.
+   */
+  server.get(PROXY + '/api/drops/:id/thumbnail', async (req, res) => {
+    try {
+      const postId = req.params.id;
+      const [[post]] = await pool.query('SELECT thumbnailUrl FROM drops WHERE id = ?', [postId]);
+      if (!post || !post.thumbnailUrl) return res.status(404).json({ error: 'Thumbnail not found' });
+
+      const storedValue = String(post.thumbnailUrl).trim();
+      if (/^https?:\/\//i.test(storedValue)) {
+        return res.redirect(storedValue);
+      }
+
+      if (storedValue.startsWith('/uploads/')) {
+        return res.redirect(buildAbsoluteUrl(req, storedValue));
+      }
+
+      if (!storage) return res.status(503).json({ error: 'Cloud storage not configured' });
+
+      const signedUrl = await signUrl(
+        storage,
+        new GetObjectCommand({
+          Bucket: BUCKET_NAME,
+          Key: normalizeObjectKey(storedValue),
+        }),
+        { expiresIn: 5 * 60 }
+      );
+
+      res.set('Cache-Control', 'private, max-age=240');
+      return res.redirect(signedUrl);
+    } catch (err) {
+      console.error('GET /api/drops/:id/thumbnail error:', err);
+      return res.status(500).json({ error: 'Failed to resolve thumbnail' });
+    }
+  });
+
+   /**
+   * POST /api/drops/:id/thumbnail-upload-url
+   * Returns a short-lived signed upload URL for editing a drop thumbnail.
+   */
+  server.post(PROXY + '/api/drops/:id/thumbnail-upload-url', authenticateToken, async (req, res) => {
+    try {
+      if (!storage) return res.status(503).json({ error: 'Cloud storage not configured' });
+
+      const dropId = req.params.id;
+      const userId = req.user.id;
+      const { fileName, mimeType } = req.body || {};
+
+      if (!mimeType || !String(mimeType).startsWith('image/')) {
+        return res.status(400).json({ error: 'Thumbnail must be an image' });
+      }
+
+      const drop = await knex('drops')
+        .select('creatorId', 'status')
+        .where('id', dropId)
+        .first();
+
+      if (!drop) return res.status(404).json({ error: 'Drop not found' });
+      if (drop.creatorId !== userId) return res.status(403).json({ error: 'Not the creator' });
+      if (!['draft', 'pending'].includes(drop.status)) {
+        return res.status(400).json({ error: 'Can only edit draft or pending drops' });
+      }
+
+      const ext = (String(fileName || '').split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const key = `${DEST_PREFIX}/drops/${drop.creatorId}/${dropId}/thumbnails/${uuidv4()}.${ext}`;
+
+      const signedUrl = await signUrl(
+        storage,
+        new PutObjectCommand({
+          Bucket: BUCKET_NAME,
+          Key: key,
+          ContentType: mimeType,
+        }),
+        { expiresIn: 15 * 60 }
+      );
+
+      res.json({ signedUrl, key });
+    } catch (err) {
+      console.error('POST /api/drops/:id/thumbnail-upload-url error:', err);
+      res.status(500).json({ error: 'Failed to create upload URL' });
+    }
+  });
+
+  /**
    * GET /api/drops/:id
    * Single drop with creator info.
    */
@@ -506,7 +927,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
         [req.params.id]
       );
       if (!rows.length) return res.status(404).json({ error: 'Drop not found' });
-      res.json(rows[0]);
+      res.json(normalizeDropMediaFields(rows[0]));
     } catch (err) {
       console.error('GET /api/drops/:id error:', err);
       res.status(500).json({ error: 'Failed to fetch drop' });
@@ -1094,10 +1515,12 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
 
   /**
    * GET /api/drops/:id/download-url
-   * Returns a 1h signed GCS URL for users who have purchased the drop.
+   * Returns a short-lived signed URL for users who can access the drop file.
    */
   server.get(PROXY + '/api/drops/:id/download-url', authenticateToken, async (req, res) => {
     try {
+      if (!storage) return res.status(503).json({ error: 'Cloud storage not configured' });
+
       const userId = req.user.id;
       const dropId = req.params.id;
 
@@ -1115,14 +1538,22 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
         if (!dl) return res.status(403).json({ error: 'Purchase the drop before downloading' });
       }
 
-      const [signedUrl] = await storage.bucket(BUCKET_NAME).file(drop.filePath).getSignedUrl({
-        version: 'v4',
-        action: 'read',
-        expires: Date.now() + 5 * 60 * 1000, // 5 minutes
-        responseDisposition: `attachment; filename="${drop.originalFileName || 'download'}"`,
-      });
+      const signedUrl = await signUrl(
+        storage,
+        new GetObjectCommand({
+          Bucket: BUCKET_NAME,
+          Key: normalizeObjectKey(drop.filePath),
+          ResponseContentDisposition: `attachment; filename="${String(drop.originalFileName || 'download').replace(/"/g, '_')}"`,
+        }),
+        { expiresIn: 5 * 60 }
+      );
 
-      res.json({ url: signedUrl, filename: drop.originalFileName || 'download' });
+      res.json({
+        url: signedUrl,
+        downloadUrl: signedUrl,
+        filename: drop.originalFileName || 'download',
+        expiresIn: '5 minutes',
+      });
     } catch (err) {
       console.error('GET /api/drops/:id/download-url error:', err);
       res.status(500).json({ error: 'Failed to generate download URL' });
@@ -1347,6 +1778,252 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
   });
 
 
+  
+  /**
+   * POST /api/posts/:id/flag
+   * Body: { reason: 'spam'|'scam'|'explicit'|'abuse'|'plagiarism'|'impersonation' }
+   */
+  server.post(PROXY + '/api/drops/:id/flag', authenticateToken, async (req, res) => {
+    try {
+      const dropId = String(req.params.id || '').trim();
+      const userId = String(req.user.id || '').trim();
+      const reason = String(req.body?.reason || '').trim().toLowerCase();
+      const description = String(req.body?.description || '').trim();
+      const evidenceUrlRaw = String(req.body?.evidenceUrl || '').trim();
+      const allowedReasons = new Set(['spam', 'scam', 'explicit', 'abuse', 'plagiarism', 'impersonation']);
+
+      if (!dropId) return res.status(400).json({ error: 'Invalid drop id' });
+
+      const quota = await consumeUnverifiedInteractionQuota(userId, 'post_flag');
+      if (quota.blocked) return res.status(quota.status || 429).json({ error: quota.message });
+
+      if (!allowedReasons.has(reason)) return res.status(400).json({ error: 'Invalid reason' });
+      if (description.length < 60 || description.length > 900) {
+        return res.status(400).json({ error: 'Explanation must be between 60 and 900 characters' });
+      }
+      if (evidenceUrlRaw && !/^https?:\/\//i.test(evidenceUrlRaw)) {
+        return res.status(400).json({ error: 'Evidence URL must start with http:// or https://' });
+      }
+
+      const evidenceUrl = evidenceUrlRaw.slice(0, 400);
+      const descriptionStored = evidenceUrl
+        ? `${description}\n\nEvidence URL: ${evidenceUrl}`
+        : description;
+
+      const [dropRows] = await pool.query('SELECT id FROM drops WHERE id = ? LIMIT 1', [dropId]);
+      if (!dropRows.length) return res.status(404).json({ error: 'Drop not found' });
+
+      const [existingRows] = await pool.query(
+        'SELECT id FROM dropFlags WHERE dropId = ? AND userId = ? LIMIT 1',
+        [dropId, userId]
+      );
+
+      if (existingRows.length) {
+        await pool.query(
+          'UPDATE dropFlags SET reason = ?, description = ?, updated_at = CURRENT_TIMESTAMP WHERE dropId = ? AND userId = ?',
+          [reason, descriptionStored, dropId, userId]
+        );
+      } else {
+        await pool.query(
+          'INSERT INTO dropFlags (id, dropId, userId, reason, description) VALUES (?, ?, ?, ?, ?)',
+          [uuidv4(), dropId, userId, reason, descriptionStored]
+        );
+      }
+
+      const [[counts]] = await pool.query(
+        'SELECT COUNT(*) AS flagCount FROM dropFlags WHERE dropId = ?',
+        [dropId]
+      );
+
+      const flagCount = Number(counts?.flagCount || 0);
+      res.json({
+        success: true,
+        flagCount,
+        hiddenFromExplore: flagCount >= 3,
+        hiddenFromRecommendations: flagCount >= 5,
+      });
+    } catch (err) {
+      console.error('POST /api/drops/:id/flag error:', err);
+      res.status(500).json({ error: 'Failed to flag drop' });
+    }
+  });
+
+
+
+  /**
+   * DROP /api/drops/:id/comments
+   * Body: { comment, parentCommentId? }
+   */
+  server.post(PROXY + '/api/drops/:id/comments', authenticateToken, async (req, res) => {
+    try {
+      const userId = req.user.id;
+      // const postId = req.params.id;
+      const { comment, parentCommentId } = req.body;
+
+      const dropId = req.params.id;
+
+      const quota = await consumeUnverifiedInteractionQuota(String(userId || '').trim(), 'drop_comment');
+      if (quota.blocked) return res.status(quota.status || 429).json({ error: quota.message });
+
+      if (!comment || !String(comment).trim()) {
+        return res.status(400).json({ error: 'Comment is required' });
+      }
+
+      if (parentCommentId) {
+        const [[parent]] = await pool.query(
+          'SELECT id, dropId FROM dropComments WHERE id = ? AND isDeleted = 0',
+          [parentCommentId]
+        );
+        if (!parent) return res.status(404).json({ error: 'Parent comment not found' });
+        if (parent.dropId !== dropId) return res.status(400).json({ error: 'Invalid parent comment target' });
+      }
+
+      const commentId = uuidv4();
+      await pool.query(
+        `INSERT INTO dropComments (id, dropId, userId, parentCommentId, comment)
+         VALUES (?, ?, ?, ?, ?)`,
+        [commentId, dropId, userId, parentCommentId || null, String(comment).trim()]
+      );
+
+      res.status(201).json({ id: commentId, message: 'Comment posted' });
+    } catch (err) {
+      console.error('POST /api/drops/:id/comments error:', err);
+      res.status(500).json({ error: 'Failed to post comment' });
+    }
+  });
+
+  /**
+   * POST /api/comments/:id/reply
+   * Body: { comment }
+   */
+  server.post(PROXY + '/api/comments/:id/reply', authenticateToken, async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const parentId = req.params.id;
+      const { comment } = req.body;
+
+      const quota = await consumeUnverifiedInteractionQuota(String(userId || '').trim(), 'comment_reply');
+      if (quota.blocked) return res.status(quota.status || 429).json({ error: quota.message });
+
+      if (!comment || !String(comment).trim()) {
+        return res.status(400).json({ error: 'Comment is required' });
+      }
+
+      const [[parent]] = await pool.query(
+        'SELECT id, dropId FROM dropComments WHERE id = ? AND isDeleted = 0',
+        [parentId]
+      );
+      if (!parent) return res.status(404).json({ error: 'Parent comment not found' });
+
+      const commentId = uuidv4();
+      await pool.query(
+        `INSERT INTO dropComments (id, dropId, userId, parentCommentId, comment)
+         VALUES (?, ?, ?, ?, ?)`,
+        [commentId, parent.dropId, userId, parentId, String(comment).trim()]
+      );
+
+      res.status(201).json({ id: commentId, message: 'Reply droped' });
+    } catch (err) {
+      console.error('POST /api/comments/:id/reply error:', err);
+      res.status(500).json({ error: 'Failed to post reply' });
+    }
+  });
+
+  /**
+   * POST /api/comments/:id/reaction
+   * Body: { reaction: 'like' | 'dislike' }
+   */
+  server.post(PROXY + '/api/comments/:id/reaction', authenticateToken, async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const commentId = req.params.id;
+      const { reaction } = req.body;
+
+      const quota = await consumeUnverifiedInteractionQuota(String(userId || '').trim(), 'comment_reaction');
+      if (quota.blocked) return res.status(quota.status || 429).json({ error: quota.message });
+
+      if (!['like', 'dislike'].includes(reaction)) {
+        return res.status(400).json({ error: 'reaction must be like or dislike' });
+      }
+
+      const [[comment]] = await pool.query('SELECT id FROM dropComments WHERE id = ? AND isDeleted = 0', [commentId]);
+      if (!comment) return res.status(404).json({ error: 'Comment not found' });
+
+      const [[existing]] = await pool.query(
+        'SELECT id, reaction FROM dropCommentReactions WHERE commentId = ? AND userId = ?',
+        [commentId, userId]
+      );
+
+      if (existing && existing.reaction === reaction) {
+        await pool.query('DELETE FROM dropCommentReactions WHERE id = ?', [existing.id]);
+        return res.json({ reaction: null, message: 'Reaction removed' });
+      }
+
+      if (existing) {
+        await pool.query(
+          'UPDATE dropCommentReactions SET reaction = ? WHERE id = ?',
+          [reaction, existing.id]
+        );
+      } else {
+        await pool.query(
+          'INSERT INTO dropCommentReactions (id, commentId, userId, reaction) VALUES (?, ?, ?, ?)',
+          [uuidv4(), commentId, userId, reaction]
+        );
+      }
+
+      res.json({ reaction, message: 'Reaction updated' });
+    } catch (err) {
+      console.error('POST /api/comments/:id/reaction error:', err);
+      res.status(500).json({ error: 'Failed to react to comment' });
+    }
+  });
+
+  // Alias route for clients using /react.
+  server.post(PROXY + '/api/comments/:id/react', authenticateToken, async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const commentId = req.params.id;
+      const { reaction } = req.body;
+
+      const quota = await consumeUnverifiedInteractionQuota(String(userId || '').trim(), 'comment_reaction');
+      if (quota.blocked) return res.status(quota.status || 429).json({ error: quota.message });
+
+      if (!['like', 'dislike'].includes(reaction)) {
+        return res.status(400).json({ error: 'reaction must be like or dislike' });
+      }
+
+      const [[comment]] = await pool.query('SELECT id FROM dropComments WHERE id = ? AND isDeleted = 0', [commentId]);
+      if (!comment) return res.status(404).json({ error: 'Comment not found' });
+
+      const [[existing]] = await pool.query(
+        'SELECT id, reaction FROM dropCommentReactions WHERE commentId = ? AND userId = ?',
+        [commentId, userId]
+      );
+
+      if (existing && existing.reaction === reaction) {
+        await pool.query('DELETE FROM dropCommentReactions WHERE id = ?', [existing.id]);
+        return res.json({ reaction: null, message: 'Reaction removed' });
+      }
+
+      if (existing) {
+        await pool.query(
+          'UPDATE dropCommentReactions SET reaction = ? WHERE id = ?',
+          [reaction, existing.id]
+        );
+      } else {
+        await pool.query(
+          'INSERT INTO dropCommentReactions (id, commentId, userId, reaction) VALUES (?, ?, ?, ?)',
+          [uuidv4(), commentId, userId, reaction]
+        );
+      }
+
+      res.json({ reaction, message: 'Reaction updated' });
+    } catch (err) {
+      console.error('POST /api/comments/:id/react error:', err);
+      res.status(500).json({ error: 'Failed to react to comment' });
+    }
+  });
+
   // ============================================================
   //  FAVORITES / WAITLIST
   // ============================================================
@@ -1431,6 +2108,77 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
     }
   });
 
+
+
+  /**
+   * POST /api/drops/:id/flag
+   * Body: { reason: 'spam'|'scam'|'explicit'|'abuse'|'plagiarism'|'impersonation' }
+   */
+  server.post(PROXY + '/api/drops/:id/flag', authenticateToken, async (req, res) => {
+    try {
+      const postId = String(req.params.id || '').trim();
+      const userId = String(req.user.id || '').trim();
+      const reason = String(req.body?.reason || '').trim().toLowerCase();
+      const description = String(req.body?.description || '').trim();
+      const evidenceUrlRaw = String(req.body?.evidenceUrl || '').trim();
+      const allowedReasons = new Set(['spam', 'scam', 'explicit', 'abuse', 'plagiarism', 'impersonation']);
+
+      if (!postId) return res.status(400).json({ error: 'Invalid post id' });
+
+      const quota = await consumeUnverifiedInteractionQuota(userId, 'post_flag');
+      if (quota.blocked) return res.status(quota.status || 429).json({ error: quota.message });
+
+      if (!allowedReasons.has(reason)) return res.status(400).json({ error: 'Invalid reason' });
+      if (description.length < 60 || description.length > 900) {
+        return res.status(400).json({ error: 'Explanation must be between 60 and 900 characters' });
+      }
+      if (evidenceUrlRaw && !/^https?:\/\//i.test(evidenceUrlRaw)) {
+        return res.status(400).json({ error: 'Evidence URL must start with http:// or https://' });
+      }
+
+      const evidenceUrl = evidenceUrlRaw.slice(0, 400);
+      const descriptionStored = evidenceUrl
+        ? `${description}\n\nEvidence URL: ${evidenceUrl}`
+        : description;
+
+      const [postRows] = await pool.query('SELECT id FROM drops WHERE id = ? LIMIT 1', [postId]);
+      if (!postRows.length) return res.status(404).json({ error: 'Drop not found' });
+
+      const [existingRows] = await pool.query(
+        'SELECT id FROM postFlags WHERE postId = ? AND userId = ? LIMIT 1',
+        [postId, userId]
+      );
+
+      if (existingRows.length) {
+        await pool.query(
+          'UPDATE postFlags SET reason = ?, description = ?, updated_at = CURRENT_TIMESTAMP WHERE postId = ? AND userId = ?',
+          [reason, descriptionStored, postId, userId]
+        );
+      } else {
+        await pool.query(
+          'INSERT INTO postFlags (id, postId, userId, reason, description) VALUES (?, ?, ?, ?, ?)',
+          [uuidv4(), postId, userId, reason, descriptionStored]
+        );
+      }
+
+      const [[counts]] = await pool.query(
+        'SELECT COUNT(*) AS flagCount FROM postFlags WHERE postId = ?',
+        [postId]
+      );
+
+      const flagCount = Number(counts?.flagCount || 0);
+      res.json({
+        success: true,
+        flagCount,
+        hiddenFromExplore: flagCount >= 3,
+        hiddenFromRecommendations: flagCount >= 5,
+      });
+    } catch (err) {
+      console.error('POST /api/drops/:id/flag error:', err);
+      res.status(500).json({ error: 'Failed to flag drop' });
+    }
+  });
+
   /**
    * GET /api/users/:id
    * Public profile data.
@@ -1438,7 +2186,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
   server.get(PROXY + '/api/users/:id', async (req, res) => {
     try {
       const [rows] = await pool.query(
-        `SELECT id, username, profilePicture, bio, accountType,
+        `SELECT id, username, profilePicture, bio, accountType, accountPlan,
                 totalDropsCreated, totalCreditsEarned, creatorRating, createdAt,
                 bannerUrl, bioVideoUrl, socialLinks,
                 (SELECT COUNT(*) FROM followers WHERE followeeId = userData.id) AS followerCount,
@@ -1477,6 +2225,68 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       res.status(500).json({ error: 'Failed to fetch user drops' });
     }
   });
+
+  /**
+   * POST /api/users/:id/flag
+   * Body: { reason, description, evidenceUrl? }
+   */
+  server.post(PROXY + '/api/users/:id/flag', authenticateToken, async (req, res) => {
+    try {
+      const identifier = String(req.params.id || '').trim();
+      const flaggedBy = String(req.user?.id || '').trim();
+      const reason = String(req.body?.reason || '').trim().toLowerCase();
+      const description = String(req.body?.description || '').trim();
+      const evidenceUrlRaw = String(req.body?.evidenceUrl || '').trim();
+      const allowedReasons = new Set(['spam', 'scam', 'abuse', 'harassment', 'hate', 'impersonation', 'explicit', 'other']);
+
+      if (!identifier) return res.status(400).json({ error: 'Invalid user id' });
+      if (!flaggedBy) return res.status(401).json({ error: 'Unauthorized' });
+      if (!allowedReasons.has(reason)) return res.status(400).json({ error: 'Invalid reason' });
+      if (description.length < 30 || description.length > 900) {
+        return res.status(400).json({ error: 'Explanation must be between 30 and 900 characters' });
+      }
+      if (evidenceUrlRaw && !/^https?:\/\//i.test(evidenceUrlRaw)) {
+        return res.status(400).json({ error: 'Evidence URL must start with http:// or https://' });
+      }
+
+      const [[targetUser]] = await pool.query(
+        'SELECT id, username FROM userData WHERE id = ? OR username = ? LIMIT 1',
+        [identifier, identifier]
+      );
+      if (!targetUser) return res.status(404).json({ error: 'User not found' });
+      if (String(targetUser.id) === flaggedBy) {
+        return res.status(400).json({ error: 'You cannot flag your own account' });
+      }
+
+      const evidenceUrl = evidenceUrlRaw.slice(0, 400);
+      const descriptionStored = evidenceUrl
+        ? `${description}\n\nEvidence URL: ${evidenceUrl}`
+        : description;
+
+      await pool.query(
+        `INSERT INTO userFlags (id, userId, flaggedBy, reason, description, status)
+         VALUES (?, ?, ?, ?, ?, 'open')`,
+        [uuidv4(), targetUser.id, flaggedBy, reason, descriptionStored]
+      );
+
+      const [[counts]] = await pool.query(
+        `SELECT COUNT(*) AS openFlagCount
+         FROM userFlags
+         WHERE userId = ? AND status IN ('open','reviewed')`,
+        [targetUser.id]
+      );
+
+      res.json({
+        success: true,
+        openFlagCount: Number(counts?.openFlagCount || 0),
+      });
+    } catch (err) {
+      console.error('POST /api/users/:id/flag error:', err);
+      res.status(500).json({ error: 'Failed to flag user' });
+    }
+  });
+
+
 
 
   // ============================================================
@@ -1625,7 +2435,12 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
         [userId]
       );
 
-      res.json({ user, myDrops, contributed, stats });
+      res.json({
+        user,
+        myDrops: myDrops.map(normalizeDropMediaFields),
+        contributed: contributed.map(normalizeDropMediaFields),
+        stats,
+      });
     } catch (err) {
       console.error('GET /api/dashboard error:', err);
       res.status(500).json({ error: 'Failed to fetch dashboard' });
@@ -1964,14 +2779,14 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
 
 
   // ============================================================
-  //  DROP FILE UPLOAD — GCS Signed URL (resumable)
+  //  DROP FILE UPLOAD — Signed URL (R2 / S3-compatible)
   //
   //  Flow:
   //  1. Client calls POST /api/drops/:id/upload-url with file metadata
-  //  2. Server returns a short-lived GCS signed URL
-  //  3. Client uploads directly to GCS (file never touches this server)
+  //  2. Server returns a short-lived signed URL
+  //  3. Client uploads directly to object storage (file never touches this server)
   //  4. Client calls POST /api/drops/:id/confirm-upload
-  //  5. Server verifies the file exists in GCS and updates the DB
+  //  5. Server verifies the file exists in storage and updates the DB
   // ============================================================
 
   // Allowed drop file MIME types
@@ -1996,7 +2811,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
 
   /**
    * POST /api/drops/:id/upload-url
-   * Returns a GCS signed resumable-upload URL.
+    * Returns a signed upload URL for a private drop-file object.
    * Body: { fileName, fileType (MIME), fileSize (bytes) }
    */
   server.post(PROXY + '/api/drops/:id/upload-url', authenticateToken, async (req, res) => {
@@ -2026,20 +2841,20 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
         return res.status(400).json({ error: 'Can only upload files for draft or pending drops' });
       }
 
-      // Build GCS destination path
+      // Build private storage destination path
       const ext = path.extname(fileName) || '';
       const safeBase = path.basename(fileName, ext)
         .replace(/\s+/g, '_')
         .replace(/[^A-Za-z0-9._-]/g, '')
         .slice(0, 100);
-      const gcsFileName = `${uuidv4()}_${safeBase}${ext}`;
-      const gcsPath = `${DEST_PREFIX}/drops/${userId}/${dropId}/${gcsFileName}`;
+      const objectFileName = `${uuidv4()}_${safeBase}${ext}`;
+      const objectKey = joinObjectKey(dropFilePrefix, userId, dropId, objectFileName);
 
-      const signedUrl = await getSignedUrl(
+      const signedUrl = await signUrl(
         storage,
         new PutObjectCommand({
           Bucket: BUCKET_NAME,
-          Key: gcsPath,
+          Key: objectKey,
           ContentType: fileType,
         }),
         { expiresIn: 15 * 60 }
@@ -2048,12 +2863,14 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       // Store the pending path so confirm-upload can verify it
       await pool.query(
         `UPDATE drops SET filePath = ?, mimeType = ?, fileSize = ? WHERE id = ?`,
-        [gcsPath, fileType, fileSize ? +fileSize : null, dropId]
+        [objectKey, fileType, fileSize ? +fileSize : null, dropId]
       );
 
       res.json({
         uploadUrl: signedUrl,
-        gcsPath,
+        objectKey,
+        // Legacy field kept for older clients.
+        gcsPath: objectKey,
         expiresIn: '15 minutes',
         instructions: {
           method: 'PUT',
@@ -2069,7 +2886,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
 
   /**
    * POST /api/drops/:id/confirm-upload
-   * Client calls this after the direct-to-GCS upload finishes.
+    * Client calls this after direct upload finishes.
    * Server verifies the file exists and finalises the DB record.
    * Body: { originalFileName? }
    */
@@ -2101,7 +2918,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
         return res.status(400).json({ error: 'File not found in storage — upload may have failed' });
       }
 
-      // Get actual file metadata from GCS
+      // Get actual file metadata from storage
       // const [metadata] = await bucket.file(drop.filePath).getMetadata();
 
       const updates = {
@@ -2126,54 +2943,6 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       res.status(500).json({ error: 'Failed to confirm upload' });
     }
   });
-
-
-  // ============================================================
-  //  DROP FILE DOWNLOAD — Signed download URL
-  //
-  //  After a user purchases a download (POST /api/drops/:id/download),
-  //  this endpoint returns a short-lived signed URL so the client
-  //  can stream the file directly from GCS.
-  // ============================================================
-
-  /**
-   * GET /api/drops/:id/download-url
-   * Returns a 1-hour signed download URL. Must have a download record.
-   */
-  server.get(PROXY + '/api/drops/:id/download-url', authenticateToken, async (req, res) => {
-    try {
-      if (!storage) return res.status(503).json({ error: 'Cloud storage not configured' });
-
-      const userId = req.user.id;
-      const dropId = req.params.id;
-
-      // Verify purchase
-      const [[dl]] = await pool.query(
-        'SELECT id FROM dropDownloads WHERE dropId = ? AND userId = ?', [dropId, userId]
-      );
-      if (!dl) return res.status(403).json({ error: 'You have not purchased this drop' });
-
-      const [[drop]] = await pool.query('SELECT filePath, title FROM drops WHERE id = ?', [dropId]);
-      if (!drop || !drop.filePath) return res.status(404).json({ error: 'Drop file not found' });
-
-      const signedUrl = await getSignedUrl(
-        storage,
-        new GetObjectCommand({
-          Bucket: BUCKET_NAME,
-          Key: normalizeObjectKey(drop.filePath),
-          ResponseContentDisposition: `attachment; filename="${(drop.title || 'download').replace(/"/g, '_')}"`,
-        }),
-        { expiresIn: 60 * 60 }
-      );
-
-      res.json({ downloadUrl: signedUrl, expiresIn: '1 hour' });
-    } catch (err) {
-      console.error('GET /api/drops/:id/download-url error:', err);
-      res.status(500).json({ error: 'Failed to generate download URL' });
-    }
-  });
-
-
   // ============================================================
   //  BANNER / THUMBNAIL UPLOAD (multer — small images only)
   // ============================================================
@@ -2196,6 +2965,29 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
     fileFilter(_req, file, cb) {
       if (!file.mimetype.startsWith('image/')) {
         return cb(new Error('Only image files are allowed for banners'), false);
+      }
+      cb(null, true);
+    },
+  });
+
+  const trailerStorage = multer.diskStorage({
+    destination(req, _file, cb) {
+      const dir = path.join(__dirname, 'uploads', 'trailers-temp', req.user.id);
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename(_req, file, cb) {
+      const ext = path.extname(file.originalname) || '.mp4';
+      cb(null, `${uuidv4()}${ext}`);
+    },
+  });
+
+  const trailerUpload = multer({
+    storage: trailerStorage,
+    limits: { fileSize: 300 * 1024 * 1024 },
+    fileFilter(_req, file, cb) {
+      if (!String(file.mimetype || '').startsWith('video/')) {
+        return cb(new Error('Only video files are allowed for trailers'), false);
       }
       cb(null, true);
     },
@@ -2242,14 +3034,15 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
         let thumbnailUrl;
         if (storage) {
           const ext = path.extname(req.file.originalname) || '.jpg';
-          const gcsPath = `${DEST_PREFIX}/banners/${userId}/${uuidv4()}${ext}`;
+          const objectKey = joinObjectKey(thumbnailPrefix, userId, `${uuidv4()}${ext}`);
           await storage.send(new PutObjectCommand({
             Bucket: BUCKET_NAME,
-            Key: gcsPath,
+            Key: objectKey,
             Body: fs.readFileSync(req.file.path),
             ContentType: req.file.mimetype,
+            CacheControl: 'public, max-age=31536000, immutable',
           }));
-          thumbnailUrl = toPublicUrl(gcsPath) || gcsPath;
+          thumbnailUrl = toPublicUrl(objectKey) || objectKey;
           // Clean up local temp file
           fs.unlink(req.file.path, () => {});
         } else {
@@ -2262,6 +3055,102 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       } catch (err) {
         console.error('POST /api/drops/:id/banner error:', err);
         res.status(500).json({ error: 'Banner upload failed' });
+      }
+    }
+  );
+
+  /**
+   * POST /api/drops/:id/trailer
+   * Upload a trailer video. If the upload is larger than 50MB, attempt server-side compression.
+   */
+  server.post(
+    PROXY + '/api/drops/:id/trailer',
+    authenticateToken,
+    trailerUpload.single('trailer'),
+    async (req, res) => {
+      const PREMIUM_TRAILER_SIZE_LIMIT = 25 * 1024 * 1024;
+      const TRAILER_COMPRESS_THRESHOLD = 50 * 1024 * 1024;
+      let sourcePath = req.file?.path || null;
+      let compressedPath = null;
+
+      try {
+        const userId = req.user.id;
+        const dropId = req.params.id;
+
+        const [[drop]] = await pool.query('SELECT creatorId, status FROM drops WHERE id = ?', [dropId]);
+        if (!drop) return res.status(404).json({ error: 'Drop not found' });
+        if (drop.creatorId !== userId) return res.status(403).json({ error: 'Not the creator' });
+        if (!['draft', 'pending'].includes(drop.status)) {
+          return res.status(400).json({ error: 'Can only upload trailers for draft or pending drops' });
+        }
+        if (!req.file) return res.status(400).json({ error: 'No trailer file provided' });
+
+        const [[userRow]] = await pool.query(
+          'SELECT accountPlan, accountType FROM userData WHERE id = ? LIMIT 1',
+          [userId]
+        );
+        const plan = String(userRow?.accountPlan || userRow?.accountType || '').toLowerCase();
+        const isPremium = plan === 'premium';
+        if (!isPremium && (req.file.size || 0) > PREMIUM_TRAILER_SIZE_LIMIT) {
+          return res.status(403).json({
+            error: 'Trailer uploads over 25MB are a Premium feature.',
+          });
+        }
+
+        let workingPath = sourcePath;
+        let outputMimeType = req.file.mimetype || 'video/mp4';
+        let outputExt = path.extname(req.file.originalname) || '.mp4';
+        let compressed = false;
+
+        if ((req.file.size || 0) > TRAILER_COMPRESS_THRESHOLD) {
+          const ffmpegReady = await isFfmpegAvailable();
+          if (!ffmpegReady) {
+            return res.status(400).json({
+              error: 'Trailer is larger than 50MB and ffmpeg is not installed on the server for compression.',
+            });
+          }
+          compressedPath = `${sourcePath}.compressed.mp4`;
+          await compressVideoWithFfmpeg(sourcePath, compressedPath);
+          workingPath = compressedPath;
+          outputMimeType = 'video/mp4';
+          outputExt = '.mp4';
+          compressed = true;
+        }
+
+        const originalBase = path.basename(req.file.originalname, path.extname(req.file.originalname))
+          .replace(/\s+/g, '_')
+          .replace(/[^A-Za-z0-9._-]/g, '')
+          .slice(0, 100) || 'trailer';
+        const storedName = `${uuidv4()}_${originalBase}${outputExt}`;
+
+        let trailerUrl;
+        if (storage) {
+          const objectKey = joinObjectKey(trailerPrefix, userId, dropId, storedName);
+          await storage.send(new PutObjectCommand({
+            Bucket: BUCKET_NAME,
+            Key: objectKey,
+            Body: fs.readFileSync(workingPath),
+            ContentType: outputMimeType,
+            CacheControl: 'public, max-age=31536000, immutable',
+          }));
+          trailerUrl = toPublicUrl(objectKey) || objectKey;
+        } else {
+          const trailerDir = path.resolve(__dirname, '..', 'storage_folder', 'public', 'trailers', userId);
+          fs.mkdirSync(trailerDir, { recursive: true });
+          const finalLocalPath = path.join(trailerDir, storedName);
+          fs.copyFileSync(workingPath, finalLocalPath);
+          trailerUrl = `/storage_folder/public/trailers/${userId}/${storedName}`;
+        }
+
+        await pool.query('UPDATE drops SET trailerUrl = ? WHERE id = ?', [trailerUrl, dropId]);
+
+        res.json({ message: 'Trailer uploaded', trailerUrl, compressed });
+      } catch (err) {
+        console.error('POST /api/drops/:id/trailer error:', err);
+        res.status(500).json({ error: 'Trailer upload failed' });
+      } finally {
+        safeUnlink(sourcePath);
+        if (compressedPath) safeUnlink(compressedPath);
       }
     }
   );

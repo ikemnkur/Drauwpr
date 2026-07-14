@@ -99,7 +99,7 @@ export function mapDrop(d: ServerDrop): Drop & { myContribution?: number } {
     dislikeCount: d.dislikeCount ?? 0,
     views: d.views ?? 0,
     flagCount: d.flagCount ?? 0,
-    mature: d.mature ?? 0,
+    mature: Boolean(d.mature ?? 0),
     status: d.status,
     isPublic: Boolean(d.isPublic),
     tags,

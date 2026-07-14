@@ -21,7 +21,7 @@ export default function Account() {
   const isVerified = user.verification === 'true';
   const avatarFallback = `https://picsum.photos/seed/user-account-${user.id}/240/240`;
 
-  const membership = (user.accountType ?? 'free').toLowerCase() as 'free' | 'standard' | 'premium';
+  const membership = (user.accountPlan ?? 'free').toLowerCase() as 'free' | 'standard' | 'premium';
 
   const membershipMeta = {
     free:     { label: 'Free',     Icon: Zap,    color: 'text-text-muted',  desc: 'Upgrade for more credits and premium features' },
@@ -160,8 +160,12 @@ export default function Account() {
           <ChevronRight className="w-4 h-4 text-text-muted" />
         </Link>
 
-        {/* Balance */}
-        <div className="bg-surface-3 rounded-xl p-4 flex items-center justify-between">
+         {/* Balance */}
+        <div className="bg-surface-3 rounded-xl p-4 flex items-center justify-between hover:bg-surface" 
+        onClick={() => navigate('/buy-credits')}
+        // highlight on hover
+
+        >
           <div className="flex items-center gap-2">
             <CreditCard className="w-5 h-5 text-brand" />
             <span className="text-sm text-text-muted">Credit Balance</span>

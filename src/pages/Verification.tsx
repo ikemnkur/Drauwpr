@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import {
   ShieldCheck, Camera, Upload, CreditCard, ArrowLeft, Smartphone,
   CheckCircle, AlertCircle, Loader2, QrCode, CheckCircle2, Copy, Check,
+  Mail,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { api, ApiError } from '../lib/api';
@@ -10,7 +11,7 @@ import { useAuth } from '../context/AuthContext';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
-type TaskId = 'phone' | 'docs' | 'payment';
+type TaskId = 'email' | 'phone' | 'docs' | 'payment';
 type Chain = 'BTC' | 'ETH' | 'LTC' | 'SOL';
 
 interface CryptoAmounts {
@@ -25,9 +26,16 @@ interface VerificationData {
   amount1: number;
   amount2: number;
   cryptoAmounts: CryptoAmounts | string;
+  emailVerified?: boolean;
+  phoneNumber?: string;
   phoneVerified?: boolean;
   docsUploaded?: boolean;
   paymentVerified?: boolean;
+}
+
+interface ApiResponse {
+  success: boolean;
+  message?: string;
 }
 
 const CHAIN_LABELS: Record<Chain, string> = {
@@ -42,10 +50,16 @@ const CURRENCIES = [
 ];
 
 const TASKS: { id: TaskId; label: string; icon: typeof Camera }[] = [
+  { id: 'email', label: 'Email', icon: Mail },
   { id: 'phone', label: 'Phone', icon: Smartphone },
   { id: 'docs', label: 'Upload ID', icon: Camera },
   { id: 'payment', label: 'Crypto', icon: CreditCard },
 ];
+
+function validateEmail(value: string) {
+  const i = value.indexOf('@');
+  return i > 0 && value.lastIndexOf('.') > i && !value.endsWith('.') && !value.endsWith('@');
+}
 
 // ─── Component ─────────────────────────────────────────────────────────────
 
@@ -55,14 +69,24 @@ export default function Verification() {
 
   const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const taskFromUrl = (queryParams.get('task') as TaskId | null) || null;
+  const emailFromUrl = queryParams.get('email') || '';
+  const codeFromUrl = queryParams.get('code') || '';
 
   // ── Shared state ──
-  const [active, setActive] = useState<TaskId>(taskFromUrl || 'phone');
+  const [active, setActive] = useState<TaskId>(taskFromUrl || 'email');
   const [verificationData, setVerificationData] = useState<VerificationData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   // ── Independent completion flags (no forced order) ──
+  const [email, setEmail] = useState(emailFromUrl || user?.email || '');
+  const [verificationCode, setVerificationCode] = useState(codeFromUrl || '');
+  const [emailVerifying, setEmailVerifying] = useState(false);
+  const [emailSending, setEmailSending] = useState(false);
+  const [emailVerified, setEmailVerified] = useState(false);
+  const [emailStatus, setEmailStatus] = useState('');
+  const [emailStatusType, setEmailStatusType] = useState<'' | 'success' | 'error' | 'info'>('');
+  const [autoVerifyAttempted, setAutoVerifyAttempted] = useState(false);
   const [phoneVerified, setPhoneVerified] = useState(false);
   const [docsUploaded, setDocsUploaded] = useState(false);
   const [paymentVerified, setPaymentVerified] = useState(false);
@@ -94,37 +118,101 @@ export default function Verification() {
   const currency = CURRENCIES[currencyIdx];
   const chain = currency.symbol as Chain;
 
-  const allDone = phoneVerified && docsUploaded && paymentVerified;
+  const allDone = emailVerified && phoneVerified && docsUploaded && paymentVerified;
 
   // ── Fetch verification state on mount ──
   useEffect(() => {
     if (!user) { setLoading(false); return; }
-    api.post<{ user: VerificationData }>('/api/user', { email: user.email })
-      .then((res) => {
+    Promise.all([
+      api.post<{ user: VerificationData }>('/api/user', { email: user.email }),
+      api.post<{ verified: boolean }>('/api/auth/email-verification-status', { email: user.email }),
+      api.post<{ verified: boolean }>('/api/auth/phone-verification-status', { email: user.email, userId: user.id }),
+    ])
+      .then(([res, emailState, phoneState]) => {
         const u = res.user as unknown as Record<string, unknown>;
         const data: VerificationData = {
           verification: (u.verification as string) || 'none',
           amount1: Number(u.amount1) || 0,
           amount2: Number(u.amount2) || 0,
           cryptoAmounts: (u.cryptoAmounts as CryptoAmounts | string) || '',
-          phoneVerified: Boolean(u.phoneVerified),
+          phoneNumber: (u.phoneNumber as string) || '',
+          emailVerified: !!emailState.verified,
+          phoneVerified: !!phoneState.verified || Boolean(u.phoneVerified),
           docsUploaded: Boolean(u.docsUploaded),
           paymentVerified: Boolean(u.paymentVerified),
         };
         setVerificationData(data);
+        if (data.phoneNumber) setPhone(data.phoneNumber);
 
         // Hydrate independent flags from server
-        if (data.verification === 'true') {
-          setPhoneVerified(true); setDocsUploaded(true); setPaymentVerified(true);
-        } else {
-          setPhoneVerified(!!data.phoneVerified);
-          setDocsUploaded(!!data.docsUploaded);
-          setPaymentVerified(!!data.paymentVerified);
-        }
+        setEmailVerified(!!data.emailVerified);
+        setPhoneVerified(!!data.phoneVerified);
+        setDocsUploaded(!!data.docsUploaded);
+        setPaymentVerified(!!data.paymentVerified);
       })
       .catch(() => setError('Failed to load verification data'))
       .finally(() => setLoading(false));
   }, [user]);
+
+  useEffect(() => {
+    if (!email && user?.email) setEmail(user.email);
+  }, [email, user]);
+
+  const handleVerifyEmail = useCallback(async (overrideEmail?: string, overrideCode?: string) => {
+    const emailVal = (overrideEmail ?? email).trim();
+    const codeVal = (overrideCode ?? verificationCode).trim();
+
+    if (!emailVal) { setEmailStatus('Please enter your email address.'); setEmailStatusType('error'); return; }
+    if (!validateEmail(emailVal)) { setEmailStatus('Please enter a valid email address.'); setEmailStatusType('error'); return; }
+    if (!codeVal) { setEmailStatus('Please enter the verification code.'); setEmailStatusType('error'); return; }
+
+    setEmailVerifying(true);
+    setEmailStatus('Verifying your email...');
+    setEmailStatusType('info');
+
+    try {
+      const r = await api.post<ApiResponse>('/api/auth/verify-email', { email: emailVal, code: codeVal });
+      if (r.success) {
+        setEmailVerified(true);
+        setEmailStatus('Email verified!');
+        setEmailStatusType('success');
+        if (user) await refreshUser();
+      } else {
+        setEmailStatus(r.message || 'Verification failed.');
+        setEmailStatusType('error');
+      }
+    } catch (e) {
+      setEmailStatus(e instanceof ApiError ? e.message : 'Verification failed.');
+      setEmailStatusType('error');
+    } finally {
+      setEmailVerifying(false);
+    }
+  }, [email, verificationCode, refreshUser, user]);
+
+  useEffect(() => {
+    if (autoVerifyAttempted || emailVerified || !emailFromUrl || !codeFromUrl || loading) return;
+    setAutoVerifyAttempted(true);
+    void handleVerifyEmail(emailFromUrl, codeFromUrl);
+  }, [autoVerifyAttempted, codeFromUrl, emailFromUrl, handleVerifyEmail, emailVerified, loading]);
+
+  const handleResendCode = useCallback(async () => {
+    const emailVal = email.trim();
+    if (!emailVal || !validateEmail(emailVal)) { setEmailStatus('Please enter a valid email.'); setEmailStatusType('error'); return; }
+    setEmailSending(true);
+    setEmailStatus('Sending a new code...');
+    setEmailStatusType('info');
+    try {
+      const r = await api.post<ApiResponse>('/api/auth/resend-verification', { email: emailVal });
+      setEmailStatus(r.message || 'New code sent!');
+      setEmailStatusType('success');
+      setVerificationCode('');
+    } catch (e) {
+      setEmailStatus(e instanceof ApiError ? e.message : 'Failed to resend code.');
+      setEmailStatusType('error');
+    } finally {
+      setEmailSending(false);
+    }
+  }, [email]);
 
   const parsedCrypto = (() => {
     if (!verificationData) return null;
@@ -141,7 +229,7 @@ export default function Verification() {
     setSmsBusy(true);
     setSmsStatus('Sending code...'); setSmsStatusType('info');
     try {
-      await api.post('/api/auth/phone/send-otp', { email: user?.email, phoneNumber: phone.trim() });
+      await api.post('/api/account/phone/send-otp', { phoneNumber: phone.trim() });
       setOtpSent(true);
       setSmsStatus('Code sent. Check your messages.'); setSmsStatusType('success');
     } catch (e) {
@@ -156,7 +244,7 @@ export default function Verification() {
     setSmsBusy(true);
     setSmsStatus('Verifying...'); setSmsStatusType('info');
     try {
-      await api.post('/api/auth/phone/verify-otp', { email: user?.email, phoneNumber: phone.trim(), code: otp });
+      await api.post('/api/account/phone/verify-otp', { phoneNumber: phone.trim(), code: otp });
       setPhoneVerified(true);
       setOtpSent(false);
       setSmsStatus('Phone verified!'); setSmsStatusType('success');
@@ -225,9 +313,9 @@ export default function Verification() {
   } as const;
 
   const isDone = (id: TaskId) =>
-    id === 'phone' ? phoneVerified : id === 'docs' ? docsUploaded : paymentVerified;
+    id === 'email' ? emailVerified : id === 'phone' ? phoneVerified : id === 'docs' ? docsUploaded : paymentVerified;
 
-  const completedCount = [phoneVerified, docsUploaded, paymentVerified].filter(Boolean).length;
+  const completedCount = [emailVerified, phoneVerified, docsUploaded, paymentVerified].filter(Boolean).length;
 
   // ── Loading ──
   if (loading) {
@@ -295,6 +383,82 @@ export default function Verification() {
         <div className="bg-danger/10 border border-danger/30 rounded-xl p-3 mb-6 flex items-start gap-2">
           <AlertCircle className="w-4 h-4 text-danger mt-0.5 shrink-0" />
           <p className="text-sm text-danger">{error}</p>
+        </div>
+      )}
+
+      {/* ━━━ TASK — Email verification ━━━ */}
+      {active === 'email' && (
+        <div className="bg-surface-2 rounded-2xl p-6 space-y-4">
+          <div>
+            <h3 className="text-text font-semibold mb-1 flex items-center gap-2">
+              Verify Your Email
+              {emailVerified && <CheckCircle className="w-4 h-4 text-green-500" />}
+            </h3>
+            <p className="text-xs text-text-muted">
+              Enter the verification code sent to your inbox.
+            </p>
+          </div>
+
+          {emailStatus && (
+            <div className={`border rounded-xl px-3 py-2.5 text-sm flex items-start gap-2 ${statusStyles[emailStatusType]}`}>
+              {emailStatusType === 'success' ? <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />
+                : emailStatusType === 'error' ? <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                : <Loader2 className="w-4 h-4 mt-0.5 shrink-0 animate-spin" />}
+              <span>{emailStatus}</span>
+            </div>
+          )}
+
+          <div>
+            <label className="text-sm text-text-muted block mb-1">Email Address</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              disabled={emailVerified || emailVerifying}
+              placeholder="you@example.com"
+              className="w-full bg-surface-3 border border-surface-3 rounded-xl px-4 py-2.5 text-sm text-text focus:outline-none focus:border-brand disabled:opacity-70"
+            />
+          </div>
+
+          <div>
+            <label className="text-sm text-text-muted block mb-1">Verification Code</label>
+            <input
+              type="text"
+              value={verificationCode}
+              onChange={(e) => setVerificationCode(e.target.value.trim())}
+              disabled={emailVerified || emailVerifying}
+              placeholder="Enter the code from your email"
+              className="w-full bg-surface-3 border border-surface-3 rounded-xl px-4 py-2.5 text-sm text-text font-mono focus:outline-none focus:border-brand disabled:opacity-70"
+            />
+          </div>
+
+          {!emailVerified && (
+            <button
+              type="button"
+              onClick={() => void handleVerifyEmail()}
+              disabled={emailVerifying}
+              className="w-full py-3 rounded-xl bg-brand text-white font-bold text-sm hover:bg-brand-dark transition-colors disabled:opacity-40 flex items-center justify-center gap-2"
+            >
+              {emailVerifying ? <><Loader2 className="w-4 h-4 animate-spin" /> Verifying...</> : <><Mail className="w-4 h-4" /> Verify Email</>}
+            </button>
+          )}
+
+          {!emailVerified && (
+            <button
+              type="button"
+              onClick={() => void handleResendCode()}
+              disabled={emailSending || emailVerifying}
+              className="w-full py-2.5 rounded-xl bg-surface-3 text-text font-medium text-sm hover:bg-surface transition-colors disabled:opacity-50"
+            >
+              {emailSending ? 'Sending...' : 'Resend Code'}
+            </button>
+          )}
+
+          {emailVerified && (
+            <div className="flex items-center gap-2 text-green-500 text-sm">
+              <Check className="w-4 h-4" /> Email verified.
+            </div>
+          )}
         </div>
       )}
 
@@ -593,7 +757,7 @@ export default function Verification() {
       )}
 
       {/* Progress footer */}
-      <p className="text-xs text-text-muted text-center mt-6">{completedCount} of 3 steps complete</p>
+      <p className="text-xs text-text-muted text-center mt-6">{completedCount} of 4 steps complete</p>
     </div>
   );
 }

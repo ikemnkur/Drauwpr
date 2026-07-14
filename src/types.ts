@@ -7,11 +7,11 @@ export interface Drop {
   creatorAvatar: string;
   trailerUrl: string;
   thumbnailUrl: string;
-  fileType: 'game' | 'app' | 'document' | 'music' | 'video' | 'other';
+  fileType: 'game' | 'app' | 'document' | 'music' | 'video' | 'audio' | 'image' | 'picture' | 'link' | 'other';
   fileSize: string;             // human-readable, e.g. "12.4 MB"
   fileSizeBytes: number | null; // raw bytes from DB
   filePath: string | null;      // S3 key or local path
-  link: string | null;          // optional external link (e.g. YouTube, Google Drive)
+  link?: string | null;
   originalFileName: string | null;
   mimeType: string | null;
   scheduledDropTime: number;    // unix ms
@@ -36,16 +36,17 @@ export interface Drop {
   reviewCount: number;
   likeCount: number;
   dislikeCount: number;
-  status: 'draft' | 'pending' | 'active' | 'dropped' | 'expired' | 'removed';
+  views?: number;
+  flagCount?: number;
+  status: 'draft' | 'pending' | 'active' | 'dropped' | 'expired' | 'removed' | 'hidden' | 'boosted';
   isPublic: boolean;
-  mature: number | boolean;
-  flagCount: number;
-  views: number;
+  mature?: boolean;
   tags: string[];
   lastContributionTime?: number; // unix ms
-  expiryBehaviour: 'refund' | 'keep';
-  expiryThreshold: number | null; // 0.0–1.0 fraction of goal, null = no threshold
+  expiryBehaviour?: 'refund' | 'keep';
+  expiryThreshold?: number | null; // 0.0–1.0 fraction of goal, null = no threshold
 }
+
 
 export interface Contributor {
   id: string;
@@ -76,12 +77,13 @@ export interface User {
   verification: string; // 'none' | 'false' | 'true'
   // added fields
   accountStatus: string; // 'active' | 'suspended' | 'banned'
-  accountType: string; // 'free' | 'standard' | 'premium' | 'admin'
+  accountPlan: string; // 'free' | 'standard' | 'premium' | 'admin'
 }
 
 export interface CreatorProfile {
   id: string;
   username: string;
+  accountType?: 'business' | 'creator' | 'personal' | 'private' | string;
   avatar: string;
   bio: string;
   rating: number;            // 0-100
