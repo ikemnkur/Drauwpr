@@ -3,10 +3,11 @@ import { X, ExternalLink, Music } from 'lucide-react';
 export interface SponsoredPromo {
   id: string;
   username: string | null;
-  submissionType: 'ad' | 'post_sponsorship';
+  submissionType: 'ad' | 'post_sponsorship' | 'drop_sponsorship';
   title: string;
   description: string | null;
-  targetPostId: string;
+  targetPostId?: string;
+  targetDropId?: string;
   target_url: string | null;
   ctaText: string | null;
   mediaUrl: string | null;
@@ -18,7 +19,7 @@ export interface SponsoredPromo {
 
 type MediaKind = 'image' | 'video' | 'audio';
 
-type PromotionModalVariant = 'ad' | 'drop_sponsorship';
+type PromotionModalVariant = 'ad' | 'drop_sponsorship' | 'post_sponsorship';
 
 interface PromotionModalProps {
   open: boolean;
@@ -57,6 +58,7 @@ export default function PromotionModal({
   const resolvedThumbnailUrl = resolveAssetUrl(ad.thumbnailPath || ad.thumbnailImg || null, ad.mediaUrl || ad.assetPath);
   const canClose = countdown === 0;
   const isAd = variant === 'ad';
+  const isSponsorship = !isAd;
   const label = isAd ? 'Ad' : 'Sponsored';
   const subtitle = isAd ? (ad.username || 'Advertiser') : (ad.username || 'Sponsor');
   const closeText = canClose ? 'Close' : `Close (${countdown}s)`;
@@ -96,11 +98,11 @@ export default function PromotionModal({
           <video
             src={resolvedMediaUrl}
             className="w-full h-full object-cover"
-            controls={variant === 'drop_sponsorship'}
-            autoPlay={variant === 'ad'}
-            muted={variant === 'ad'}
+            controls={isSponsorship}
+            autoPlay={isAd}
+            muted={isAd}
             playsInline
-            loop={variant === 'ad'}
+            loop={isAd}
             preload="metadata"
           />
         </div>
