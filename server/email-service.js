@@ -346,6 +346,37 @@ async function sendCustomerSupportEmail({
     });
 }
 
+async function sendCreditPurchaseEmail({
+    to,
+    username,
+    orderId,
+    packageLabel,
+    credits,
+    amountCharged,
+    paymentMethod,
+    date,
+    newBalance,
+    dashboardLink,
+    subject = "Credit Purchase Confirmed - Drauwper"
+}) {
+    return sendTemplatedEmail({
+        to,
+        subject,
+        templateFile: "credit-purchase.html",
+        variables: buildCommonVariables({
+            USERNAME: username || "there",
+            ORDER_ID: orderId || "-",
+            PACKAGE: packageLabel || "Credit Package",
+            CREDITS: Number(credits || 0).toLocaleString(),
+            AMOUNT_CHARGED: amountCharged || "$0.00",
+            PAYMENT_METHOD: paymentMethod || "Stripe",
+            DATE: date || new Date().toLocaleString(),
+            NEW_BALANCE: Number(newBalance || 0).toLocaleString(),
+            DASHBOARD_LINK: dashboardLink || "https://drauwper.com/dashboard"
+        })
+    });
+}
+
 module.exports = {
     renderTemplate,
     sendRawEmail,
@@ -355,5 +386,6 @@ module.exports = {
     sendPromoSalesEmail,
     sendMonthlyNewsletterEmail,
     sendAccountNoticeEmail,
-    sendCustomerSupportEmail
+    sendCustomerSupportEmail,
+    sendCreditPurchaseEmail
 };

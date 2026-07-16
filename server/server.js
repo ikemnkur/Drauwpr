@@ -8383,6 +8383,38 @@ server.post(PROXY + '/api/verify-stripe-payment', async (req, res) => {
   }
 });
 
+async function sendStripePurchaseAcknowledgementEmail({
+  to,
+  username,
+  orderId,
+  packageLabel,
+  credits,
+  dollars,
+  newBalance,
+  status,
+  paymentIntentId,
+}) {
+  if (!to) return;
+
+  const isCompleted = String(status || '').toLowerCase() === 'completed';
+  if (!isCompleted) return;
+
+  await emailService.sendCreditPurchaseEmail({
+    to,
+    username,
+    orderId: orderId || paymentIntentId || '-',
+    packageLabel: packageLabel || `${Number(credits || 0).toLocaleString()} credits`,
+    credits: Number(credits || 0),
+    amountCharged: `$${Number(dollars || 0).toFixed(2)}`,
+    paymentMethod: 'Stripe',
+    date: new Date().toLocaleString(),
+    newBalance: Number(newBalance || 0),
+    dashboardLink: process.env.FRONTEND_URL
+      ? `${String(process.env.FRONTEND_URL).replace(/\/$/, '')}/dashboard`
+      : 'https://drauwper.com/dashboard',
+  });
+}
+
 // async function fetchEth({
 async function stripeCreditPurchases(data) {
 
@@ -8534,6 +8566,22 @@ async function stripeCreditPurchases(data) {
           'purchase',
           username || 'anonymous'
         );
+
+        try {
+          await sendStripePurchaseAcknowledgementEmail({
+            to: email,
+            username,
+            orderId: purchaseRecordId,
+            packageLabel: packageData?.label,
+            credits: Math.floor(credits),
+            dollars: Number(dollars || amount / 100),
+            newBalance: Number(userRow?.credits || 0),
+            status,
+            paymentIntentId: stripePaymentIntentId || transactionId || null,
+          });
+        } catch (mailErr) {
+          console.warn('[WARN] Stripe purchase acknowledgement email failed:', mailErr.message || mailErr);
+        }
       } else {
         await CreateNotification(
           'credit_purchase_pending',
@@ -8542,6 +8590,7 @@ async function stripeCreditPurchases(data) {
           'purchase',
           username || 'anonymous'
         );
+
       }
 
       return ({ success: true, purchases, purchaseId, pending: !shouldCredit, status });
