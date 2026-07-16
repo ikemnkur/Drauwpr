@@ -38,8 +38,10 @@ export default function EditDrop() {
   const [tagInput, setTagInput] = useState('');
   const [goalAmount, setGoalAmount] = useState('');
   const [basePrice, setBasePrice] = useState('');
+  const [isMature, setIsMature] = useState(false);
 
   const [durationDays, setDurationDays] = useState('7');
+  
 
   const [mainAssetMode, setMainAssetMode] = useState<MainAssetMode>('file');
   const [dropFile, setDropFile] = useState<File | null>(null);
@@ -88,6 +90,7 @@ export default function EditDrop() {
         setTags(Array.isArray(d.tags) ? d.tags : []);
         setGoalAmount(String(d.goalAmount));
         setBasePrice(String(d.basePrice));
+        setIsMature(Boolean(d.mature));
         setTrailerUrl(String(d.trailerUrl || '').trim());
 
         const initialLink = String(d.link || '').trim();
@@ -190,6 +193,7 @@ export default function EditDrop() {
         title: title.trim(),
         description: description.trim(),
         tags,
+        isMature
       };
 
       if (isStandardOrAbove) {
@@ -379,6 +383,20 @@ export default function EditDrop() {
               >
                 Add
               </button>
+            </div>
+
+            {/* Mature Content */}
+            <div className="flex items-center gap-2 mt-2">
+              <input
+                type="checkbox"
+                id="mature"
+                checked={isMature}
+                onChange={(e) => setIsMature(e.target.checked)}
+                className="h-4 w-4"
+              />
+              <label htmlFor="mature" className="text-sm text-text-muted">
+               Check if this drop contains mature content
+              </label>
             </div>
           </div>
         </section>

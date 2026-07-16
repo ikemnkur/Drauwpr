@@ -1025,7 +1025,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       const allowed = [
         'title', 'description', 'fileType', 'goalAmount', 'basePrice',
         'scheduledDropTime', 'expiresAt', 'trailerUrl', 'thumbnailUrl',
-        'sensitivity', 'decayConstant', 'status', 'isPublic',
+        'sensitivity', 'decayConstant', 'status', 'isPublic', 'tags',
       ];
       const sets = [];
       const vals = [];
@@ -1043,10 +1043,24 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
           }
         }
       }
-      // Handle tags separately if present
-      if (req.body.tags !== undefined && !sets.some(s => s.startsWith('tags'))) {
-        sets.push('tags = ?');
-        vals.push(JSON.stringify(req.body.tags));
+
+      // Handle mature-content flag (accept both payload keys: isMature and mature)
+      const matureInput = req.body.isMature !== undefined ? req.body.isMature : req.body.mature;
+      if (matureInput !== undefined) {
+        const matureBool = matureInput === true || matureInput === 1 || matureInput === '1' || String(matureInput).toLowerCase() === 'true';
+
+        const [matureCol] = await pool.query("SHOW COLUMNS FROM drops LIKE 'mature'");
+        const [isMatureCol] = await pool.query("SHOW COLUMNS FROM drops LIKE 'isMature'");
+
+        if (matureCol.length) {
+          sets.push('mature = ?');
+          vals.push(matureBool ? 1 : 0);
+        } else if (isMatureCol.length) {
+          sets.push('isMature = ?');
+          vals.push(matureBool ? 1 : 0);
+        } else {
+          return res.status(500).json({ error: 'Drop maturity column is not configured in the database' });
+        }
       }
 
       if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });

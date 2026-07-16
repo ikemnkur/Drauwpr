@@ -1488,12 +1488,12 @@ export default function Purchase() {
 
               {/* // Replace the upload section in your JSX with this enhanced version: */}
               <div style={styles.uploadSection}>
-                <label style={styles.uploadLabel}>
+                {/* <label style={styles.uploadLabel}>
                   Payment Screenshot (Optional):
-                </label>
+                </label> */}
 
                 {/* Upload Button */}
-                <div style={styles.uploadButtonContainer}>
+                {/* <div style={styles.uploadButtonContainer}>
                   <input
                     accept=".png,.jpg,.jpeg"
                     style={{ display: 'none' }}
@@ -1511,7 +1511,7 @@ export default function Purchase() {
                       {uploadedFile ? 'Change Screenshot' : 'Upload Screenshot'}
                     </button>
                   </label>
-                </div>
+                </div> */}
 
                 {/* Error Message */}
                 {fileError && (

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bitcoin, Copy, CheckCircle2, ArrowLeft, Loader2, AlertCircle, QrCode, Clock, ExternalLink } from 'lucide-react';
+import { Bitcoin, Copy, CheckCircle2, ArrowLeft, Upload, Loader2, AlertCircle, QrCode, Clock, ExternalLink } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../lib/api';
@@ -8,10 +8,10 @@ import { api } from '../lib/api';
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const CURRENCIES = [
-  { symbol: 'BTC', name: 'Bitcoin', coinId: 'bitcoin', address: 'bc1q4j9e7equq4xvlyu7tan4gdmkvze7wc0egvykr6' },
-  { symbol: 'ETH', name: 'Ethereum', coinId: 'ethereum', address: '0x9a61f30347258A3D03228F363b07692F3CBb7f27' },
-  { symbol: 'LTC', name: 'Litecoin', coinId: 'litecoin', address: 'ltc1qgg5aggedmvjx0grd2k5shg6jvkdzt9dtcqa4dh' },
-  { symbol: 'SOL', name: 'Solana', coinId: 'solana', address: 'qaSpvAumg2L3LLZA8qznFtbrRKYMP1neTGqpNgtCPaU' },
+  { symbol: 'BTC', name: 'Bitcoin',   coinId: 'bitcoin',  address: 'bc1q4j9e7equq4xvlyu7tan4gdmkvze7wc0egvykr6' },
+  { symbol: 'ETH', name: 'Ethereum',  coinId: 'ethereum', address: '0x9a61f30347258A3D03228F363b07692F3CBb7f27' },
+  { symbol: 'LTC', name: 'Litecoin',  coinId: 'litecoin', address: 'ltc1qgg5aggedmvjx0grd2k5shg6jvkdzt9dtcqa4dh' },
+  { symbol: 'SOL', name: 'Solana',    coinId: 'solana',   address: 'qaSpvAumg2L3LLZA8qznFtbrRKYMP1neTGqpNgtCPaU' },
 ];
 
 const MIN_USD = 2.5;
@@ -142,38 +142,14 @@ export default function BuyCrypto() {
     if (!user || !txHash.trim()) return;
     setSubmitting(true);
     setSubmitResult(null);
-
-
-
-    // phase 1: rapid on-chain validation
-    const validationRes = await fetch(
-      `/api/validate-transaction?chain=${encodeURIComponent(currency.symbol)}&tx=${encodeURIComponent(txHash.trim())}`
-    );
-    const validationBody = await validationRes.json().catch(() => ({}));
-    if (!validationRes.ok || !validationBody?.legit) {
-      throw new Error(validationBody?.error || 'Transaction could not be verified on-chain.');
-    }
-
-    // Example output data = {"ok":true,"legit":true,"checks":[{"chain":"LTC","status":"matched"}],"transaction":{"amount":"0.055642","timeCreated":"2026-07-14 19:31:56","amountInUSD":2.51,"amountInUSDatTime":2.53,"confirmations":569,"direction":"inbound","chain":"LTC","provider":"ESPLORA","txHash":"7f81bcc6b47a63055e09c9313b8b1071475fa0147493e306ff00e9b2a895f069","sendingAddress":"ltc1qyu50pytvc08yd5f2ycy4fd58nlmuhnwt4wwmyn","receivingAddress":"ltc1qgg5aggedmvjx0grd2k5shg6jvkdzt9dtcqa4dh"}}
-
-    let transaction = validationBody.transaction;
-
     try {
       const body: Record<string, unknown> = {
         username: user.username,
-        email: user.email,
         currency: currency.symbol,
-        amount:  Math.round(transaction.amountInUSDatTime * 100),
-        // amount: Math.round(amount * 100), // cents
+        amount: Math.round(amount * 100), // cents
         credits,
-
         transactionId: txHash.trim(),
         walletAddress: walletAddress.trim(),
-        rate: cryptoRate,
-        cryptoAmount: amount, // decimal value of coin transacted
-        time: transaction.timeCreated, // time of transaction per the blockchain
-        confirmations: transaction.confirmations, // on blockchain
-        sendingAddress: transaction.sendingAddress
       };
       if (screenshot) {
         const reader = new FileReader();
@@ -184,14 +160,9 @@ export default function BuyCrypto() {
         });
         body.screenshot = base64;
       }
-
-
-      // phase 2: check DB
       const result = await api.post<{ success: boolean; verified?: boolean; pending?: boolean; credits?: number; message?: string }>(
         `/api/purchases/${user.username}`, body
       );
-
-
       if (result.verified) {
         setSubmitResult({
           success: true,
@@ -272,9 +243,9 @@ export default function BuyCrypto() {
             <p className="text-2xl font-bold font-mono text-text">{credits.toLocaleString()}</p>
             <p className="text-xs text-text-muted">credits</p>
           </div>
-          {bonus - 25 > 0 && (
+          {bonus-25 > 0 && (
             <div className="bg-orange-400/20 text-orange-300 text-sm font-bold px-3 py-1 rounded-full">
-              {(bonus - 25 > 0 ? `+${bonus - 25}% bonus` : '')}
+              {(bonus-25>0 ? `+${bonus-25}% bonus` : '')}
             </div>
           )}
         </div>
@@ -304,8 +275,9 @@ export default function BuyCrypto() {
             <button
               key={c.symbol}
               onClick={() => setCurrencyIdx(i)}
-              className={`py-2.5 rounded-xl text-sm font-bold transition-colors ${currencyIdx === i ? 'bg-brand text-white' : 'bg-surface-3 text-text-muted hover:text-text'
-                }`}
+              className={`py-2.5 rounded-xl text-sm font-bold transition-colors ${
+                currencyIdx === i ? 'bg-brand text-white' : 'bg-surface-3 text-text-muted hover:text-text'
+              }`}
             >
               {c.symbol}
             </button>
@@ -348,8 +320,9 @@ export default function BuyCrypto() {
           <p className="text-sm text-text-muted">Send to this {currency.symbol} address.</p>
           <button
             onClick={() => setShowQr((v) => !v)}
-            className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg transition-colors ${showQr ? 'bg-brand/20 text-brand' : 'bg-surface-3 text-text-muted hover:text-text'
-              }`}
+            className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg transition-colors ${
+              showQr ? 'bg-brand/20 text-brand' : 'bg-surface-3 text-text-muted hover:text-text'
+            }`}
           >
             <QrCode className="w-3.5 h-3.5" />
             QR
@@ -406,7 +379,7 @@ export default function BuyCrypto() {
             className="w-full bg-surface-3 border border-surface-3 rounded-xl px-4 py-2.5 text-sm font-mono text-text focus:outline-none focus:border-brand placeholder:text-text-muted/50"
           />
         </div>
-        {/* 
+{/* 
         <div>
           <label className="text-xs text-text-muted mb-1 block">Screenshot (optional)</label>
           <label className="flex items-center gap-2 cursor-pointer bg-surface-3 rounded-xl px-4 py-3 hover:border-brand border border-transparent transition-colors">
@@ -427,10 +400,11 @@ export default function BuyCrypto() {
       {/* Submit result */}
       {submitResult && (
         <div
-          className={`mb-4 flex items-start gap-3 text-sm rounded-xl p-4 ${submitResult.success
+          className={`mb-4 flex items-start gap-3 text-sm rounded-xl p-4 ${
+            submitResult.success
               ? 'bg-green-400/10 border border-green-400/20'
               : 'bg-red-400/10 border border-red-400/20'
-            }`}
+          }`}
         >
           {submitResult.success ? (
             <CheckCircle2 className="w-5 h-5 mt-0.5 shrink-0 text-green-400" />
@@ -496,8 +470,8 @@ export default function BuyCrypto() {
 
               const statusColor =
                 p.status === 'completed' ? 'text-green-400 bg-green-400/10'
-                  : p.status === 'processing' ? 'text-yellow-400 bg-yellow-400/10'
-                    : 'text-text-muted bg-surface-3';
+                : p.status === 'processing' ? 'text-yellow-400 bg-yellow-400/10'
+                : 'text-text-muted bg-surface-3';
 
               const chainColor: Record<string, string> = {
                 BTC: 'text-orange-400',

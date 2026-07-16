@@ -29,6 +29,7 @@ const emailService = require('./email-service');
 const authenticateToken = require('./middleware/auth');
 const createAdminRouter = require('./server-admin');
 const drauwperRoutes = require('./drauwper-routes');
+const { mountCryptoTxValidatorRoutes } = require('./CryptoTXValidator');
 // const pythonService = require('./python-service.cjs');
 
 const server = express();
@@ -135,6 +136,7 @@ const corsOptions = {
       'http://localhost:3001',
       'http://localhost:3002',
       'http://localhost:4000',
+      'http://localhost:5000',
       'http://localhost:5001',
       // 'http://localhost:5000',
       // 'https://key-ching.com',
@@ -260,6 +262,9 @@ console.error("This is a sample error message!");
 
 server.use(express.json({ limit: '250mb' }));
 server.use(express.urlencoded({ extended: true, limit: '250mb' }));
+
+// Crypto TX validator routes (mounted from reusable module)
+mountCryptoTxValidatorRoutes(server, { basePath: PROXY });
 
 // Admin Dashboard Page
 
@@ -4190,11 +4195,17 @@ server.post(PROXY + '/api/purchases/:username', authenticateToken, async (req, r
   try {
     const {
       username,
+      email,
       currency,       // crypto symbol: 'BTC', 'ETH', 'LTC', 'SOL'
       amount,         // cents (Math.round(dollars * 100) from frontend)
       credits,        // credits to award, computed by creditsForDollars() on frontend
       transactionId,  // tx hash submitted by user
       walletAddress,
+      cryptoAmount,
+      rate,
+      time,
+      confirmations,
+      sendingAddress,
       ip,
       userAgent,
       session_id,
@@ -4228,22 +4239,42 @@ server.post(PROXY + '/api/purchases/:username', authenticateToken, async (req, r
     const status = verified ? 'completed' : 'processing';
     const paymentMethod = sym.toLowerCase();
     const purchaseId = Math.random().toString(36).substring(2, 12);
+    const amountPaid = Number((Number(amount || 0) / 100).toFixed(2));
+    const exchangeRate = Number.isFinite(Number(rate)) ? Number(rate) : null;
+    const parsedCryptoAmount = Number.isFinite(Number(cryptoAmount)) ? Number(cryptoAmount) : null;
+    const parsedConfirmations = Number.isFinite(Number(confirmations)) ? Number(confirmations) : null;
+    const chainExplorerBase = {
+      BTC: 'https://mempool.space/tx/',
+      ETH: 'https://etherscan.io/tx/',
+      LTC: 'https://blockchair.com/litecoin/transaction/',
+      SOL: 'https://solscan.io/tx/',
+    };
+    const blockExplorerLink = chainExplorerBase[sym] ? `${chainExplorerBase[sym]}${transactionId}` : null;
 
     // ── Record purchase (always, regardless of verification result) ──────────
     await knex('CreditPurchases').insert({
       id: purchaseId,
       userId,
       username,
+      email: email || null,
       amount: amount, // in cents
       credits: creditsToAward,
-      amountPaid: Math.floor(amount / 100) > dollars ? Math.ceil(amount / 100) : dollars, // Handle potential rounding issues (in dollars)
+      amountPaid,
       currency: 'USD',
       paymentMethod,
       status,
-      walletAddress: walletAddress || null,
+      walletAddress: walletAddress || sendingAddress || null,
       txHash: transactionId,
-      ip: ip || null,
-      userAgent: userAgent || null,
+      transactionHash: transactionId,
+      cryptoAmount: parsedCryptoAmount,
+      exchangeRate,
+      rate: exchangeRate,
+      confirmations: parsedConfirmations,
+      time: time || null,
+      date: String(Date.now()),
+      blockExplorerLink,
+      ip: ip || req.ip || null,
+      userAgent: userAgent || req.headers['user-agent'] || null,
       session_id: session_id || null,
     });
 
