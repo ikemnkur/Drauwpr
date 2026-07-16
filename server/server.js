@@ -3529,7 +3529,7 @@ server.post(PROXY + '/api/site-dev-feedback', async (req, res) => {
 //     CONSTRAINT `notifications_ibfk_1` FOREIGN KEY (`username`) REFERENCES `userData` (`username`) ON DELETE CASCADE
 //   ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci
 
-async function CreateNotification(type, title, message, category, username, priority = 'info') {
+async function CreateNotification(userId, type, title, message, category, username, priority = 'info') {
   const id = Math.random().toString(36).substring(2, 12).toUpperCase();
   const createdAt = new Date().toISOString().slice(0, 19).replace('T', ' ');
 
@@ -8450,7 +8450,7 @@ async function stripeCreditPurchases(data) {
     console.log('💰 Logging Stripe purchase for user:', username);
 
 
-    // console.log("data: ", data)
+    console.log("Stripe TX Data: ", data)
 
 
     // check for duplicate transaction / payment intent
@@ -8560,6 +8560,7 @@ async function stripeCreditPurchases(data) {
         });
 
         await CreateNotification(
+          userId,
           'credits_purchased',
           'Credits Purchased',
           `You have purchased ${Math.floor(credits).toLocaleString()} credits for $${dollars}.`,
@@ -8584,6 +8585,7 @@ async function stripeCreditPurchases(data) {
         }
       } else {
         await CreateNotification(
+          userId,
           'credit_purchase_pending',
           'Payment Pending Manual Review',
           `Your Stripe purchase is pending manual review${manualReviewReason ? ` (${manualReviewReason})` : ''}. Credits will be applied once approved.`,
