@@ -186,7 +186,7 @@ export default function Register() {
       <div className="text-center mb-8">
         <UserPlus className="w-10 h-10 text-brand mx-auto mb-3" />
         <h1 className="text-2xl font-bold text-text">Create Account</h1>
-        <p className="text-sm text-text-muted">Join Prolifer8 and start dropping</p>
+        <p className="text-sm text-text-muted">Join Drauwper and start dropping</p>
       </div>
 
       <form onSubmit={handleSubmit} className="bg-surface-2 rounded-2xl p-6 space-y-4">

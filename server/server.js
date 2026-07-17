@@ -1112,7 +1112,7 @@ server.post(PROXY + '/api/account/2fa/setup', authenticateToken, async (req, res
     if (!userId || !email) return res.status(401).json({ message: 'Unauthorized' });
 
     const secret = authenticator.generateSecret();
-    const otpauthUrl = authenticator.keyuri(email, 'Prolifer8', secret);
+    const otpauthUrl = authenticator.keyuri(email, 'Drauwper', secret);
     const qrUrl = await QRCode.toDataURL(otpauthUrl);
 
     pendingAccount2FASetups.set(userId, {
@@ -5007,7 +5007,7 @@ const r2 = new S3Client({
   // avoids the CRC32 checksum header issue you hit earlier with browser PUTs
   requestChecksumCalculation: 'WHEN_REQUIRED',
 });
-const R2_BUCKET = process.env.R2_BUCKET;          // e.g. prolifer8-app
+const R2_BUCKET = process.env.R2_BUCKET;          // e.g. drauwper-app
 const R2_PUBLIC_BASE = process.env.R2_PUBLIC_BASE; // your public/CDN base for thumbnails
 
 
@@ -5040,7 +5040,7 @@ const storage = R2_ENDPOINT && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY
   })
   : null;
 
-const BUCKET_NAME = process.env.R2_BUCKET || process.env.R2_BUCKET_NAME || endpointBucketFromPath || process.env.GCS_BUCKET || 'prolifer8-app';
+const BUCKET_NAME = process.env.R2_BUCKET || process.env.R2_BUCKET_NAME || endpointBucketFromPath || process.env.GCS_BUCKET || 'drauwper-app';
 const DEST_PREFIX = process.env.STORAGE_PREFIX || process.env.GCS_PREFIX || 'storage_folder'; // "folder" inside bucket
 
 function normalizeUrlCandidate(value) {

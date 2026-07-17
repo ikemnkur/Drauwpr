@@ -1,4 +1,4 @@
--- Prolifer8 — Post flags
+-- Drauwper — Post flags
 -- User-submitted moderation flags for posts.
 -- Thresholds enforced in frontend feed rendering:
 --   3+ flags  => hidden from Explore

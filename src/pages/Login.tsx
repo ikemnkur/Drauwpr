@@ -196,7 +196,7 @@ export default function Login() {
         <div className="text-center mb-8">
           <LogIn className="w-10 h-10 text-brand mx-auto mb-3" />
           <h1 className="text-2xl font-bold text-text">Welcome Back</h1>
-          <p className="text-sm text-text-muted">Sign in to your Prolifer8 account</p>
+          <p className="text-sm text-text-muted">Sign in to your Drauwper account</p>
         </div>
         <form onSubmit={handleCredentials} className="bg-surface-2 rounded-2xl p-6 space-y-4">
           {error && (

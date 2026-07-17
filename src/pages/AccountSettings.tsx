@@ -44,7 +44,7 @@ const SECTIONS: { id: SectionId; label: string; icon: typeof User }[] = [
   { id: 'danger', label: 'Delete Account', icon: Trash2 },
 ];
 
-const THEME_STORAGE_KEY = 'prolifer8-theme';
+const THEME_STORAGE_KEY = 'drauwper-theme';
 
 const ACCOUNT_TYPES: { value: AccountType; label: string; desc: string }[] = [
   { value: 'personal', label: 'Personal', desc: 'Standard individual account' },
@@ -256,7 +256,7 @@ function ProfileSection({ settings, onToast }: { settings: SettingsResponse | nu
 
   return (
     <form onSubmit={handleSave}>
-      <Card title="Account Type" desc="Choose how your account is presented across Prolifer8.">
+      <Card title="Account Type" desc="Choose how your account is presented across Drauwper.">
         <div className="grid sm:grid-cols-2 gap-3">
           {ACCOUNT_TYPES.map((t) => (
             <button
@@ -595,7 +595,7 @@ function NotificationsSection({ settings, onToast }: { settings: SettingsRespons
           <Toggle checked={prefs.activity} onChange={set('activity')} label="Account activity" desc="Replies, mentions, and updates on your drops." />
           <Toggle checked={prefs.security} onChange={set('security')} label="Security alerts" desc="Login attempts and password changes. Strongly recommended." />
           <Toggle checked={prefs.productUpdates} onChange={set('productUpdates')} label="Product updates" desc="New features and improvements." />
-          <Toggle checked={prefs.marketing} onChange={set('marketing')} label="Marketing & promotions" desc="Offers, tips, and news from Prolifer8." />
+          <Toggle checked={prefs.marketing} onChange={set('marketing')} label="Marketing & promotions" desc="Offers, tips, and news from Drauwper." />
         </div>
         <SaveButton loading={saving} />
       </Card>

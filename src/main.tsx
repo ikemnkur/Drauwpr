@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import './index.css';
 import App from './App';
 
-// const THEME_STORAGE_KEY = 'prolifer8-theme';
+// const THEME_STORAGE_KEY = 'drauwper-theme';
 // const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
 
 // if (storedTheme === 'dark' || storedTheme === 'light') {

@@ -34,8 +34,8 @@ type FrontendNotificationStored = NotificationItem & {
   eventKey: string;
 };
 
-const SNAPSHOT_KEY_PREFIX = 'prolifer8_post_metrics_snapshot_v1';
-const FRONTEND_NOTIF_KEY_PREFIX = 'prolifer8_frontend_notifications_v1';
+const SNAPSHOT_KEY_PREFIX = 'drauwper_post_metrics_snapshot_v1';
+const FRONTEND_NOTIF_KEY_PREFIX = 'drauwper_frontend_notifications_v1';
 const MAX_FRONTEND_NOTIFICATIONS = 200;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 

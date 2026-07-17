@@ -620,7 +620,7 @@ export default function Verification() {
               {paymentVerified && <CheckCircle className="w-4 h-4 text-green-500" />}
             </h3>
             <p className="text-xs text-text-muted">
-              Send <strong>two</strong> small transactions (each under $0.20) to the Prolifer8 address below. The exact amounts
+              Send <strong>two</strong> small transactions (each under $0.20) to the Drauwper address below. The exact amounts
               must match to verify your identity.
             </p>
           </div>

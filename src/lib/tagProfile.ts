@@ -1,6 +1,6 @@
 export type TagProfile = Record<string, number>;
 
-const STORAGE_KEY = 'prolifer8_tag_profile_v1';
+const STORAGE_KEY = 'drauwper_tag_profile_v1';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function normalizeTag(tag: string): string {

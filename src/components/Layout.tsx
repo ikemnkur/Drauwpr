@@ -114,7 +114,7 @@ export default function Layout() {
   const unreadCount = (notifs ?? []).filter((n) => !n.isRead).length;
 
   const shouldBlockAdPopup = (routePath: string, freq: number): boolean => {
-    const key = `prolifer8_ad_gate:${routePath}`;
+    const key = `drauwper_ad_gate:${routePath}`;
     const now = Date.now();
     const ttlMs = 20_000;
 
@@ -558,7 +558,7 @@ export default function Layout() {
 
       {/* Footer */}
       <footer className="border-t border-surface-3 py-4 text-center text-xs text-text-muted">
-        &copy; 2026 Prolifer8. BLOW the LUCK up.
+        &copy; 2026 Drauwper. BLOW the LUCK up.
       </footer>
     </div>
   );
