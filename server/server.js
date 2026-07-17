@@ -3542,6 +3542,7 @@ async function CreateNotification(userId, type, title, message, category, userna
   const safePriority = allowedPriorities.has(rawPriority) ? rawPriority : 'info';
 
   await knex('notifications').insert({
+    id,
     userId,
     type,
     title,

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CreditCard, CheckCircle, XCircle, Loader2, ArrowLeft } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import axios from 'axios'; 
 import { api } from '../lib/api';
 import { DEFAULT_ECONOMY_SETTINGS, fetchEconomySettings } from '../lib/economySettings';
 
@@ -93,14 +94,23 @@ export default function BuyStripe() {
   }) => {
     if (!user) return;
 
-    const response = await api.post<{ status?: string; pending?: boolean; message?: string }>('/api/verify-stripe-payment', {
+    // const response = await api.post<{ status?: string; pending?: boolean; message?: string }>('/api/verify-stripe-payment', {
+    //   checkoutSessionId: payload.checkoutSessionId,
+    //   timeRange: { start: payload.start, end: payload.end },
+    //   user: { id: user.id, username: user.username, email: user.email },
+    //   packageData: payload.packageData,
+    // });
+
+    const configured = String(import.meta.env.VITE_API_URL || 'http://localhost:5000').trim();
+
+    const response = await axios.post(`${configured}/api/verify-stripe-payment`, {
       checkoutSessionId: payload.checkoutSessionId,
       timeRange: { start: payload.start, end: payload.end },
       user: { id: user.id, username: user.username, email: user.email },
       packageData: payload.packageData,
     });
 
-    if (response.status === 'succeeded') {
+    if (response.data.status === 'succeeded') {
       const grantedCredits = payload.packageData?.credits;
       setVerifyResult({
         success: true,
@@ -116,11 +126,11 @@ export default function BuyStripe() {
       return;
     }
 
-    if (response.pending || response.status === 'pending') {
+    if (response.data.pending || response.data.status === 'pending') {
       setVerifyResult({
         success: false,
         message:
-          response.message ||
+          response.data.message ||
           'This payment could not be auto-verified and has been submitted for manual review. Credits will be applied once approved.',
       });
       setIsWaitingForReturn(false);

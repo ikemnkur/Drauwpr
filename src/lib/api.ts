@@ -1,7 +1,29 @@
-// In dev, Vite proxies /api/* to localhost:4000 — no CORS needed.
-// In production, set VITE_API_URL in the project-root .env (e.g. VITE_API_URL=https://api.drauwpr.com).
+// In dev, Vite proxies /api/* to localhost:5000 — no CORS needed.
+// In production, set VITE_API_URL in the project-root .env or hosting environment.
 // NOTE: Vite only exposes env vars with the VITE_ prefix; server/.env is NOT read by Vite.
-const API_BASE = import.meta.env.VITE_API_URL || '';
+function resolveApiBase(): string {
+  const configured = String(import.meta.env.VITE_API_URL || '').trim();
+
+  if (typeof window === 'undefined') {
+    return configured;
+  }
+
+  const host = window.location.hostname;
+  const isLocalHost = host === 'localhost' || host === '127.0.0.1';
+  const configuredLooksLocal = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(configured);
+
+  if (configured && !(configuredLooksLocal && !isLocalHost)) {
+    return configured;
+  }
+
+  if (!isLocalHost) {
+    return 'https://server.drauwper.com';
+  }
+
+  return 'http://localhost:5000';
+}
+
+const API_BASE = resolveApiBase();
 // const API_BASE = 'http://localhost:4000';
 
 class ApiClient {
