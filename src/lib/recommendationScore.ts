@@ -1,5 +1,29 @@
 import type { Drop } from '../types';
-import { recommendationConfig as cfg } from '../config/recommendation';
+
+const cfg = {
+  creatorActivityMultiplier: 1.8,
+  qualityThreshold: 75,
+  qualityBaseBonus: 10,
+  qualityAboveThresholdMultiplier: 0.6,
+  qualityBelowThresholdMultiplier: 0.2,
+  effortThreshold: 50,
+  effortBaseBonus: 5,
+  effortAboveThresholdMultiplier: 0.4,
+  effortBelowThresholdMultiplier: 0.15,
+  participationMultiplier: 2.2,
+  tagAffinityMultiplier: 1.5,
+  targetViews: 250,
+  targetViewBoostMultiplier: 0.03,
+  deprioritizeAfterViews: 2000,
+  overexposedPenaltyMultiplier: 0.01,
+  deprioritizeAfterDays: 14,
+  hardAgeCapDays: 60,
+  stalePenaltyPerDay: 0.8,
+  hardAgePenalty: 25,
+  dislikeRatePenaltyMultiplier: 20,
+  dislikeCountPenaltyMultiplier: 0.15,
+  boostBonus: 20,
+} as const;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -13,9 +37,9 @@ export function getPrimaryRecommendationScore(post: Drop, tagAffinity: number, n
   const likes = Math.max(0, Number(post.likeCount || 0));
   const dislikes = Math.max(0, Number(post.dislikeCount || 0));
   const comments = Math.max(0, Number((post as Drop & { commentCount?: number }).commentCount ?? post.reviewCount ?? 0));
-  const creatorActivity = Math.max(0, Number(post.creatorActivityScore || 0));
+  const creatorActivity = Math.max(0, Number((post as Drop & { creatorActivityScore?: number }).creatorActivityScore || 0));
   const quality = clamp(Number(post.avgRating ?? 0), 0, 100);
-  const effort = clamp(Number(post.avgEffortRating ?? 50), 0, 100);
+  const effort = clamp(Number((post as Drop & { avgEffortRating?: number }).avgEffortRating ?? 50), 0, 100);
   const dislikeRate = dislikes / Math.max(views, 1);
 
   const creatorActivityScore = Math.log1p(creatorActivity) * cfg.creatorActivityMultiplier;
