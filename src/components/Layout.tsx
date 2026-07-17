@@ -8,6 +8,7 @@ import {
   Compass,
   ArrowBigDownDash,
   Bell,
+  Flame,
   X,
   // Music,
   ChevronDown,
@@ -403,13 +404,9 @@ export default function Layout() {
         <header className="bg-surface border-b border-surface-3 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto flex items-center justify-between px-4 h-14">
           <Link to="/explore" className="flex items-center gap-2 text-brand font-bold text-xl tracking-tight no-underline">
-          Prolifer
-          <div style={{ padding: '0 5px', backgroundColor: '#d377f7', borderRadius: '0.5rem' }} className="flex items-center gap-4">
- 
-            <span className="text-white">8</span>
-        
-          </div>
-           </Link>
+            <Flame className="w-6 h-6 flame-flicker" />
+            Drauwper
+          </Link>
 
           <nav className="hidden md:flex items-center gap-1">
             {NAV.map(({ to, label, icon: Icon }) => (
