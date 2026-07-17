@@ -168,7 +168,7 @@ export default function Account() {
         >
           <div className="flex items-center gap-2">
             <CreditCard className="w-5 h-5 text-brand" />
-            <span className="text-sm text-text-muted">Credit Balance</span>
+            <span className="text-sm text-text-muted">Credit Balance (Get More)</span>
           </div>
           <span className="text-xl font-bold font-mono text-brand">{user.creditBalance.toLocaleString()}</span>
         </div>

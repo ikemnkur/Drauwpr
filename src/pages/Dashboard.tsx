@@ -118,10 +118,11 @@ export default function Dashboard() {
   const activeCount = myDrops.filter((d) => d.status === 'active').length;
   const expiredCount = myDrops.filter((d) => d.status === 'expired').length;
   const droppedCount = myDrops.filter((d) => d.status === 'dropped').length;
-  const totalLikes = myDrops.reduce((sum, drop) => sum + (drop.likeCount || 0), 0);
-  const totalDislikes = myDrops.reduce((sum, drop) => sum + (drop.dislikeCount || 0), 0);
-  const totalComments = myDrops.reduce((sum, drop) => sum + (drop.reviewCount || 0), 0);
-  const ratedDrops = myDrops.filter((drop) => drop.avgRating != null);
+  const releasedDrops = myDrops.filter((drop) => drop.status === 'dropped' || drop.status === 'expired');
+  const totalLikes = releasedDrops.reduce((sum, drop) => sum + (drop.likeCount || 0), 0);
+  const totalDislikes = releasedDrops.reduce((sum, drop) => sum + (drop.dislikeCount || 0), 0);
+  const totalComments = releasedDrops.reduce((sum, drop) => sum + (drop.reviewCount || 0), 0);
+  const ratedDrops = releasedDrops.filter((drop) => drop.avgRating != null);
   const avgQualityRating = ratedDrops.length > 0
     ? ratedDrops.reduce((sum, drop) => sum + Number(drop.avgRating || 0), 0) / ratedDrops.length
     : null;
@@ -150,7 +151,7 @@ export default function Dashboard() {
 
       <div className="flex items-center justify-start gap-2 rounded-xl border border-surface-3 bg-surface-2/70 p-1.5 overflow-x-auto">
         {([
-          { id: 'posts', label: 'Posts' },
+              { id: 'posts', label: 'Drops' },
           { id: 'credits', label: 'Credits' },
           { id: 'engagement', label: 'Engagement' },
         ] as const).map((item) => (
@@ -169,8 +170,8 @@ export default function Dashboard() {
         <div className="rounded-2xl border border-surface-3 bg-surface-2/70 p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-base font-semibold text-text">Posts</h2>
-              <p className="text-xs text-text-muted">Compact post activity summary</p>
+              <h2 className="text-base font-semibold text-text">Drops</h2>
+              <p className="text-xs text-text-muted">Compact drop activity summary</p>
             </div>
             <div className="text-right text-xs text-text-muted">
               <p className="font-semibold text-text">{stats.totalMyDrops} total</p>
@@ -255,6 +256,7 @@ export default function Dashboard() {
               <MetricRow label="Likes" current={totalLikes.toLocaleString()} />
               <MetricRow label="Dislikes" current={totalDislikes.toLocaleString()} />
               <MetricRow label="Comments" current={totalComments.toLocaleString()} />
+              <MetricRow label="Favorites" current={stats.totalFavorites.toLocaleString()} />
               <MetricRow label="Avg Quality Score" current={avgQualityRating == null ? '--' : `${avgQualityRating.toFixed(1)}%`} />
             </tbody>
           </table>
