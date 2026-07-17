@@ -7891,6 +7891,42 @@ async function upsertStripeTransactionRecord(record) {
 }
 
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const stripeLive = process.env.STRIPE_SECRET_KEY_LIVE
+  ? require('stripe')(process.env.STRIPE_SECRET_KEY_LIVE)
+  : null;
+const stripeTest = process.env.STRIPE_SECRET_KEY_TEST
+  ? require('stripe')(process.env.STRIPE_SECRET_KEY_TEST)
+  : null;
+
+function getStripeClientsForSessionId(sessionId) {
+  const id = String(sessionId || '').trim();
+  const clients = [];
+
+  const addClient = (client, label) => {
+    if (!client) return;
+    if (clients.some((entry) => entry.client === client)) return;
+    clients.push({ client, label });
+  };
+
+  if (/^cs_live_/i.test(id)) {
+    addClient(stripeLive, 'live');
+    addClient(stripe, 'default');
+    addClient(stripeTest, 'test');
+    return clients;
+  }
+
+  if (/^cs_test_/i.test(id)) {
+    addClient(stripeTest, 'test');
+    addClient(stripe, 'default');
+    addClient(stripeLive, 'live');
+    return clients;
+  }
+
+  addClient(stripe, 'default');
+  addClient(stripeLive, 'live');
+  addClient(stripeTest, 'test');
+  return clients;
+}
 
 /**
  * Retrieve the most recent PaymentIntents from Stripe with optional customer details
@@ -8129,11 +8165,45 @@ server.post(PROXY + '/api/verify-stripe-payment', async (req, res) => {
   try {
     // ── Step 1: Verify through Checkout Session (client_reference_id) ──
     let matchedCheckoutSession = null;
+    let matchedStripeClient = stripe;
 
     if (checkoutSessionId) {
-      const directSession = await stripe.checkout.sessions.retrieve(checkoutSessionId, {
-        expand: ['payment_intent', 'payment_intent.latest_charge']
-      });
+      let directSession = null;
+      let directStripeClient = stripe;
+      let lastSessionErr = null;
+
+      const stripeCandidates = getStripeClientsForSessionId(checkoutSessionId);
+
+      for (const candidate of stripeCandidates) {
+        try {
+          directSession = await candidate.client.checkout.sessions.retrieve(checkoutSessionId, {
+            expand: ['payment_intent', 'payment_intent.latest_charge']
+          });
+          directStripeClient = candidate.client;
+          console.log(`[INFO] verify-stripe-payment: checkout session resolved via ${candidate.label} Stripe client`);
+          break;
+        } catch (err) {
+          lastSessionErr = err;
+          const msg = String(err?.message || '');
+          if (!msg.includes('No such checkout.session')) {
+            throw err;
+          }
+        }
+      }
+
+      if (!directSession) {
+        const modeHint = /^cs_live_/i.test(checkoutSessionId)
+          ? ' Session ID is live-mode; configure STRIPE_SECRET_KEY_LIVE with your sk_live key or point STRIPE_SECRET_KEY to live mode.'
+          : (/^cs_test_/i.test(checkoutSessionId)
+            ? ' Session ID is test-mode; configure STRIPE_SECRET_KEY_TEST with your sk_test key or point STRIPE_SECRET_KEY to test mode.'
+            : '');
+
+        const sessionErrMsg = String(lastSessionErr?.message || 'Unable to retrieve checkout session');
+        return res.status(404).json({
+          error: `${sessionErrMsg}.${modeHint}`.trim(),
+          status: 'not_found'
+        });
+      }
 
       const directRef = String(directSession.client_reference_id || directSession.metadata?.userId || '').trim();
       if (directRef !== userReferenceId) {
@@ -8152,6 +8222,7 @@ server.post(PROXY + '/api/verify-stripe-payment', async (req, res) => {
       }
 
       matchedCheckoutSession = directSession;
+      matchedStripeClient = directStripeClient || stripe;
     }
 
     if (!matchedCheckoutSession) {
@@ -8194,7 +8265,8 @@ server.post(PROXY + '/api/verify-stripe-payment', async (req, res) => {
         ? matchedCheckoutSession.payment_intent
         : null;
       const paymentIntentId = paymentIntentObj?.id || (typeof matchedCheckoutSession.payment_intent === 'string' ? matchedCheckoutSession.payment_intent : null);
-      const resolvedPi = paymentIntentObj || (paymentIntentId ? await stripe.paymentIntents.retrieve(paymentIntentId, { expand: ['latest_charge'] }) : null);
+      const resolvedStripeClient = matchedStripeClient || stripe;
+      const resolvedPi = paymentIntentObj || (paymentIntentId ? await resolvedStripeClient.paymentIntents.retrieve(paymentIntentId, { expand: ['latest_charge'] }) : null);
 
       if (!resolvedPi) {
         return res.status(404).json({
