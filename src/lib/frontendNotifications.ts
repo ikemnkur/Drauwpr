@@ -13,6 +13,12 @@ export interface BackendNotification {
   createdAt: string;
 }
 
+type BackendNotificationLoose = Partial<BackendNotification> & {
+  action_url?: string | null;
+  is_read?: number | boolean;
+  created_at?: string;
+};
+
 export interface NotificationItem extends BackendNotification {
   source: 'backend' | 'frontend';
 }
@@ -128,11 +134,44 @@ function createFrontendNotification(args: {
     message,
     priority,
     category: 'post_updates',
-    actionUrl: `/post/${drop.dropId}`,
+    actionUrl: `/drop/${drop.dropId}`,
     isRead: 0,
     createdAt: nowIso,
     eventKey,
   };
+}
+
+export function normalizeBackendNotifications(items: BackendNotificationLoose[]): BackendNotification[] {
+  const list = Array.isArray(items) ? items : [];
+  return list
+    .map((raw) => {
+      const id = String(raw.id || '').trim();
+      if (!id) return null;
+
+      const title = String(raw.title || '').trim() || 'Notification';
+      const message = String(raw.message || '').trim();
+      const priorityRaw = String(raw.priority || 'info').toLowerCase();
+      const priority: NotificationPriority =
+        priorityRaw === 'success' || priorityRaw === 'warning' || priorityRaw === 'error'
+          ? (priorityRaw as NotificationPriority)
+          : 'info';
+
+      const createdAt = String(raw.createdAt || raw.created_at || new Date().toISOString());
+      const isReadRaw = raw.isRead ?? raw.is_read ?? 0;
+      const isRead = isReadRaw ? 1 : 0;
+
+      return {
+        id,
+        title,
+        message,
+        priority,
+        category: String(raw.category || 'system'),
+        actionUrl: (raw.actionUrl ?? raw.action_url ?? null) as string | null,
+        isRead,
+        createdAt,
+      };
+    })
+    .filter((n): n is BackendNotification => Boolean(n));
 }
 
 function diffPostMetrics(previous: DropSnapshot, current: DropSnapshot, nowIso: string): FrontendNotificationStored[] {

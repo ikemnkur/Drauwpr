@@ -24,6 +24,7 @@ import {
   markAllFrontendNotificationsRead,
   markFrontendNotificationRead,
   mergeNotifications,
+  normalizeBackendNotifications,
   runFrontendDropDetectionSync,
   type BackendNotification,
   type NotificationItem,
@@ -161,7 +162,7 @@ export default function Layout() {
     if (!isAuthenticated || !user?.id) return;
     api.get<{ notifications: BackendNotification[] }>('/api/notifications/me?limit=20')
       .then((res) => {
-        const backend = Array.isArray(res?.notifications) ? res.notifications : [];
+        const backend = normalizeBackendNotifications(Array.isArray(res?.notifications) ? res.notifications : []);
         const frontend = getFrontendNotifications(user.id);
         setNotifs(mergeNotifications(backend, frontend));
       })
@@ -179,6 +180,13 @@ export default function Layout() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated]);
 
+  useEffect(() => {
+    if (isAuthenticated && user?.id) {
+      fetchNotifs();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, user?.id]);
+
   // Poll notifications every 90s
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -195,7 +203,7 @@ export default function Layout() {
       try {
         const res = await api.get<DashboardNotifResponse>('/api/dashboard');
         if (cancelled) return;
-        const myDropsRaw = res.myDrops || res.myDrops || [];
+        const myDropsRaw = res.myDrops || res.myPosts || [];
         const myDrops = myDropsRaw.map(mapDrop);
         const { created } = runFrontendDropDetectionSync({ userId: user.id, drops: myDrops });
         if (created.length > 0) fetchNotifs();
@@ -448,65 +456,84 @@ export default function Layout() {
                   </button>
 
                   {showBell && (
-                    <div className="absolute right-0 top-10 w-80 bg-surface border border-surface-3 rounded-2xl shadow-2xl z-50 overflow-hidden">
-                      {/* Header */}
-                      <div className="flex items-center justify-between px-4 py-3 border-b border-surface-3">
-                        <span className="text-sm font-semibold text-text">Notifications</span>
-                        {unreadCount > 0 && (
-                          <button
-                            onClick={markAllRead}
+                    <div className="fixed inset-0 z-[140]">
+                      <button
+                        type="button"
+                        aria-label="Close notifications"
+                        onClick={() => setShowBell(false)}
+                        className="absolute inset-0 bg-black/55 backdrop-blur-[1px]"
+                      />
+
+                      <div className="absolute left-1/2 top-1/2 w-[min(92vw,780px)] -translate-x-1/2 -translate-y-1/2 bg-surface border border-surface-3 rounded-2xl shadow-2xl overflow-hidden">
+                        {/* Header */}
+                        <div className="flex items-center justify-between px-5 py-4 border-b border-surface-3 bg-surface-2/40">
+                          <span className="text-base font-semibold text-text">Notifications</span>
+                          <div className="flex items-center gap-3">
+                            {unreadCount > 0 && (
+                              <button
+                                onClick={markAllRead}
+                                className="text-xs text-brand hover:underline"
+                              >
+                                Mark all read
+                              </button>
+                            )}
+                            <button
+                              onClick={() => setShowBell(false)}
+                              className="text-text-muted hover:text-text"
+                              aria-label="Close"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* List */}
+                        <div className="max-h-[70vh] overflow-y-auto divide-y divide-surface-3">
+                          {(notifs ?? []).length === 0 ? (
+                            <p className="text-center text-sm text-text-muted py-10">No notifications</p>
+                          ) : (
+                            (notifs ?? []).map((n) => (
+                              <div
+                                key={`${n.source}-${n.id}`}
+                                onClick={() => handleNotifClick(n)}
+                                className={`flex items-start gap-3 px-5 py-4 cursor-pointer hover:bg-surface-2 transition-colors group ${
+                                  !n.isRead ? 'bg-surface-2/40' : ''
+                                }`}
+                              >
+                                <span
+                                  className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${
+                                    n.isRead ? 'bg-surface-3' : (PRIORITY_DOT[n.priority] ?? 'bg-brand')
+                                  }`}
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm font-semibold text-text leading-snug">{n.title}</p>
+                                  <p className="text-sm text-text-muted leading-snug mt-1">{n.message}</p>
+                                  <p className="text-[11px] text-text-muted/60 mt-2">
+                                    {new Date(n.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                  </p>
+                                </div>
+                                <button
+                                  onClick={(e) => deleteNotif(e, n)}
+                                  className="opacity-0 group-hover:opacity-100 transition-opacity text-text-muted hover:text-danger shrink-0 mt-0.5"
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </div>
+                            ))
+                          )}
+                        </div>
+
+                        {/* Footer */}
+                        <div className="px-5 py-3 border-t border-surface-3 bg-surface-2/40 flex justify-between items-center">
+                          <span className="text-xs text-text-muted">{unreadCount} unread</span>
+                          <Link
+                            to="/notifications"
+                            onClick={() => setShowBell(false)}
                             className="text-xs text-brand hover:underline"
                           >
-                            Mark all read
-                          </button>
-                        )}
-                      </div>
-
-                      {/* List */}
-                      <div className="max-h-80 overflow-y-auto divide-y divide-surface-3">
-                        {(notifs ?? []).length === 0 ? (
-                          <p className="text-center text-sm text-text-muted py-8">No notifications</p>
-                        ) : (
-                          (notifs ?? []).map((n) => (
-                            <div
-                              key={`${n.source}-${n.id}`}
-                              onClick={() => handleNotifClick(n)}
-                              className={`flex items-start gap-3 px-4 py-3 cursor-pointer hover:bg-surface-2 transition-colors group ${
-                                !n.isRead ? 'bg-surface-2/50' : ''
-                              }`}
-                            >
-                              <span
-                                className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${
-                                  n.isRead ? 'bg-surface-3' : (PRIORITY_DOT[n.priority] ?? 'bg-brand')
-                                }`}
-                              />
-                              <div className="flex-1 min-w-0">
-                                <p className="text-xs font-semibold text-text leading-snug">{n.title}</p>
-                                <p className="text-xs text-text-muted leading-snug mt-0.5 line-clamp-2">{n.message}</p>
-                                <p className="text-[10px] text-text-muted/60 mt-1">
-                                  {new Date(n.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                                </p>
-                              </div>
-                              <button
-                                onClick={(e) => deleteNotif(e, n)}
-                                className="opacity-0 group-hover:opacity-100 transition-opacity text-text-muted hover:text-danger shrink-0 mt-0.5"
-                              >
-                                <X className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          ))
-                        )}
-                      </div>
-
-                      {/* Footer */}
-                      <div className="px-4 py-2 border-t border-surface-3 bg-surface-2/40">
-                        <Link
-                          to="/notifications"
-                          onClick={() => setShowBell(false)}
-                          className="text-xs text-brand hover:underline"
-                        >
-                          View all notifications
-                        </Link>
+                            Open notifications page
+                          </Link>
+                        </div>
                       </div>
                     </div>
                   )}

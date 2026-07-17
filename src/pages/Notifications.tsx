@@ -2,17 +2,17 @@ import { useEffect, useMemo, useState } from 'react';
 import { ArrowRight, Bell, CheckCheck, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
-
-type Notif = {
-  id: string;
-  title: string;
-  message: string;
-  priority: 'success' | 'info' | 'warning' | 'error';
-  category: string;
-  actionUrl: string | null;
-  isRead: number;
-  createdAt: string;
-};
+import { useAuth } from '../context/AuthContext';
+import {
+  deleteFrontendNotification,
+  getFrontendNotifications,
+  markAllFrontendNotificationsRead,
+  markFrontendNotificationRead,
+  mergeNotifications,
+  normalizeBackendNotifications,
+  type BackendNotification,
+  type NotificationItem,
+} from '../lib/frontendNotifications';
 
 const PRIORITY_CHIP: Record<string, string> = {
   success: 'bg-green-500/15 text-green-400',
@@ -33,16 +33,24 @@ function formatDate(input: string) {
 
 export default function Notifications() {
   const navigate = useNavigate();
-  const [items, setItems] = useState<Notif[]>([]);
+  const { user } = useAuth();
+  const [items, setItems] = useState<NotificationItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   async function loadNotifications() {
+    if (!user?.id) {
+      setItems([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
-      const res = await api.get<{ notifications: Notif[] }>('/api/notifications/me?limit=50');
-      setItems(Array.isArray(res?.notifications) ? res.notifications : []);
+      const res = await api.get<{ notifications: BackendNotification[] }>('/api/notifications/me?limit=50');
+      const backend = normalizeBackendNotifications(Array.isArray(res?.notifications) ? res.notifications : []);
+      const frontend = getFrontendNotifications(user.id);
+      setItems(mergeNotifications(backend, frontend));
     } catch {
-      setItems([]);
+      setItems(getFrontendNotifications(user.id));
     } finally {
       setLoading(false);
     }
@@ -50,27 +58,38 @@ export default function Notifications() {
 
   useEffect(() => {
     void loadNotifications();
-  }, []);
+  }, [user?.id]);
 
   const unreadCount = useMemo(() => items.filter((n) => !n.isRead).length, [items]);
 
   async function markAllRead() {
+    if (user?.id) markAllFrontendNotificationsRead(user.id);
     await api.patch('/api/notifications/read-all', {}).catch(() => {});
     setItems((prev) => prev.map((n) => ({ ...n, isRead: 1 })));
   }
 
-  async function markRead(notifId: string) {
-    await api.patch(`/api/notifications/${notifId}/read`, {}).catch(() => {});
-    setItems((prev) => prev.map((n) => (n.id === notifId ? { ...n, isRead: 1 } : n)));
+  async function markRead(notif: NotificationItem) {
+    if (notif.source === 'frontend') {
+      if (user?.id) markFrontendNotificationRead(user.id, notif.id);
+      setItems((prev) => prev.map((n) => (n.id === notif.id ? { ...n, isRead: 1 } : n)));
+      return;
+    }
+    await api.patch(`/api/notifications/${notif.id}/read`, {}).catch(() => {});
+    setItems((prev) => prev.map((n) => (n.id === notif.id ? { ...n, isRead: 1 } : n)));
   }
 
-  async function remove(notifId: string) {
-    await api.delete(`/api/notifications/${notifId}`).catch(() => {});
-    setItems((prev) => prev.filter((n) => n.id !== notifId));
+  async function remove(notif: NotificationItem) {
+    if (notif.source === 'frontend') {
+      if (user?.id) deleteFrontendNotification(user.id, notif.id);
+      setItems((prev) => prev.filter((n) => n.id !== notif.id));
+      return;
+    }
+    await api.delete(`/api/notifications/${notif.id}`).catch(() => {});
+    setItems((prev) => prev.filter((n) => n.id !== notif.id));
   }
 
-  async function goToNotification(n: Notif) {
-    await markRead(n.id);
+  async function goToNotification(n: NotificationItem) {
+    await markRead(n);
     if (n.actionUrl) {
       navigate(n.actionUrl);
     }
@@ -103,7 +122,7 @@ export default function Notifications() {
           <p className="px-4 py-8 text-sm text-text-muted text-center">You have no notifications yet.</p>
         ) : (
           items.map((n) => (
-            <article key={n.id} className={`px-4 py-3 ${!n.isRead ? 'bg-surface-2/40' : ''}`}>
+            <article key={`${n.source}-${n.id}`} className={`px-4 py-3 ${!n.isRead ? 'bg-surface-2/40' : ''}`}>
               <div className="flex items-start gap-3">
                 <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${n.isRead ? 'bg-surface-3' : 'bg-brand'}`} />
 
@@ -130,7 +149,7 @@ export default function Notifications() {
 
                     {!n.isRead && (
                       <button
-                        onClick={() => void markRead(n.id)}
+                        onClick={() => void markRead(n)}
                         className="text-xs px-3 py-1.5 rounded-lg bg-surface-2 hover:bg-surface-3 text-text-muted hover:text-text"
                       >
                         Mark read
@@ -138,7 +157,7 @@ export default function Notifications() {
                     )}
 
                     <button
-                      onClick={() => void remove(n.id)}
+                      onClick={() => void remove(n)}
                       className="text-xs px-2.5 py-1.5 rounded-lg bg-surface-2 hover:bg-danger/20 text-text-muted hover:text-danger"
                       aria-label="Delete notification"
                     >
