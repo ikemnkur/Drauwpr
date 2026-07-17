@@ -5392,7 +5392,7 @@ server.post(PROXY + '/api/upload/transaction-screenshot/:username/:txHash', auth
   });
 
   req.pipe(busboy);
-  
+
 });
 
 
@@ -8104,357 +8104,474 @@ async function enforceStripeManualReviewRateLimit(userId) {
   const dailyCount = toCount(dailyRow?.count);
 
   if (hourlyCount >= STRIPE_MANUAL_REVIEW_MAX_PER_HOUR) {
-    const err = new Error('Manual review request limit reached. You can submit only 1 manual-review Stripe request per hour.');
+    const err = new Error(`Manual review request limit reached. You can submit only ${STRIPE_MANUAL_REVIEW_MAX_PER_HOUR} manual-review Stripe request per hour.`);
     err.httpStatus = 429;
     throw err;
   }
 
   if (dailyCount >= STRIPE_MANUAL_REVIEW_MAX_PER_DAY) {
-    const err = new Error('Manual review request limit reached. You can submit up to 3 manual-review Stripe requests per day.');
+    const err = new Error(`Manual review request limit reached. You can submit up to ${STRIPE_MANUAL_REVIEW_MAX_PER_DAY} manual-review Stripe requests per day.`);
     err.httpStatus = 429;
     throw err;
   }
 }
 
 // Sent from the client: timeRange, user, packageData from buy Credits page
-server.post(PROXY + '/api/verify-stripe-payment', async (req, res) => {
+// server.post(PROXY + '/api/verify-stripe-payment-old', async (req, res) => {
 
-  const { timeRange, user, packageData, checkoutSessionId } = req.body;
+//   const { timeRange, user, packageData, checkoutSessionId } = req.body;
 
-  if (!user || (!checkoutSessionId && (!packageData || !timeRange))) {
-    return res.status(400).json({
-      error: 'Missing required fields: user is required, and either checkoutSessionId or packageData + timeRange must be provided',
-      status: 'invalid_input'
-    });
-  }
+//   if (!user || (!checkoutSessionId && (!packageData || !timeRange))) {
+//     return res.status(400).json({
+//       error: 'Missing required fields: user is required, and either checkoutSessionId or packageData + timeRange must be provided',
+//       status: 'invalid_input'
+//     });
+//   }
 
-  // fetchRecentStripePayments(20, true).then(result => {
+//   // fetchRecentStripePayments(20, true).then(result => {
 
-  let pkg = null;
-  if (packageData) {
-    const parsedAmount = Math.round(Number(packageData.amount || 0));
-    const parsedDollars = Number(packageData.dollars || 0);
-    const parsedCredits = Math.floor(Number(packageData.credits || 0));
+//   let pkg = null;
+//   if (packageData) {
+//     const parsedAmount = Math.round(Number(packageData.amount || 0));
+//     const parsedDollars = Number(packageData.dollars || 0);
+//     const parsedCredits = Math.floor(Number(packageData.credits || 0));
 
-    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0 || !Number.isFinite(parsedDollars) || parsedDollars <= 0 || !Number.isFinite(parsedCredits) || parsedCredits <= 0) {
-      return res.status(400).json({
-        error: 'Invalid packageData payload. amount, dollars, and credits are required.',
-        status: 'invalid_input'
-      });
-    }
+//     if (!Number.isFinite(parsedAmount) || parsedAmount <= 0 || !Number.isFinite(parsedDollars) || parsedDollars <= 0 || !Number.isFinite(parsedCredits) || parsedCredits <= 0) {
+//       return res.status(400).json({
+//         error: 'Invalid packageData payload. amount, dollars, and credits are required.',
+//         status: 'invalid_input'
+//       });
+//     }
 
-    pkg = {
-      amount: parsedAmount,
-      dollars: parsedDollars,
-      credits: parsedCredits,
-    };
-  }
-  const timeOffsetMs = 3 * 60 * 1000; // 3 minutes buffer on either side
-  const timeRangeStart = timeRange?.start ? (timeRange.start - timeOffsetMs) : null;   // unix ms
-  const timeRangeEnd = timeRange?.end ? (timeRange.end + timeOffsetMs) : null;     // unix ms
-  const userReferenceId = String(user.id || '').trim();
+//     pkg = {
+//       amount: parsedAmount,
+//       dollars: parsedDollars,
+//       credits: parsedCredits,
+//     };
+//   }
+//   const timeOffsetMs = 3 * 60 * 1000; // 3 minutes buffer on either side
+//   const timeRangeStart = timeRange?.start ? (timeRange.start - timeOffsetMs) : null;   // unix ms
+//   const timeRangeEnd = timeRange?.end ? (timeRange.end + timeOffsetMs) : null;     // unix ms
+//   const userReferenceId = String(user.id || '').trim();
 
-  if (!userReferenceId) {
-    return res.status(400).json({
-      error: 'User id is required for Stripe client_reference_id verification.',
-      status: 'invalid_input'
-    });
-  }
+//   if (!userReferenceId) {
+//     return res.status(400).json({
+//       error: 'User id is required for Stripe client_reference_id verification.',
+//       status: 'invalid_input'
+//     });
+//   }
 
-  console.log(`[INFO] verify-stripe-payment: pkg=${JSON.stringify(pkg)}, timeRange=${JSON.stringify(timeRange)}, userRef=${userReferenceId}`);
+//   console.log(`[INFO] verify-stripe-payment: pkg=${JSON.stringify(pkg)}, timeRange=${JSON.stringify(timeRange)}, userRef=${userReferenceId}`);
 
+//   try {
+//     // ── Step 1: Verify through Checkout Session (client_reference_id) ──
+//     let matchedCheckoutSession = null;
+//     let matchedStripeClient = stripe;
+
+//     if (checkoutSessionId) {
+//       let directSession = null;
+//       let directStripeClient = stripe;
+//       let lastSessionErr = null;
+
+//       const stripeCandidates = getStripeClientsForSessionId(checkoutSessionId);
+
+//       for (const candidate of stripeCandidates) {
+//         try {
+//           directSession = await candidate.client.checkout.sessions.retrieve(checkoutSessionId, {
+//             expand: ['payment_intent', 'payment_intent.latest_charge']
+//           });
+//           directStripeClient = candidate.client;
+//           console.log(`[INFO] verify-stripe-payment: checkout session resolved via ${candidate.label} Stripe client`);
+//           break;
+//         } catch (err) {
+//           lastSessionErr = err;
+//           const msg = String(err?.message || '');
+//           if (!msg.includes('No such checkout.session')) {
+//             throw err;
+//           }
+//         }
+//       }
+
+//       if (!directSession) {
+//         const modeHint = /^cs_live_/i.test(checkoutSessionId)
+//           ? ' Session ID is live-mode; configure STRIPE_SECRET_KEY_LIVE with your sk_live key or point STRIPE_SECRET_KEY to live mode.'
+//           : (/^cs_test_/i.test(checkoutSessionId)
+//             ? ' Session ID is test-mode; configure STRIPE_SECRET_KEY_TEST with your sk_test key or point STRIPE_SECRET_KEY to test mode.'
+//             : '');
+
+//         const sessionErrMsg = String(lastSessionErr?.message || 'Unable to retrieve checkout session');
+//         return res.status(404).json({
+//           error: `${sessionErrMsg}.${modeHint}`.trim(),
+//           status: 'not_found'
+//         });
+//       }
+
+//       const directRef = String(directSession.client_reference_id || directSession.metadata?.userId || '').trim();
+//       if (directRef !== userReferenceId) {
+//         return res.status(403).json({
+//           error: 'Checkout session does not belong to the authenticated account.',
+//           status: 'forbidden'
+//         });
+//       }
+
+//       if (!pkg && Number.isFinite(Number(directSession.amount_total))) {
+//         pkg = {
+//           amount: Number(directSession.amount_total),
+//           dollars: Number(directSession.amount_total || 0) / 100,
+//           credits: Math.floor((Number(directSession.amount_total || 0) / 100) * 1000),
+//         };
+//       }
+
+//       matchedCheckoutSession = directSession;
+//       matchedStripeClient = directStripeClient || stripe;
+//     }
+
+//     if (!matchedCheckoutSession) {
+//       const recentSessions = await getRecentCheckoutSessions({
+//         limit: 100,
+//         timeRangeStart,
+//         timeRangeEnd,
+//       });
+
+//       let bestSession = null;
+//       let bestSessionScore = -1;
+
+//       for (const session of recentSessions.data || []) {
+//         const refId = String(session.client_reference_id || session.metadata?.userId || '').trim();
+//         if (!refId || refId !== userReferenceId) continue;
+//         if (session.mode !== 'payment') continue;
+
+//         const amountMatches = pkg ? Number(session.amount_total || 0) === Number(pkg.amount || 0) : true;
+//         if (!amountMatches) continue;
+
+//         const score =
+//           (session.payment_status === 'paid' ? 4 : 0) +
+//           (session.status === 'complete' ? 2 : 0) +
+//           (session.payment_intent ? 2 : 0);
+
+//         if (score > bestSessionScore) {
+//           bestSessionScore = score;
+//           bestSession = session;
+//         }
+//       }
+
+//       matchedCheckoutSession = bestSession;
+//     }
+
+//     let potentialVerifiedPayment = null;
+//     let matchSource = 'checkout_session_client_reference_id';
+
+//     if (matchedCheckoutSession) {
+//       const paymentIntentObj = matchedCheckoutSession.payment_intent && typeof matchedCheckoutSession.payment_intent === 'object'
+//         ? matchedCheckoutSession.payment_intent
+//         : null;
+//       const paymentIntentId = paymentIntentObj?.id || (typeof matchedCheckoutSession.payment_intent === 'string' ? matchedCheckoutSession.payment_intent : null);
+//       const resolvedStripeClient = matchedStripeClient || stripe;
+//       const resolvedPi = paymentIntentObj || (paymentIntentId ? await resolvedStripeClient.paymentIntents.retrieve(paymentIntentId, { expand: ['latest_charge'] }) : null);
+
+//       if (!resolvedPi) {
+//         return res.status(404).json({
+//           error: 'Checkout session found but no linked payment intent was available yet.',
+//           status: 'not_found',
+//         });
+//       }
+
+//       const resolvedCharge = resolvedPi.latest_charge && typeof resolvedPi.latest_charge === 'object' ? resolvedPi.latest_charge : null;
+
+//       potentialVerifiedPayment = {
+//         id: resolvedPi.id,
+//         stripeChargeId: resolvedCharge?.id || null,
+//         status: resolvedPi.status || (matchedCheckoutSession.payment_status === 'paid' ? 'succeeded' : 'processing'),
+//         amount: Number(resolvedPi.amount || matchedCheckoutSession.amount_total || 0),
+//         currency: String(resolvedPi.currency || matchedCheckoutSession.currency || 'USD').toUpperCase(),
+//         created: resolvedPi.created,
+//         customer: {
+//           email: matchedCheckoutSession.customer_details?.email || matchedCheckoutSession.customer_email || '',
+//           name: matchedCheckoutSession.customer_details?.name || '',
+//           phone: matchedCheckoutSession.customer_details?.phone || '',
+//         },
+//         _matchScore: 5,
+//         _matchSource: matchSource,
+//         stripeCheckoutSessionId: matchedCheckoutSession.id,
+//       };
+
+//       if (!pkg && Number.isFinite(Number(potentialVerifiedPayment.amount))) {
+//         pkg = {
+//           amount: Number(potentialVerifiedPayment.amount),
+//           dollars: Number(potentialVerifiedPayment.amount || 0) / 100,
+//           credits: Math.floor((Number(potentialVerifiedPayment.amount || 0) / 100) * 1000),
+//         };
+//       }
+//     }
+
+//     // No Checkout Session match means no auto-verifiable payment candidate.
+//     if (!potentialVerifiedPayment) {
+//       matchSource = 'checkout_session_client_reference_id';
+//     }
+
+//     if (!potentialVerifiedPayment) {
+//       if (!pkg) {
+//         return res.status(400).json({
+//           error: 'Unable to determine purchase package for manual review.',
+//           status: 'invalid_input'
+//         });
+//       }
+
+//       await enforceStripeManualReviewRateLimit(user.id);
+
+//       const pendingResult = await stripeCreditPurchases({
+//         username: user.username,
+//         userId: user.id,
+//         name: user.name,
+//         email: user.email,
+//         walletAddress: 'Stripe',
+//         transactionId: null,
+//         stripePaymentIntentId: null,
+//         stripeChargeId: null,
+//         blockExplorerLink: 'Stripe Payment',
+//         currency: 'USD',
+//         amount: pkg.amount,
+//         cryptoAmount: pkg.dollars,
+//         rate: null,
+//         session_id: user.id,
+//         orderLoggingEnabled: false,
+//         userAgent: user.userAgent,
+//         ip: user.ip,
+//         dollars: pkg.dollars,
+//         credits: pkg.credits,
+//         status: 'processing',
+//         shouldCredit: false,
+//         manualReviewReason: 'no_auto_match',
+//       });
+
+//       console.log('[INFO] No payment matched time window + amount. Queued for manual review.');
+//       return res.status(202).json({
+//         success: true,
+//         status: 'pending',
+//         pending: true,
+//         autoApproved: false,
+//         purchaseId: pendingResult?.purchaseId || null,
+//         matchSource,
+//         message: 'This payment could not be auto-verified and has been submitted for manual review. Credits will be applied once approved.',
+//       });
+//     }
+
+//     // ── Step 3: Package lookup ─────────────────────────────────────────────
+//     const PACKAGES = [
+//       { credits: 5000, dollars: 5.25, label: '$5.00', color: '#2196f3', priceId: 'price_1SR9lZEViYxfJNd20x2uwukQ' },
+//       { credits: 10000, dollars: 9.85, label: '$10.00', color: '#9c27b0', popular: true, priceId: 'price_1SR9kzEViYxfJNd27aLA7kFW' },
+//       // { credits: 20000,  dollars: 20,  label: '$20.00',  color: '#f57c00', priceId: 'price_1SR9mrEViYxfJNd2dD5NHFoL' },
+//       { credits: 25000, dollars: 24.50, label: '$25.00', color: '#e91e63' },
+//       { credits: 50000, dollars: 48.50, label: '$50.00', color: '#ff5722' },
+//       { credits: 100000, dollars: 95, label: '$100.00', color: '#795548' },
+//     ];
+
+//     const matchedPackage = PACKAGES.find(p => Math.round(p.dollars) === Math.round(potentialVerifiedPayment.amount / 100)); //round to nearest dollar to avoid minor discrepancies (e.g. $9.85 stored as 985 but package = 1000).
+
+//     if (!matchedPackage) {
+//       console.error(`[ERROR] No package for amount $${Math.round(potentialVerifiedPayment.amount / 100)}`);
+//       return res.status(400).json({ error: 'Unrecognized payment amount — package not found', status: 'invalid_amount' });
+//     }
+
+//     const autoApproved = potentialVerifiedPayment.status === 'succeeded'
+//       && Number(potentialVerifiedPayment._matchScore || 0) >= STRIPE_AUTO_APPROVE_MIN_MATCH_SCORE;
+
+//     const purchaseData = {
+//       username: user.username,
+//       userId: user.id,
+//       name: user.name,
+//       email: user.email,
+//       walletAddress: 'Stripe',
+//       transactionId: potentialVerifiedPayment.id,
+//       stripePaymentIntentId: potentialVerifiedPayment.id,
+//       stripeChargeId: potentialVerifiedPayment.stripeChargeId || null,
+//       stripeCheckoutSessionId: potentialVerifiedPayment.stripeCheckoutSessionId || null,
+//       blockExplorerLink: 'Stripe Payment',
+//       currency: 'USD',
+//       amount: potentialVerifiedPayment.amount,
+//       cryptoAmount: matchedPackage.dollars,
+//       rate: null,
+//       session_id: user.id,
+//       orderLoggingEnabled: false,
+//       userAgent: user.userAgent,
+//       ip: user.ip,
+//       dollars: matchedPackage.dollars,
+//       credits: matchedPackage.credits,
+//       status: autoApproved ? 'completed' : 'processing',
+//       shouldCredit: autoApproved,
+//       manualReviewReason: autoApproved ? null : `score_${Number(potentialVerifiedPayment._matchScore || 0)}_status_${potentialVerifiedPayment.status}`,
+//     };
+
+//     if (!autoApproved) {
+//       const [existingPending] = await knex('CreditPurchases')
+//         .where('paymentMethod', 'stripe')
+//         .where('stripePaymentIntentId', potentialVerifiedPayment.id)
+//         .whereIn('status', ['processing', 'pending'])
+//         .select('id')
+//         .limit(1);
+
+//       if (existingPending) {
+//         return res.status(202).json({
+//           success: true,
+//           status: 'pending',
+//           pending: true,
+//           autoApproved: false,
+//           purchaseId: existingPending.id,
+//           paymentIntentId: potentialVerifiedPayment.id,
+//           message: 'This payment could not be auto-verified and is already pending manual review.',
+//         });
+//       }
+
+//       await enforceStripeManualReviewRateLimit(user.id);
+
+//       await knex('stripeTransactions')
+//         .where('stripePaymentIntentId', potentialVerifiedPayment.id)
+//         .update({ status: 'pending', syncedAt: knex.fn.now() })
+//         .catch(() => { });
+
+//       await stripeCreditPurchases(purchaseData);
+
+//       console.log(`[INFO] Stripe payment queued for manual review. pi=${potentialVerifiedPayment.id}, score=${potentialVerifiedPayment._matchScore}`);
+//       return res.status(202).json({
+//         success: true,
+//         status: 'pending',
+//         pending: true,
+//         autoApproved: false,
+//         paymentIntentId: potentialVerifiedPayment.id,
+//         matchSource: potentialVerifiedPayment._matchSource,
+//         matchScore: potentialVerifiedPayment._matchScore,
+//         message: 'This payment could not be auto-verified and has been submitted for manual review. Credits will be applied once approved.',
+//       });
+//     }
+
+//     await stripeCreditPurchases(purchaseData);
+
+//     console.log(`[INFO] Payment verification complete. status=${potentialVerifiedPayment.status}, source=${potentialVerifiedPayment._matchSource}, score=${potentialVerifiedPayment._matchScore}`);
+//     return res.json(potentialVerifiedPayment);
+
+//   } catch (error) {
+//     console.error('Payment verification error:', error.message);
+//     const statusCode = Number(error?.httpStatus) || 500;
+//     res.status(statusCode).json({ error: error.message || 'Payment verification failed', status: statusCode === 429 ? 'rate_limited' : 'server_error' });
+//   }
+// });
+
+
+server.post('/api/verify-stripe-payment', async (req, res) => {
   try {
-    // ── Step 1: Verify through Checkout Session (client_reference_id) ──
-    let matchedCheckoutSession = null;
-    let matchedStripeClient = stripe;
+    const { checkoutSessionId, user } = req.body;
 
-    if (checkoutSessionId) {
-      let directSession = null;
-      let directStripeClient = stripe;
-      let lastSessionErr = null;
-
-      const stripeCandidates = getStripeClientsForSessionId(checkoutSessionId);
-
-      for (const candidate of stripeCandidates) {
-        try {
-          directSession = await candidate.client.checkout.sessions.retrieve(checkoutSessionId, {
-            expand: ['payment_intent', 'payment_intent.latest_charge']
-          });
-          directStripeClient = candidate.client;
-          console.log(`[INFO] verify-stripe-payment: checkout session resolved via ${candidate.label} Stripe client`);
-          break;
-        } catch (err) {
-          lastSessionErr = err;
-          const msg = String(err?.message || '');
-          if (!msg.includes('No such checkout.session')) {
-            throw err;
-          }
-        }
-      }
-
-      if (!directSession) {
-        const modeHint = /^cs_live_/i.test(checkoutSessionId)
-          ? ' Session ID is live-mode; configure STRIPE_SECRET_KEY_LIVE with your sk_live key or point STRIPE_SECRET_KEY to live mode.'
-          : (/^cs_test_/i.test(checkoutSessionId)
-            ? ' Session ID is test-mode; configure STRIPE_SECRET_KEY_TEST with your sk_test key or point STRIPE_SECRET_KEY to test mode.'
-            : '');
-
-        const sessionErrMsg = String(lastSessionErr?.message || 'Unable to retrieve checkout session');
-        return res.status(404).json({
-          error: `${sessionErrMsg}.${modeHint}`.trim(),
-          status: 'not_found'
-        });
-      }
-
-      const directRef = String(directSession.client_reference_id || directSession.metadata?.userId || '').trim();
-      if (directRef !== userReferenceId) {
-        return res.status(403).json({
-          error: 'Checkout session does not belong to the authenticated account.',
-          status: 'forbidden'
-        });
-      }
-
-      if (!pkg && Number.isFinite(Number(directSession.amount_total))) {
-        pkg = {
-          amount: Number(directSession.amount_total),
-          dollars: Number(directSession.amount_total || 0) / 100,
-          credits: Math.floor((Number(directSession.amount_total || 0) / 100) * 1000),
-        };
-      }
-
-      matchedCheckoutSession = directSession;
-      matchedStripeClient = directStripeClient || stripe;
-    }
-
-    if (!matchedCheckoutSession) {
-      const recentSessions = await getRecentCheckoutSessions({
-        limit: 100,
-        timeRangeStart,
-        timeRangeEnd,
+    // 1. Validate that the session ID was provided
+    if (!checkoutSessionId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing checkoutSessionId'
       });
-
-      let bestSession = null;
-      let bestSessionScore = -1;
-
-      for (const session of recentSessions.data || []) {
-        const refId = String(session.client_reference_id || session.metadata?.userId || '').trim();
-        if (!refId || refId !== userReferenceId) continue;
-        if (session.mode !== 'payment') continue;
-
-        const amountMatches = pkg ? Number(session.amount_total || 0) === Number(pkg.amount || 0) : true;
-        if (!amountMatches) continue;
-
-        const score =
-          (session.payment_status === 'paid' ? 4 : 0) +
-          (session.status === 'complete' ? 2 : 0) +
-          (session.payment_intent ? 2 : 0);
-
-        if (score > bestSessionScore) {
-          bestSessionScore = score;
-          bestSession = session;
-        }
-      }
-
-      matchedCheckoutSession = bestSession;
     }
 
-    let potentialVerifiedPayment = null;
-    let matchSource = 'checkout_session_client_reference_id';
+    // 2. Fetch the specific session directly from Stripe
+    const session = await stripe.checkout.sessions.retrieve(checkoutSessionId);
 
-    if (matchedCheckoutSession) {
-      const paymentIntentObj = matchedCheckoutSession.payment_intent && typeof matchedCheckoutSession.payment_intent === 'object'
-        ? matchedCheckoutSession.payment_intent
+    // 3. Verify the payment status is successful
+    if (session.payment_status === 'paid') {
+
+      // OPTIONAL: Double-check that the amount matches your expectations
+      // const amountPaid = session.amount_total / 100; 
+
+      // TODO: Update your database here using user.id
+      // e.g., await Database.markAsPaid(user.id);
+
+      const PACKAGES = [
+        // { credits: 2500, dollars: 2.50, label: "Basic", color: '#4caf50', priceId: 'price_1SR08eEViYxfJNd2ihaRH9Fk' },
+
+        { credits: 5000, label: "$5 Credit Pack", dollars: 5.25, priceId: 'price_dRmeVeekngJ59WPfz89AA01' },
+        { credits: 10000, label: "$10 Credit Pack", dollars: 9.85, priceId: 'price_00wfZi2BF2Sf3yr4Uu9AA02' },
+        { credits: 25000, label: "$25 Credit Pack", dollars: 24.50, priceId: 'price_cNi28s4JN1Ob8SLbiS9AA06' },
+        { credits: 50000, label: "$50 Credit Pack", dollars: 48.50, priceId: 'price_fZu00k6RV64r8SL3Qq9AA03' },
+        { credits: 100000, label: "$100 Credit Pack", dollars: 95, priceId: 'price_5kQ9AU5NRdwT4CvbiS9AA04' },
+      ];
+
+      const packageData = PACKAGES.find(pkg => pkg.dollars - session.amount_total / 100 < 0.5);
+
+      // seesion data for debugging
+      console.log('Session Data:', session);
+
+      // if (potentialVerifiedPayment.status == 'succeeded') {
+      // Log the purchase in the database
+      const paymentIntent = session.payment_intent
+        ? await stripe.paymentIntents.retrieve(session.payment_intent, { expand: ['latest_charge'] })
         : null;
-      const paymentIntentId = paymentIntentObj?.id || (typeof matchedCheckoutSession.payment_intent === 'string' ? matchedCheckoutSession.payment_intent : null);
-      const resolvedStripeClient = matchedStripeClient || stripe;
-      const resolvedPi = paymentIntentObj || (paymentIntentId ? await resolvedStripeClient.paymentIntents.retrieve(paymentIntentId, { expand: ['latest_charge'] }) : null);
 
-      if (!resolvedPi) {
-        return res.status(404).json({
-          error: 'Checkout session found but no linked payment intent was available yet.',
-          status: 'not_found',
-        });
-      }
+      const resolvedStripeChargeId = paymentIntent?.latest_charge && typeof paymentIntent.latest_charge === 'object'
+        ? paymentIntent.latest_charge.id
+        : null;
 
-      const resolvedCharge = resolvedPi.latest_charge && typeof resolvedPi.latest_charge === 'object' ? resolvedPi.latest_charge : null;
-
-      potentialVerifiedPayment = {
-        id: resolvedPi.id,
-        stripeChargeId: resolvedCharge?.id || null,
-        status: resolvedPi.status || (matchedCheckoutSession.payment_status === 'paid' ? 'succeeded' : 'processing'),
-        amount: Number(resolvedPi.amount || matchedCheckoutSession.amount_total || 0),
-        currency: String(resolvedPi.currency || matchedCheckoutSession.currency || 'USD').toUpperCase(),
-        created: resolvedPi.created,
-        customer: {
-          email: matchedCheckoutSession.customer_details?.email || matchedCheckoutSession.customer_email || '',
-          name: matchedCheckoutSession.customer_details?.name || '',
-          phone: matchedCheckoutSession.customer_details?.phone || '',
-        },
-        _matchScore: 5,
-        _matchSource: matchSource,
-        stripeCheckoutSessionId: matchedCheckoutSession.id,
-      };
-
-      if (!pkg && Number.isFinite(Number(potentialVerifiedPayment.amount))) {
-        pkg = {
-          amount: Number(potentialVerifiedPayment.amount),
-          dollars: Number(potentialVerifiedPayment.amount || 0) / 100,
-          credits: Math.floor((Number(potentialVerifiedPayment.amount || 0) / 100) * 1000),
-        };
-      }
-    }
-
-    // No Checkout Session match means no auto-verifiable payment candidate.
-    if (!potentialVerifiedPayment) {
-      matchSource = 'checkout_session_client_reference_id';
-    }
-
-    if (!potentialVerifiedPayment) {
-      if (!pkg) {
-        return res.status(400).json({
-          error: 'Unable to determine purchase package for manual review.',
-          status: 'invalid_input'
-        });
-      }
-
-      await enforceStripeManualReviewRateLimit(user.id);
-
-      const pendingResult = await stripeCreditPurchases({
+      const data = {
         username: user.username,
         userId: user.id,
         name: user.name,
         email: user.email,
-        walletAddress: 'Stripe',
-        transactionId: null,
-        stripePaymentIntentId: null,
-        stripeChargeId: null,
+        walletAddress: "Stripe",
+        transactionId: session.id,
+        stripe_customer_id: session.customer,
+        stripePaymentIntentId: session.payment_intent, //potentialVerifiedPayment.id,
+        stripeChargeId: resolvedStripeChargeId,
+        stripeCheckoutSessionId: session.id,
+        // stripe_subscription_id: session.subscription, // using created time as a placeholder
+        priceId: packageData.priceId,
+        label: packageData.label || null,
         blockExplorerLink: 'Stripe Payment',
         currency: 'USD',
-        amount: pkg.amount,
-        cryptoAmount: pkg.dollars,
+        amount: session.amount_total,
+        cryptoAmount: packageData.dollars,
         rate: null,
-        session_id: user.id,
-        orderLoggingEnabled: false,
+        session_id: session.id, // this is a useless metric here but i am keep it for reference and to maintain similar data structure
+        // orderLoggingEnabled: false,
         userAgent: user.userAgent,
         ip: user.ip,
-        dollars: pkg.dollars,
-        credits: pkg.credits,
-        status: 'processing',
-        shouldCredit: false,
-        manualReviewReason: 'no_auto_match',
-      });
+        dollars: packageData.dollars,
+        credits: packageData.credits,
+        status: 'completed',
+        // planType: packageData.label.toLowerCase(),
+        // plan: packageData.label
 
-      console.log('[INFO] No payment matched time window + amount. Queued for manual review.');
-      return res.status(202).json({
-        success: true,
-        status: 'pending',
-        pending: true,
-        autoApproved: false,
-        purchaseId: pendingResult?.purchaseId || null,
-        matchSource,
-        message: 'This payment could not be auto-verified and has been submitted for manual review. Credits will be applied once approved.',
-      });
-    }
-
-    // ── Step 3: Package lookup ─────────────────────────────────────────────
-    const PACKAGES = [
-      { credits: 5000, dollars: 5.25, label: '$5.00', color: '#2196f3', priceId: 'price_1SR9lZEViYxfJNd20x2uwukQ' },
-      { credits: 10000, dollars: 9.85, label: '$10.00', color: '#9c27b0', popular: true, priceId: 'price_1SR9kzEViYxfJNd27aLA7kFW' },
-      // { credits: 20000,  dollars: 20,  label: '$20.00',  color: '#f57c00', priceId: 'price_1SR9mrEViYxfJNd2dD5NHFoL' },
-      { credits: 25000, dollars: 24.50, label: '$25.00', color: '#e91e63' },
-      { credits: 50000, dollars: 48.50, label: '$50.00', color: '#ff5722' },
-      { credits: 100000, dollars: 95, label: '$100.00', color: '#795548' },
-    ];
-
-    const matchedPackage = PACKAGES.find(p => Math.round(p.dollars) === Math.round(potentialVerifiedPayment.amount / 100)); //round to nearest dollar to avoid minor discrepancies (e.g. $9.85 stored as 985 but package = 1000).
-
-    if (!matchedPackage) {
-      console.error(`[ERROR] No package for amount $${Math.round(potentialVerifiedPayment.amount / 100)}`);
-      return res.status(400).json({ error: 'Unrecognized payment amount — package not found', status: 'invalid_amount' });
-    }
-
-    const autoApproved = potentialVerifiedPayment.status === 'succeeded'
-      && Number(potentialVerifiedPayment._matchScore || 0) >= STRIPE_AUTO_APPROVE_MIN_MATCH_SCORE;
-
-    const purchaseData = {
-      username: user.username,
-      userId: user.id,
-      name: user.name,
-      email: user.email,
-      walletAddress: 'Stripe',
-      transactionId: potentialVerifiedPayment.id,
-      stripePaymentIntentId: potentialVerifiedPayment.id,
-      stripeChargeId: potentialVerifiedPayment.stripeChargeId || null,
-      stripeCheckoutSessionId: potentialVerifiedPayment.stripeCheckoutSessionId || null,
-      blockExplorerLink: 'Stripe Payment',
-      currency: 'USD',
-      amount: potentialVerifiedPayment.amount,
-      cryptoAmount: matchedPackage.dollars,
-      rate: null,
-      session_id: user.id,
-      orderLoggingEnabled: false,
-      userAgent: user.userAgent,
-      ip: user.ip,
-      dollars: matchedPackage.dollars,
-      credits: matchedPackage.credits,
-      status: autoApproved ? 'completed' : 'processing',
-      shouldCredit: autoApproved,
-      manualReviewReason: autoApproved ? null : `score_${Number(potentialVerifiedPayment._matchScore || 0)}_status_${potentialVerifiedPayment.status}`,
-    };
-
-    if (!autoApproved) {
-      const [existingPending] = await knex('CreditPurchases')
-        .where('paymentMethod', 'stripe')
-        .where('stripePaymentIntentId', potentialVerifiedPayment.id)
-        .whereIn('status', ['processing', 'pending'])
-        .select('id')
-        .limit(1);
-
-      if (existingPending) {
-        return res.status(202).json({
-          success: true,
-          status: 'pending',
-          pending: true,
-          autoApproved: false,
-          purchaseId: existingPending.id,
-          paymentIntentId: potentialVerifiedPayment.id,
-          message: 'This payment could not be auto-verified and is already pending manual review.',
-        });
       }
 
-      await enforceStripeManualReviewRateLimit(user.id);
+      
 
-      await knex('stripeTransactions')
-        .where('stripePaymentIntentId', potentialVerifiedPayment.id)
-        .update({ status: 'pending', syncedAt: knex.fn.now() })
-        .catch(() => { });
+      await stripeCreditPurchases(data);
 
-      await stripeCreditPurchases(purchaseData);
+      console.log('Payment verification completed successfully.');
 
-      console.log(`[INFO] Stripe payment queued for manual review. pi=${potentialVerifiedPayment.id}, score=${potentialVerifiedPayment._matchScore}`);
-      return res.status(202).json({
+      // return res.json(potentialVerifiedPayment);
+
+      return res.status(200).json({
         success: true,
-        status: 'pending',
-        pending: true,
-        autoApproved: false,
-        paymentIntentId: potentialVerifiedPayment.id,
-        matchSource: potentialVerifiedPayment._matchSource,
-        matchScore: potentialVerifiedPayment._matchScore,
-        message: 'This payment could not be auto-verified and has been submitted for manual review. Credits will be applied once approved.',
+        message: 'Payment verified successfully',
+        data: {
+          sessionId: session.id,
+          status: session.payment_status,
+          customerEmail: session.customer_details?.email,
+          amount: session.amount_total
+        }
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: `Payment not completed. Status: ${session.payment_status}`
       });
     }
 
-    await stripeCreditPurchases(purchaseData);
-
-    console.log(`[INFO] Payment verification complete. status=${potentialVerifiedPayment.status}, source=${potentialVerifiedPayment._matchSource}, score=${potentialVerifiedPayment._matchScore}`);
-    return res.json(potentialVerifiedPayment);
-
   } catch (error) {
-    console.error('Payment verification error:', error.message);
-    const statusCode = Number(error?.httpStatus) || 500;
-    res.status(statusCode).json({ error: error.message || 'Payment verification failed', status: statusCode === 429 ? 'rate_limited' : 'server_error' });
+    console.error('Stripe verification error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error during verification',
+      error: error.message
+    });
   }
 });
+
 
 async function sendStripePurchaseAcknowledgementEmail({
   to,
@@ -8501,7 +8618,7 @@ async function stripeCreditPurchases(data) {
       transactionId,
       blockExplorerLink,
       currency,
-      // amount,
+      amount,
       cryptoAmount,
       rate,
       session_id,
@@ -8518,7 +8635,7 @@ async function stripeCreditPurchases(data) {
       manualReviewReason = null,
     } = data;
 
-    const amount = Math.round((data.amount || 0) / 100) * 100; // Store amount in cents to avoid floating point issues. round to nearest 100 cents to tolerate small promotional discounts (e.g. $9.85 stored as 985 but package = 1000).
+    // const amount = Math.round((data.amount || 0) / 100) * 100; // Store amount in cents to avoid floating point issues. round to nearest 100 cents to tolerate small promotional discounts (e.g. $9.85 stored as 985 but package = 1000).
 
     console.log('💰 Logging Stripe purchase for user:', username);
 
@@ -8550,13 +8667,11 @@ async function stripeCreditPurchases(data) {
       console.log('✅ Logging purchase for user:', username);
 
       const PACKAGES = [
-        // { credits: 2500, dollars: 2.5, label: "$2.50 Package", color: '#4caf50', priceId: 'price_1SR9nNEViYxfJNd2pijdhiBM' },
-        { credits: 5000, dollars: 5.25, label: "$5.00 Package", color: '#2196f3', priceId: 'price_1SR9lZEViYxfJNd20x2uwukQ' },
-        { credits: 10000, dollars: 9.85, label: "$10.00 Package", color: '#9c27b0', popular: true, priceId: 'price_1SR9kzEViYxfJNd27aLA7kFW' },
-        // { credits: 20000, dollars: 20, label: "$20.00 Package", color: '#f57c00', priceId: 'price_1SR9mrEViYxfJNd2dD5NHFoL' },
-        { credits: 25000, dollars: 24.50, label: "$25.00 Package", color: '#e91e63' },
-        { credits: 50000, dollars: 48.50, label: "$50.00 Package", color: '#ff5722' },
-        { credits: 100000, dollars: 95, label: "$100.00 Package", color: '#795548' },
+        { credits: 5000, dollars: 5.25, label: "$5.00 Package", color: '#2196f3', priceId: 'price_dRmeVeekngJ59WPfz89AA01' },
+        { credits: 10000, dollars: 9.85, label: "$10.00 Package", color: '#9c27b0', popular: true, priceId: 'price_00wfZi2BF2Sf3yr4Uu9AA02' },
+        { credits: 25000, dollars: 24.50, label: "$25.00 Package", color: '#e91e63', priceId: 'price_cNi28s4JN1Ob8SLbiS9AA06' },
+        { credits: 50000, dollars: 48.50, label: "$50.00 Package", color: '#ff5722', priceId: 'price_fZu00k6RV64r8SL3Qq9AA03' },
+        { credits: 100000, dollars: 95, label: "$100.00 Package", color: '#795548', priceId: 'price_5kQ9AU5NRdwT4CvbiS9AA04' },
       ];
 
       const packageData = PACKAGES.find(pkg => Math.round(pkg.dollars) === Math.round(amount / 100)); //round to nearest dollar to avoid minor discrepancies (e.g. $9.85 stored as 985 but package = 1000).
@@ -8860,6 +8975,7 @@ server.get(PROXY + '/api/get-stripe-subscriptions-all', async (req, res) => {
 });
 
 
+
 // Sent from the client: timeRange, user, packageData from buy Credits page
 server.post(PROXY + '/api/verify-stripe-subscription', async (req, res) => {
 
@@ -9031,7 +9147,7 @@ server.post(PROXY + '/api/verify-stripe-subscription', async (req, res) => {
   }
 });
 
-// async function fetchEth({
+
 async function stripeBuySubscription(data) {
 
   try {
@@ -9223,6 +9339,9 @@ async function stripeBuySubscription(data) {
 
 }
 
+// ??????????????????????????????????
+// This section handles routing and global error handling for the server.
+// Routing and Error Handling
 
 // Global error handler
 server.use((error, req, res, next) => {

@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CreditCard, CheckCircle, XCircle, Loader2, ArrowLeft } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import axios from 'axios'; 
-import { api } from '../lib/api';
+// import { api } from '../lib/api';
 import { DEFAULT_ECONOMY_SETTINGS, fetchEconomySettings } from '../lib/economySettings';
 
 const PACK_CONFIG = [
@@ -102,6 +102,13 @@ export default function BuyStripe() {
     // });
 
     const configured = String(import.meta.env.VITE_API_URL || 'http://localhost:5000').trim();
+
+    console.log({
+      checkoutSessionId: payload.checkoutSessionId,
+      timeRange: { start: payload.start, end: payload.end },
+      user: { id: user.id, username: user.username, email: user.email },
+      packageData: payload.packageData,
+    });
 
     const response = await axios.post(`${configured}/api/verify-stripe-payment`, {
       checkoutSessionId: payload.checkoutSessionId,
