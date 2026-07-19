@@ -19,6 +19,25 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../lib/api';
 
+type PurchaseVerifyResponse = {
+  success?: boolean;
+  pending?: boolean;
+  status?: string;
+  message?: string;
+};
+
+function getErrorMessage(err: unknown, fallback: string): string {
+  if (
+    typeof err === 'object' &&
+    err !== null &&
+    'message' in err &&
+    typeof (err as { message?: unknown }).message === 'string'
+  ) {
+    return (err as { message: string }).message;
+  }
+  return fallback;
+}
+
 export default function PurchaseSuccessful() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -62,7 +81,7 @@ export default function PurchaseSuccessful() {
         setStatus('loading');
         setMessage('Verifying your payment...');
 
-        const response = await api.post('/api/verify-stripe-payment', {
+        const response = await api.post<PurchaseVerifyResponse>('/api/verify-stripe-payment', {
           checkoutSessionId: sessionId,
           user: {
             id: user.id,
@@ -97,9 +116,9 @@ export default function PurchaseSuccessful() {
 
         setStatus('error');
         setMessage(response?.message || 'Payment verification could not be completed.');
-      } catch (err) {
+      } catch (err: unknown) {
         if (cancelled) return;
-        const text = err?.message || 'Payment verification failed. Please contact support.';
+        const text = getErrorMessage(err, 'Payment verification failed. Please contact support.');
         setStatus('error');
         setMessage(text);
       }

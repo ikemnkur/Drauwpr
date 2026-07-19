@@ -31,11 +31,31 @@ import { useToast } from '../context/ToastContext';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../lib/api';
 
+type SubscriptionDetails = {
+  planName?: string;
+  interval?: string;
+  current_period_end?: number;
+};
+
+type SubscriptionSession = {
+  amount_total?: number;
+  customer_email?: string;
+  subscriptionId?: string;
+  subscriptionStatus?: string;
+  message?: string;
+  subscription?: SubscriptionDetails;
+};
+
+function getErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message) return err.message;
+  return fallback;
+}
+
 const SubscriptionSuccess = () => {
   const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(true);
-  const [session, setSession] = useState(null);
-  const [error, setError] = useState(null);
+  const [session, setSession] = useState<SubscriptionSession | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const { user, refreshUser } = useAuth();
   // const [searchParams] = useSearchParams();
@@ -56,12 +76,14 @@ const SubscriptionSuccess = () => {
       return;
     }
 
-    verifySession(sessionId);
+    void verifySession(sessionId);
   }, [searchParams]);
 
-  const verifySession = async (sessionId) => {
+  const verifySession = async (sessionId: string) => {
     try {
-      const API_URL = import.meta.env.VITE_API_SERVER_URL || 'http://localhost:5000';
+      if (!user?.id || !user?.username || !user?.email) {
+        throw new Error('User session is missing. Please sign in and try again.');
+      }
 
       // const response = await fetch(`${API_URL}/api/subscription/verify-session?session_id=${sessionId}`);
 
@@ -69,7 +91,7 @@ const SubscriptionSuccess = () => {
 
       console.log('Verifying session with ID:', sessionId, 'for user:', user.username);
 
-      const response = await api.post('/api/verify-stripe-subscription', {
+      const data = await api.post<SubscriptionSession>('/api/verify-stripe-subscription', {
         checkoutSessionId: sessionId,
         user: {
           id: user.id,
@@ -83,9 +105,6 @@ const SubscriptionSuccess = () => {
       // if (!response.ok) {
       //   throw new Error('Failed to verify session');
       // }
-
-      // const data = await response.json();
-      const data = response.data;
 
       console.log('Verification response data:', data);
 
@@ -111,16 +130,16 @@ const SubscriptionSuccess = () => {
       } else {
         throw new Error(data.message || 'Verification failed');
       }
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('Verification error:', err);
-      setError(err.message);
+      setError(getErrorMessage(err, 'Failed to verify subscription'));
       showToast('Failed to verify subscription', 'error');
     } finally {
       setLoading(false);
     }
   };
 
-  const formatDate = (timestamp) => {
+  const formatDate = (timestamp?: number) => {
     if (!timestamp) return 'N/A';
     return new Date(timestamp * 1000).toLocaleDateString('en-US', {
       year: 'numeric',
@@ -177,7 +196,7 @@ const SubscriptionSuccess = () => {
           <CheckCircleIcon sx={{ fontSize: 60 }} />
         </Box>
 
-        <Typography variant="h3" gutterBottom fontWeight="bold">
+        <Typography variant="h3" gutterBottom sx={{ fontWeight: 'bold' }}>
           Subscription Activated!
         </Typography>
         <Typography variant="h6" color="text.secondary">
@@ -188,7 +207,7 @@ const SubscriptionSuccess = () => {
       {session && (
         <Card sx={{ mb: 4 }}>
           <CardContent>
-            <Typography variant="h6" gutterBottom fontWeight="bold">
+            <Typography variant="h6" gutterBottom sx={{ fontWeight: 'bold' }}>
               Subscription Details
             </Typography>
 
@@ -209,7 +228,7 @@ const SubscriptionSuccess = () => {
                 </ListItemIcon>
                 <ListItemText
                   primary="Amount"
-                  secondary={`$${(session.amount_total / 100).toFixed(2)} / ${session.subscription?.interval || 'month'}`}
+                  secondary={`$${((session.amount_total ?? 0) / 100).toFixed(2)} / ${session.subscription?.interval || 'month'}`}
                 />
               </ListItem>
 

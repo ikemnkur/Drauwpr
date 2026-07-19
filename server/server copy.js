@@ -2840,6 +2840,22 @@ server.post(PROXY + '/api/auth/forgot-password', async (req, res) => {
   }
 });
 
+// const response = await api.post('/api/auth/reset-password', {
+//   email,
+//   resetCode,
+//   newPassword
+// });
+
+// if (response.data.success) {
+//   setSuccess(true);
+//   // Redirect to login after 2 seconds
+//   setTimeout(() => {
+//     navigate('/login');
+//   }, 2000);
+// } else {
+//   setError(response.data.message || 'Failed to reset password.');
+// }
+
 // reset password route submission
 server.post(PROXY + '/api/auth/reset-password', async (req, res) => {
   try {
@@ -3802,120 +3818,119 @@ server.post(PROXY + '/api/redeem', authenticateToken, async (req, res) => {
 });
 
 
-// async function checkTransaction(crypto, txHash, walletAddress, amount) {
-//   // const receiverAddress = wallets[crypto];
+async function checkTransaction(crypto, txHash, walletAddress, amount) {
+  // const receiverAddress = wallets[crypto];
 
-//   try {
-//     if (crypto === 'BTC') {
+  try {
+    if (crypto === 'BTC') {
 
-//       const transactions = await mysqlConnection.query(`SELECT * FROM BTC_TX WHERE hash = ?`, [txHash]);
-//       if (transactions.error) {
-//         console.error('MySQL query error:', transactions.error);
-//         return { success: false, error: 'Database error - transaction check failed' };
-//       }
+      const transactions = await mysqlConnection.query(`SELECT * FROM BTC_TX WHERE hash = ?`, [txHash]);
+      if (transactions.error) {
+        console.error('MySQL query error:', transactions.error);
+        return { success: false, error: 'Database error - transaction check failed' };
+      }
 
-//       if (transactions.length === 0) {
-//         console.log('Transaction not found in database');
-//         return { success: false, error: 'Transaction not found' };
-//       }
+      if (transactions.length === 0) {
+        console.log('Transaction not found in database');
+        return { success: false, error: 'Transaction not found' };
+      }
 
-//       const tx = transactions[0];
-//       console.log(`Time: ${tx.time}, Direction: ${tx.direction}, Amount: ${tx.amount}, From: ${tx.from}, To: ${tx.to}, Hash: ${tx.hash}`);
+      const tx = transactions[0];
+      console.log(`Time: ${tx.time}, Direction: ${tx.direction}, Amount: ${tx.amount}, From: ${tx.from}, To: ${tx.to}, Hash: ${tx.hash}`);
 
-//       // Check if transaction already exists
-//       const existingTx = await mysqlConnection.query(`SELECT * FROM BTC_TX WHERE hash = ?`, [txHash]);
-//       if (existingTx.length > 0) {
-//         console.log('Transaction already exists in database');
-//         return { success: false, error: 'Transaction already exists' };
-//       }
+      // Check if transaction already exists
+      const existingTx = await mysqlConnection.query(`SELECT * FROM BTC_TX WHERE hash = ?`, [txHash]);
+      if (existingTx.length > 0) {
+        console.log('Transaction already exists in database');
+        return { success: false, error: 'Transaction already exists' };
+      }
 
-//       // const txamount = await checkBitcoinTransaction(txHash, walletAddress);
-//       console.log("amount in checkTransaction:", amount, "vs. txamount:", transactions.amount);
-//       return transactions.amount;
+      // const txamount = await checkBitcoinTransaction(txHash, walletAddress);
+      console.log("amount in checkTransaction:", amount, "vs. txamount:", transactions.amount);
+      return transactions.amount;
 
-//     } else if (crypto === 'ETH') {
+    } else if (crypto === 'ETH') {
 
-//       const transactions = await knex('ETH_TX')
-//         .where('txHash', txHash)
-//         .select('*');
+      const transactions = await knex('ETH_TX')
+        .where('txHash', txHash)
+        .select('*');
 
-//       // const txamount = await checkEthereumTransaction(txHash, walletAddress);
-//       console.log("amount in checkTransaction:", amount, "vs. txamount:", transactions.amount);
-//       return transactions.amount;
+      // const txamount = await checkEthereumTransaction(txHash, walletAddress);
+      console.log("amount in checkTransaction:", amount, "vs. txamount:", transactions.amount);
+      return transactions.amount;
 
-//     } else if (crypto === 'LTC') {
+    } else if (crypto === 'LTC') {
 
-//       const transactions = await mysqlConnection.query(`SELECT * FROM LTC_TX WHERE hash = ?`, [txHash]);
-//       if (transactions.error) {
-//         console.error('MySQL query error:', transactions.error);
-//         return { success: false, error: 'Database error - transaction check failed' };
-//       }
+      const transactions = await mysqlConnection.query(`SELECT * FROM LTC_TX WHERE hash = ?`, [txHash]);
+      if (transactions.error) {
+        console.error('MySQL query error:', transactions.error);
+        return { success: false, error: 'Database error - transaction check failed' };
+      }
 
-//       if (transactions.length === 0) {
-//         console.log('Transaction not found in database');
-//         return { success: false, error: 'Transaction not found' };
-//       }
+      if (transactions.length === 0) {
+        console.log('Transaction not found in database');
+        return { success: false, error: 'Transaction not found' };
+      }
 
-//       const tx = transactions[0];
-//       console.log(`Time: ${tx.time}, Direction: ${tx.direction}, Amount: ${tx.amount}, From: ${tx.from}, To: ${tx.to}, Hash: ${tx.hash}`);
+      const tx = transactions[0];
+      console.log(`Time: ${tx.time}, Direction: ${tx.direction}, Amount: ${tx.amount}, From: ${tx.from}, To: ${tx.to}, Hash: ${tx.hash}`);
 
-//       // Check if transaction already exists
-//       const existingTx = await mysqlConnection.query(`SELECT * FROM LTC_TX WHERE hash = ?`, [txHash]);
-//       if (existingTx.length > 0) {
-//         console.log('Transaction already exists in database');
-//         return { success: false, error: 'Transaction already exists' };
-//       }
+      // Check if transaction already exists
+      const existingTx = await mysqlConnection.query(`SELECT * FROM LTC_TX WHERE hash = ?`, [txHash]);
+      if (existingTx.length > 0) {
+        console.log('Transaction already exists in database');
+        return { success: false, error: 'Transaction already exists' };
+      }
 
-//       // const txamount = await checkBitcoinTransaction(txHash, walletAddress);
-//       console.log("amount in checkTransaction:", amount, "vs. txamount:", transactions.amount);
-//       return transactions.amount;
+      // const txamount = await checkBitcoinTransaction(txHash, walletAddress);
+      console.log("amount in checkTransaction:", amount, "vs. txamount:", transactions.amount);
+      return transactions.amount;
 
-//     } else if (crypto === 'SOL') {
+    } else if (crypto === 'SOL') {
 
-//       const transactions = await mysqlConnection.query(`SELECT * FROM SOL_TX WHERE hash = ?`, [txHash]);
-//       if (transactions.error) {
-//         console.error('MySQL query error:', transactions.error);
-//         return { success: false, error: 'Database error - transaction check failed' };
-//       }
+      const transactions = await mysqlConnection.query(`SELECT * FROM SOL_TX WHERE hash = ?`, [txHash]);
+      if (transactions.error) {
+        console.error('MySQL query error:', transactions.error);
+        return { success: false, error: 'Database error - transaction check failed' };
+      }
 
-//       if (transactions.length === 0) {
-//         console.log('Transaction not found in database');
-//         return { success: false, error: 'Transaction not found' };
-//       }
+      if (transactions.length === 0) {
+        console.log('Transaction not found in database');
+        return { success: false, error: 'Transaction not found' };
+      }
 
-//       const tx = transactions[0];
-//       console.log(`Time: ${tx.time}, Direction: ${tx.direction}, Amount: ${tx.amount}, From: ${tx.from}, To: ${tx.to}, Hash: ${tx.hash}`);
+      const tx = transactions[0];
+      console.log(`Time: ${tx.time}, Direction: ${tx.direction}, Amount: ${tx.amount}, From: ${tx.from}, To: ${tx.to}, Hash: ${tx.hash}`);
 
-//       // Check if transaction already exists
-//       const existingTx = await mysqlConnection.query(`SELECT * FROM SOL_TX WHERE hash = ?`, [txHash]);
-//       if (existingTx.length > 0) {
-//         console.log('Transaction already exists in database');
-//         return { success: false, error: 'Transaction already exists' };
-//       }
+      // Check if transaction already exists
+      const existingTx = await mysqlConnection.query(`SELECT * FROM SOL_TX WHERE hash = ?`, [txHash]);
+      if (existingTx.length > 0) {
+        console.log('Transaction already exists in database');
+        return { success: false, error: 'Transaction already exists' };
+      }
 
-//       // const txamount = await checkBitcoinTransaction(txHash, walletAddress);
-//       console.log("amount in checkTransaction:", amount, "vs. txamount:", transactions.amount);
-//       return transactions.amount;
+      // const txamount = await checkBitcoinTransaction(txHash, walletAddress);
+      console.log("amount in checkTransaction:", amount, "vs. txamount:", transactions.amount);
+      return transactions.amount;
 
-//     } else if (crypto === "XRP") {
+    } else if (crypto === "XRP") {
 
-//       // const txamount = await checkRippleTransaction(txHash, walletAddress);
-//       // console.log("amount in checkTransaction:", amount, "vs. txamount:", txamount);
-//       // return txamount;
-//       // return { success: false, error: 'Ripple transaction checking not implemented in this demo' };
-//       return 0;
-//     }
+      // const txamount = await checkRippleTransaction(txHash, walletAddress);
+      // console.log("amount in checkTransaction:", amount, "vs. txamount:", txamount);
+      // return txamount;
+      // return { success: false, error: 'Ripple transaction checking not implemented in this demo' };
+      return 0;
+    }
 
-//   } catch (error) {
-//     return { success: false, error: error.message };
-//   }
-// }
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
 
 
 
 
 // Get actions for a specific user
-
 server.get(PROXY + '/api/actions/:username', authenticateToken, async (req, res) => {
   try {
     const { username } = req.params;
@@ -4595,39 +4610,39 @@ function normalizeTatumSol(tx, myAddress) {
 //  TATUM WEBHOOK HANDLER (Real-time transaction notifications)
 // ────────────────────────────────────────────────────────────────
 
-// server.post('/webhooks/crypto-payments', async (req, res) => {
-//   try {
-//     const data = req.body;
+server.post('/webhooks/crypto-payments', async (req, res) => {
+  try {
+    const data = req.body;
 
-//     console.log('🔔 TATUM Webhook received:', JSON.stringify(data, null, 2));
+    console.log('🔔 TATUM Webhook received:', JSON.stringify(data, null, 2));
 
-//     const { address, amount, asset, txId, type, currency } = data;
+    const { address, amount, asset, txId, type, currency } = data;
 
-//     // Validate it's an incoming transaction
-//     if (type !== 'incoming-tx' && type !== 'native_transfer' && type !== 'NATIVE') {
-//       console.log(`⚠️ Ignoring non-incoming transaction type: ${type}`);
-//       return res.status(200).send('OK');
-//     }
+    // Validate it's an incoming transaction
+    if (type !== 'incoming-tx' && type !== 'native_transfer' && type !== 'NATIVE') {
+      console.log(`⚠️ Ignoring non-incoming transaction type: ${type}`);
+      return res.status(200).send('OK');
+    }
 
-//     const chain = (asset || currency || '').toUpperCase();
-//     console.log(`✅ Incoming ${chain} transaction: ${amount} to ${address}`);
-//     console.log(`🔗 Transaction ID: ${txId}`);
+    const chain = (asset || currency || '').toUpperCase();
+    console.log(`✅ Incoming ${chain} transaction: ${amount} to ${address}`);
+    console.log(`🔗 Transaction ID: ${txId}`);
 
-//     // Trigger immediate fetch for this chain to update DB
-//     if (['BTC', 'LTC', 'ETH', 'SOL'].includes(chain)) {
-//       setTimeout(() => {
-//         FetchRecentTransactionsCronByChain(chain).catch(err => {
-//           console.error(`Failed to fetch ${chain} transactions after webhook:`, err.message);
-//         });
-//       }, 2000); // Small delay to allow blockchain confirmation
-//     }
+    // Trigger immediate fetch for this chain to update DB
+    if (['BTC', 'LTC', 'ETH', 'SOL'].includes(chain)) {
+      setTimeout(() => {
+        FetchRecentTransactionsCronByChain(chain).catch(err => {
+          console.error(`Failed to fetch ${chain} transactions after webhook:`, err.message);
+        });
+      }, 2000); // Small delay to allow blockchain confirmation
+    }
 
-//     res.status(200).send('OK');
-//   } catch (error) {
-//     console.error('❌ TATUM webhook error:', error);
-//     res.status(200).send('OK'); // Still return 200 to prevent retries
-//   }
-// });
+    res.status(200).send('OK');
+  } catch (error) {
+    console.error('❌ TATUM webhook error:', error);
+    res.status(200).send('OK'); // Still return 200 to prevent retries
+  }
+});
 
 // ETHERSCAN AND BTC/LTC EXPLORA API KEYS/URLS
 
@@ -5191,6 +5206,194 @@ const MIME_TO_EXT = {
 
 
 
+// Endpoint to handle transaction screenshot upload
+server.post(PROXY + '/api/upload/transaction-screenshot/:username/:txHash', authenticateToken, async (req, res) => {
+  console.log("Transaction screenshot upload request received");
+
+  const { username, txHash } = req.params;
+  // let formdata = req.body;
+
+  // const { username, userId } = req.body;
+
+  console.log('Form data received:', req.body);
+
+  let busboy;
+  try {
+    busboy = Busboy({ headers: req.headers, limits: { fileSize: 5 * 1024 * 1024 } }); // 5 MB
+  } catch (e) {
+    console.error('Failed to init Busboy:', e);
+    return res.status(400).json({ message: 'Invalid multipart/form-data request' });
+  }
+
+  let uploadDone = false;
+  // let writeStream;
+  let gcsFilePath = '';
+  let mimeTypeGlobal = '';
+  // let username = '';
+  // let userId = '';
+  let hadFile = false;
+  let aborted = false;
+
+  if (!storage) {
+    return res.status(503).json({ message: 'Cloud storage not configured' });
+  }
+
+  busboy.on('field', (fieldname, val) => {
+    // if (fieldname === 'username') username = val;
+    if (fieldname === 'userId') userId = val;
+  });
+
+  busboy.on('file', (fieldname, file, info) => {
+    hadFile = true;
+
+    const { filename: rawFilename, mimeType } = info || {};
+    const originalName =
+      typeof rawFilename === 'string' && rawFilename.trim() ? rawFilename.trim() : 'profile';
+
+    // Validate by ext and mime
+    const extFromName = path.extname(originalName).toLowerCase().replace('.', '');
+    const extOk = !!extFromName && ALLOWED.test(extFromName);
+    const mimeOk = ALLOWED.test((mimeType || '').split('/').pop() || '');
+
+    if (!extOk && !mimeOk) {
+      file.resume();
+      aborted = true;
+      return res.status(400).json({ message: 'Error: Images Only!' });
+    }
+
+    const base = path
+      .basename(originalName)
+      .replace(/\s+/g, '_')
+      .replace(/[^A-Za-z0-9._-]/g, '');
+
+    const resolvedExt =
+      (extOk ? `.${extFromName}` : (MIME_TO_EXT[(mimeType || '').toLowerCase()] || '')) || '';
+
+    let finalBase = base;
+    if (!resolvedExt || !base.toLowerCase().endsWith(resolvedExt.toLowerCase())) {
+      finalBase = `${base}${resolvedExt}`;
+    }
+
+    const finalName = `${uuidv4()}_${finalBase}`;
+    gcsFilePath = `${DEST_PREFIX}/profile_pics/${finalName}`;
+    mimeTypeGlobal = mimeType || 'application/octet-stream';
+
+    // const bucket = storage.bucket(BUCKET_NAME);
+    // const gcsFile = bucket.file(gcsFilePath);
+
+    // writeStream = gcsFile.createWriteStream({
+    //   metadata: { contentType: mimeTypeGlobal },
+    //   resumable: false,
+    //   validation: 'md5',
+    // });
+
+    // file.pipe(writeStream);
+
+    // writeStream.on('error', (err) => {
+    //   console.error('GCS write error:', err);
+    //   if (!uploadDone) {
+    //     uploadDone = true;
+    //     return res.status(500).json({ message: 'Upload failed' });
+    //   }
+    // });
+
+    // writeStream.on('finish', async () => {
+    //   try {
+    //     await bucket.file(gcsFilePath).makePublic().catch((err) => {
+    //       if (err && err.code !== 400) throw err;
+    //     });
+
+
+    const chunks = [];
+    file.on('data', (chunk) => chunks.push(chunk));
+
+    file.on('error', (err) => {
+      console.error('Upload stream error:', err);
+      if (!uploadDone) {
+        uploadDone = true;
+        return res.status(500).json({ message: 'Upload failed' });
+      }
+    });
+
+    file.on('end', async () => {
+      try {
+        await storage.send(new PutObjectCommand({
+          Bucket: BUCKET_NAME,
+          Key: gcsFilePath,
+          Body: Buffer.concat(chunks),
+          ContentType: mimeTypeGlobal,
+        }));
+
+        const imageUrl = publicUrl(BUCKET_NAME, gcsFilePath);
+        // main DB connection
+        const connection = await db.getConnection();
+
+        // Optionally update user profilePic in DB
+        await connection.query(
+          'UPDATE CreditPurchases SET transactionScreenshot = ? WHERE transactionScreenshot IS NULL and username = ? and transactionHash = ? and created_at >= NOW() - INTERVAL 1 HOUR ORDER BY created_at DESC LIMIT 1',
+          [imageUrl, username, txHash]
+        );
+
+        if (!uploadDone) {
+          uploadDone = true;
+          return res.status(200).json({
+            message: 'File uploaded successfully',
+            url: imageUrl
+          });
+        }
+      } catch (err) {
+        console.error('Post-upload error:', err);
+        if (!uploadDone) {
+          uploadDone = true;
+          return res.status(500).json({ message: 'Server error' });
+        }
+      }
+    });
+  });
+
+  busboy.on('error', (err) => {
+    console.error('Busboy error:', err);
+    if (!uploadDone) {
+      uploadDone = true;
+      return res.status(400).json({ message: 'Malformed upload' });
+    }
+  });
+
+  busboy.on('partsLimit', () => {
+    aborted = true;
+    if (!uploadDone) {
+      uploadDone = true;
+      return res.status(400).json({ message: 'Too many parts in form data' });
+    }
+  });
+
+  busboy.on('filesLimit', () => {
+    aborted = true;
+    if (!uploadDone) {
+      uploadDone = true;
+      return res.status(400).json({ message: 'Too many files' });
+    }
+  });
+
+  busboy.on('fieldsLimit', () => {
+    aborted = true;
+    if (!uploadDone) {
+      uploadDone = true;
+      return res.status(400).json({ message: 'Too many fields' });
+    }
+  });
+
+  busboy.on('finish', () => {
+    if (aborted) return;
+    if (!hadFile && !uploadDone) {
+      uploadDone = true;
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
+  });
+
+  req.pipe(busboy);
+
+});
 
 
 
@@ -7107,6 +7310,45 @@ server.post(PROXY + '/api/subscription/cancel', async (req, res) => {
 });
 
 
+
+// // Webhook handler for asynchronous events.
+// server.post("/webhook", async (req, res) => {
+//   let data;
+//   let eventType;
+//   // Check if webhook signing is configured.
+//   if (process.env.STRIPE_WEBHOOK_SECRET) {
+//     // Retrieve the event by verifying the signature using the raw body and secret.
+//     let event;
+//     let signature = req.headers["stripe-signature"];
+
+//     try {
+//       event = stripe.webhooks.constructEvent(
+//         req.rawBody,
+//         signature,
+//         process.env.STRIPE_WEBHOOK_SECRET
+//       );
+//     } catch (err) {
+//       console.log(`⚠️  Webhook signature verification failed.`);
+//       return res.sendStatus(400);
+//     }
+//     // Extract the object from the event.
+//     data = event.data;
+//     eventType = event.type;
+//   } else {
+//     // Webhook signing is recommended, but if the secret is not configured in `config.js`,
+//     // retrieve the event data directly from the request body.
+//     data = req.body.data;
+//     eventType = req.body.type;
+//   }
+
+//   if (eventType === "checkout.session.completed") {
+//     console.log(`🔔  Payment received!`);
+//   }
+
+//   res.sendStatus(200);
+// });
+
+
 // Stripe webhook handler
 server.post(PROXY + '/api/payments/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   const sig = req.headers['stripe-signature'];
@@ -7687,69 +7929,69 @@ function getStripeClientsForSessionId(sessionId) {
   return clients;
 }
 
-// /**
-//  * Retrieve the most recent PaymentIntents from Stripe with optional customer details
-//  */
-// async function getRecentPayments(limit = 10, includeCustomerDetails = true) {
-//   try {
-//     const paymentIntents = await stripe.paymentIntents.list({
-//       limit,
-//       expand: ['data.customer', 'data.latest_charge']
-//     });
-//     const results = [];
+/**
+ * Retrieve the most recent PaymentIntents from Stripe with optional customer details
+ */
+async function getRecentPayments(limit = 10, includeCustomerDetails = true) {
+  try {
+    const paymentIntents = await stripe.paymentIntents.list({
+      limit,
+      expand: ['data.customer', 'data.latest_charge']
+    });
+    const results = [];
 
-//     for (const pi of paymentIntents.data) {
-//       const paymentData = {
-//         id: pi.id,
-//         status: pi.status,
-//         amount: pi.amount,
-//         currency: pi.currency,
-//         description: pi.description,
-//         created: pi.created,
-//         customer_id: typeof pi.customer === 'string' ? pi.customer : pi.customer?.id || null,
-//         metadata: pi.metadata
-//       };
+    for (const pi of paymentIntents.data) {
+      const paymentData = {
+        id: pi.id,
+        status: pi.status,
+        amount: pi.amount,
+        currency: pi.currency,
+        description: pi.description,
+        created: pi.created,
+        customer_id: typeof pi.customer === 'string' ? pi.customer : pi.customer?.id || null,
+        metadata: pi.metadata
+      };
 
-//       if (includeCustomerDetails && pi.customer) {
-//         if (typeof pi.customer === 'object') {
-//           paymentData.customer = {
-//             id: pi.customer.id,
-//             email: pi.customer.email,
-//             name: pi.customer.name,
-//             phone: pi.customer.phone,
-//             metadata: pi.customer.metadata || {}
-//           };
-//         } else {
-//           const customerDetails = await getCustomerDetails(pi.customer);
-//           paymentData.customer = customerDetails || null;
-//         }
-//       }
+      if (includeCustomerDetails && pi.customer) {
+        if (typeof pi.customer === 'object') {
+          paymentData.customer = {
+            id: pi.customer.id,
+            email: pi.customer.email,
+            name: pi.customer.name,
+            phone: pi.customer.phone,
+            metadata: pi.customer.metadata || {}
+          };
+        } else {
+          const customerDetails = await getCustomerDetails(pi.customer);
+          paymentData.customer = customerDetails || null;
+        }
+      }
 
-//       results.push(paymentData);
-//     }
+      results.push(paymentData);
+    }
 
-//     console.log(`[DEBUG] Fetched ${results.length} payment intents`);
-//     return { success: true, count: results.length, payments: results };
-//   } catch (error) {
-//     const errorMessage = error.message || String(error);
-//     console.error('[ERROR] Stripe API error:', errorMessage);
-//     return { error: errorMessage, status: 'api_error' };
-//   }
-// }
+    console.log(`[DEBUG] Fetched ${results.length} payment intents`);
+    return { success: true, count: results.length, payments: results };
+  } catch (error) {
+    const errorMessage = error.message || String(error);
+    console.error('[ERROR] Stripe API error:', errorMessage);
+    return { error: errorMessage, status: 'api_error' };
+  }
+}
 
-// async function getRecentCheckoutSessions({ limit = 50, timeRangeStart, timeRangeEnd } = {}) {
-//   const params = {
-//     limit: Math.min(Math.max(parseInt(limit, 10) || 50, 1), 100),
-//     expand: ['data.payment_intent', 'data.payment_intent.latest_charge']
-//   };
+async function getRecentCheckoutSessions({ limit = 50, timeRangeStart, timeRangeEnd } = {}) {
+  const params = {
+    limit: Math.min(Math.max(parseInt(limit, 10) || 50, 1), 100),
+    expand: ['data.payment_intent', 'data.payment_intent.latest_charge']
+  };
 
-//   const created = {};
-//   if (Number.isFinite(timeRangeStart)) created.gte = Math.floor(timeRangeStart / 1000);
-//   if (Number.isFinite(timeRangeEnd)) created.lte = Math.floor(timeRangeEnd / 1000);
-//   if (Object.keys(created).length > 0) params.created = created;
+  const created = {};
+  if (Number.isFinite(timeRangeStart)) created.gte = Math.floor(timeRangeStart / 1000);
+  if (Number.isFinite(timeRangeEnd)) created.lte = Math.floor(timeRangeEnd / 1000);
+  if (Object.keys(created).length > 0) params.created = created;
 
-//   return stripe.checkout.sessions.list(params);
-// }
+  return stripe.checkout.sessions.list(params);
+}
 
 async function syncStripeTransactionsCron(limit = 100) {
   if (!process.env.STRIPE_SECRET_KEY) {
@@ -7873,6 +8115,346 @@ async function enforceStripeManualReviewRateLimit(userId) {
     throw err;
   }
 }
+
+// Sent from the client: timeRange, user, packageData from buy Credits page
+// server.post(PROXY + '/api/verify-stripe-payment-old', async (req, res) => {
+
+//   const { timeRange, user, packageData, checkoutSessionId } = req.body;
+
+//   if (!user || (!checkoutSessionId && (!packageData || !timeRange))) {
+//     return res.status(400).json({
+//       error: 'Missing required fields: user is required, and either checkoutSessionId or packageData + timeRange must be provided',
+//       status: 'invalid_input'
+//     });
+//   }
+
+//   // fetchRecentStripePayments(20, true).then(result => {
+
+//   let pkg = null;
+//   if (packageData) {
+//     const parsedAmount = Math.round(Number(packageData.amount || 0));
+//     const parsedDollars = Number(packageData.dollars || 0);
+//     const parsedCredits = Math.floor(Number(packageData.credits || 0));
+
+//     if (!Number.isFinite(parsedAmount) || parsedAmount <= 0 || !Number.isFinite(parsedDollars) || parsedDollars <= 0 || !Number.isFinite(parsedCredits) || parsedCredits <= 0) {
+//       return res.status(400).json({
+//         error: 'Invalid packageData payload. amount, dollars, and credits are required.',
+//         status: 'invalid_input'
+//       });
+//     }
+
+//     pkg = {
+//       amount: parsedAmount,
+//       dollars: parsedDollars,
+//       credits: parsedCredits,
+//     };
+//   }
+//   const timeOffsetMs = 3 * 60 * 1000; // 3 minutes buffer on either side
+//   const timeRangeStart = timeRange?.start ? (timeRange.start - timeOffsetMs) : null;   // unix ms
+//   const timeRangeEnd = timeRange?.end ? (timeRange.end + timeOffsetMs) : null;     // unix ms
+//   const userReferenceId = String(user.id || '').trim();
+
+//   if (!userReferenceId) {
+//     return res.status(400).json({
+//       error: 'User id is required for Stripe client_reference_id verification.',
+//       status: 'invalid_input'
+//     });
+//   }
+
+//   console.log(`[INFO] verify-stripe-payment: pkg=${JSON.stringify(pkg)}, timeRange=${JSON.stringify(timeRange)}, userRef=${userReferenceId}`);
+
+//   try {
+//     // ── Step 1: Verify through Checkout Session (client_reference_id) ──
+//     let matchedCheckoutSession = null;
+//     let matchedStripeClient = stripe;
+
+//     if (checkoutSessionId) {
+//       let directSession = null;
+//       let directStripeClient = stripe;
+//       let lastSessionErr = null;
+
+//       const stripeCandidates = getStripeClientsForSessionId(checkoutSessionId);
+
+//       for (const candidate of stripeCandidates) {
+//         try {
+//           directSession = await candidate.client.checkout.sessions.retrieve(checkoutSessionId, {
+//             expand: ['payment_intent', 'payment_intent.latest_charge']
+//           });
+//           directStripeClient = candidate.client;
+//           console.log(`[INFO] verify-stripe-payment: checkout session resolved via ${candidate.label} Stripe client`);
+//           break;
+//         } catch (err) {
+//           lastSessionErr = err;
+//           const msg = String(err?.message || '');
+//           if (!msg.includes('No such checkout.session')) {
+//             throw err;
+//           }
+//         }
+//       }
+
+//       if (!directSession) {
+//         const modeHint = /^cs_live_/i.test(checkoutSessionId)
+//           ? ' Session ID is live-mode; configure STRIPE_SECRET_KEY_LIVE with your sk_live key or point STRIPE_SECRET_KEY to live mode.'
+//           : (/^cs_test_/i.test(checkoutSessionId)
+//             ? ' Session ID is test-mode; configure STRIPE_SECRET_KEY_TEST with your sk_test key or point STRIPE_SECRET_KEY to test mode.'
+//             : '');
+
+//         const sessionErrMsg = String(lastSessionErr?.message || 'Unable to retrieve checkout session');
+//         return res.status(404).json({
+//           error: `${sessionErrMsg}.${modeHint}`.trim(),
+//           status: 'not_found'
+//         });
+//       }
+
+//       const directRef = String(directSession.client_reference_id || directSession.metadata?.userId || '').trim();
+//       if (directRef !== userReferenceId) {
+//         return res.status(403).json({
+//           error: 'Checkout session does not belong to the authenticated account.',
+//           status: 'forbidden'
+//         });
+//       }
+
+//       if (!pkg && Number.isFinite(Number(directSession.amount_total))) {
+//         pkg = {
+//           amount: Number(directSession.amount_total),
+//           dollars: Number(directSession.amount_total || 0) / 100,
+//           credits: Math.floor((Number(directSession.amount_total || 0) / 100) * 1000),
+//         };
+//       }
+
+//       matchedCheckoutSession = directSession;
+//       matchedStripeClient = directStripeClient || stripe;
+//     }
+
+//     if (!matchedCheckoutSession) {
+//       const recentSessions = await getRecentCheckoutSessions({
+//         limit: 100,
+//         timeRangeStart,
+//         timeRangeEnd,
+//       });
+
+//       let bestSession = null;
+//       let bestSessionScore = -1;
+
+//       for (const session of recentSessions.data || []) {
+//         const refId = String(session.client_reference_id || session.metadata?.userId || '').trim();
+//         if (!refId || refId !== userReferenceId) continue;
+//         if (session.mode !== 'payment') continue;
+
+//         const amountMatches = pkg ? Number(session.amount_total || 0) === Number(pkg.amount || 0) : true;
+//         if (!amountMatches) continue;
+
+//         const score =
+//           (session.payment_status === 'paid' ? 4 : 0) +
+//           (session.status === 'complete' ? 2 : 0) +
+//           (session.payment_intent ? 2 : 0);
+
+//         if (score > bestSessionScore) {
+//           bestSessionScore = score;
+//           bestSession = session;
+//         }
+//       }
+
+//       matchedCheckoutSession = bestSession;
+//     }
+
+//     let potentialVerifiedPayment = null;
+//     let matchSource = 'checkout_session_client_reference_id';
+
+//     if (matchedCheckoutSession) {
+//       const paymentIntentObj = matchedCheckoutSession.payment_intent && typeof matchedCheckoutSession.payment_intent === 'object'
+//         ? matchedCheckoutSession.payment_intent
+//         : null;
+//       const paymentIntentId = paymentIntentObj?.id || (typeof matchedCheckoutSession.payment_intent === 'string' ? matchedCheckoutSession.payment_intent : null);
+//       const resolvedStripeClient = matchedStripeClient || stripe;
+//       const resolvedPi = paymentIntentObj || (paymentIntentId ? await resolvedStripeClient.paymentIntents.retrieve(paymentIntentId, { expand: ['latest_charge'] }) : null);
+
+//       if (!resolvedPi) {
+//         return res.status(404).json({
+//           error: 'Checkout session found but no linked payment intent was available yet.',
+//           status: 'not_found',
+//         });
+//       }
+
+//       const resolvedCharge = resolvedPi.latest_charge && typeof resolvedPi.latest_charge === 'object' ? resolvedPi.latest_charge : null;
+
+//       potentialVerifiedPayment = {
+//         id: resolvedPi.id,
+//         stripeChargeId: resolvedCharge?.id || null,
+//         status: resolvedPi.status || (matchedCheckoutSession.payment_status === 'paid' ? 'succeeded' : 'processing'),
+//         amount: Number(resolvedPi.amount || matchedCheckoutSession.amount_total || 0),
+//         currency: String(resolvedPi.currency || matchedCheckoutSession.currency || 'USD').toUpperCase(),
+//         created: resolvedPi.created,
+//         customer: {
+//           email: matchedCheckoutSession.customer_details?.email || matchedCheckoutSession.customer_email || '',
+//           name: matchedCheckoutSession.customer_details?.name || '',
+//           phone: matchedCheckoutSession.customer_details?.phone || '',
+//         },
+//         _matchScore: 5,
+//         _matchSource: matchSource,
+//         stripeCheckoutSessionId: matchedCheckoutSession.id,
+//       };
+
+//       if (!pkg && Number.isFinite(Number(potentialVerifiedPayment.amount))) {
+//         pkg = {
+//           amount: Number(potentialVerifiedPayment.amount),
+//           dollars: Number(potentialVerifiedPayment.amount || 0) / 100,
+//           credits: Math.floor((Number(potentialVerifiedPayment.amount || 0) / 100) * 1000),
+//         };
+//       }
+//     }
+
+//     // No Checkout Session match means no auto-verifiable payment candidate.
+//     if (!potentialVerifiedPayment) {
+//       matchSource = 'checkout_session_client_reference_id';
+//     }
+
+//     if (!potentialVerifiedPayment) {
+//       if (!pkg) {
+//         return res.status(400).json({
+//           error: 'Unable to determine purchase package for manual review.',
+//           status: 'invalid_input'
+//         });
+//       }
+
+//       await enforceStripeManualReviewRateLimit(user.id);
+
+//       const pendingResult = await stripeCreditPurchases({
+//         username: user.username,
+//         userId: user.id,
+//         name: user.name,
+//         email: user.email,
+//         walletAddress: 'Stripe',
+//         transactionId: null,
+//         stripePaymentIntentId: null,
+//         stripeChargeId: null,
+//         blockExplorerLink: 'Stripe Payment',
+//         currency: 'USD',
+//         amount: pkg.amount,
+//         cryptoAmount: pkg.dollars,
+//         rate: null,
+//         session_id: user.id,
+//         orderLoggingEnabled: false,
+//         userAgent: user.userAgent,
+//         ip: user.ip,
+//         dollars: pkg.dollars,
+//         credits: pkg.credits,
+//         status: 'processing',
+//         shouldCredit: false,
+//         manualReviewReason: 'no_auto_match',
+//       });
+
+//       console.log('[INFO] No payment matched time window + amount. Queued for manual review.');
+//       return res.status(202).json({
+//         success: true,
+//         status: 'pending',
+//         pending: true,
+//         autoApproved: false,
+//         purchaseId: pendingResult?.purchaseId || null,
+//         matchSource,
+//         message: 'This payment could not be auto-verified and has been submitted for manual review. Credits will be applied once approved.',
+//       });
+//     }
+
+//     // ── Step 3: Package lookup ─────────────────────────────────────────────
+//     const PACKAGES = [
+//       { credits: 5000, dollars: 5.25, label: '$5.00', color: '#2196f3', priceId: 'price_1SR9lZEViYxfJNd20x2uwukQ' },
+//       { credits: 10000, dollars: 9.85, label: '$10.00', color: '#9c27b0', popular: true, priceId: 'price_1SR9kzEViYxfJNd27aLA7kFW' },
+//       // { credits: 20000,  dollars: 20,  label: '$20.00',  color: '#f57c00', priceId: 'price_1SR9mrEViYxfJNd2dD5NHFoL' },
+//       { credits: 25000, dollars: 24.50, label: '$25.00', color: '#e91e63' },
+//       { credits: 50000, dollars: 48.50, label: '$50.00', color: '#ff5722' },
+//       { credits: 100000, dollars: 95, label: '$100.00', color: '#795548' },
+//     ];
+
+//     const matchedPackage = PACKAGES.find(p => Math.round(p.dollars) === Math.round(potentialVerifiedPayment.amount / 100)); //round to nearest dollar to avoid minor discrepancies (e.g. $9.85 stored as 985 but package = 1000).
+
+//     if (!matchedPackage) {
+//       console.error(`[ERROR] No package for amount $${Math.round(potentialVerifiedPayment.amount / 100)}`);
+//       return res.status(400).json({ error: 'Unrecognized payment amount — package not found', status: 'invalid_amount' });
+//     }
+
+//     const autoApproved = potentialVerifiedPayment.status === 'succeeded'
+//       && Number(potentialVerifiedPayment._matchScore || 0) >= STRIPE_AUTO_APPROVE_MIN_MATCH_SCORE;
+
+//     const purchaseData = {
+//       username: user.username,
+//       userId: user.id,
+//       name: user.name,
+//       email: user.email,
+//       walletAddress: 'Stripe',
+//       transactionId: potentialVerifiedPayment.id,
+//       stripePaymentIntentId: potentialVerifiedPayment.id,
+//       stripeChargeId: potentialVerifiedPayment.stripeChargeId || null,
+//       stripeCheckoutSessionId: potentialVerifiedPayment.stripeCheckoutSessionId || null,
+//       blockExplorerLink: 'Stripe Payment',
+//       currency: 'USD',
+//       amount: potentialVerifiedPayment.amount,
+//       cryptoAmount: matchedPackage.dollars,
+//       rate: null,
+//       session_id: user.id,
+//       orderLoggingEnabled: false,
+//       userAgent: user.userAgent,
+//       ip: user.ip,
+//       dollars: matchedPackage.dollars,
+//       credits: matchedPackage.credits,
+//       status: autoApproved ? 'completed' : 'processing',
+//       shouldCredit: autoApproved,
+//       manualReviewReason: autoApproved ? null : `score_${Number(potentialVerifiedPayment._matchScore || 0)}_status_${potentialVerifiedPayment.status}`,
+//     };
+
+//     if (!autoApproved) {
+//       const [existingPending] = await knex('CreditPurchases')
+//         .where('paymentMethod', 'stripe')
+//         .where('stripePaymentIntentId', potentialVerifiedPayment.id)
+//         .whereIn('status', ['processing', 'pending'])
+//         .select('id')
+//         .limit(1);
+
+//       if (existingPending) {
+//         return res.status(202).json({
+//           success: true,
+//           status: 'pending',
+//           pending: true,
+//           autoApproved: false,
+//           purchaseId: existingPending.id,
+//           paymentIntentId: potentialVerifiedPayment.id,
+//           message: 'This payment could not be auto-verified and is already pending manual review.',
+//         });
+//       }
+
+//       await enforceStripeManualReviewRateLimit(user.id);
+
+//       await knex('stripeTransactions')
+//         .where('stripePaymentIntentId', potentialVerifiedPayment.id)
+//         .update({ status: 'pending', syncedAt: knex.fn.now() })
+//         .catch(() => { });
+
+//       await stripeCreditPurchases(purchaseData);
+
+//       console.log(`[INFO] Stripe payment queued for manual review. pi=${potentialVerifiedPayment.id}, score=${potentialVerifiedPayment._matchScore}`);
+//       return res.status(202).json({
+//         success: true,
+//         status: 'pending',
+//         pending: true,
+//         autoApproved: false,
+//         paymentIntentId: potentialVerifiedPayment.id,
+//         matchSource: potentialVerifiedPayment._matchSource,
+//         matchScore: potentialVerifiedPayment._matchScore,
+//         message: 'This payment could not be auto-verified and has been submitted for manual review. Credits will be applied once approved.',
+//       });
+//     }
+
+//     await stripeCreditPurchases(purchaseData);
+
+//     console.log(`[INFO] Payment verification complete. status=${potentialVerifiedPayment.status}, source=${potentialVerifiedPayment._matchSource}, score=${potentialVerifiedPayment._matchScore}`);
+//     return res.json(potentialVerifiedPayment);
+
+//   } catch (error) {
+//     console.error('Payment verification error:', error.message);
+//     const statusCode = Number(error?.httpStatus) || 500;
+//     res.status(statusCode).json({ error: error.message || 'Payment verification failed', status: statusCode === 429 ? 'rate_limited' : 'server_error' });
+//   }
+// });
 
 
 server.post('/api/verify-stripe-payment', async (req, res) => {

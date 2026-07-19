@@ -32,7 +32,7 @@ const PLANS: Plan[] = [
     borderClass: 'border-surface-3',
     buttonClass: 'bg-surface-3 text-text-muted hover:bg-surface cursor-default',
     features: [
-      'Earn up to 1,000 bonus credits per month',
+      'Earn up bonus credits ',
       'Ads displayed',
       'Standard quality only',
       'File size limits apply',
