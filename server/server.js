@@ -8699,6 +8699,7 @@ async function stripeCreditPurchases(data) {
         blockExplorerLink: "www.stripe.com",
         currency,
         amount,
+        amountPaid: amount/100 || dollars,
         cryptoAmount,
         package: packageColumnValue,
         status,
@@ -8976,174 +8977,469 @@ server.get(PROXY + '/api/get-stripe-subscriptions-all', async (req, res) => {
 
 
 
-// Sent from the client: timeRange, user, packageData from buy Credits page
+// Sent from the client: checkoutSessionId + user from subscription checkout page
 server.post(PROXY + '/api/verify-stripe-subscription', async (req, res) => {
-
-  const { timeRange, user, subscriptionData } = req.body;
-
-  // example
-  // { "timeRange": { "start": null, "end": 1767385448125 }, "subscriptionData": { "amount": 1000, "dollars": 10, "plan": "Premium", "planType": "premium" }, "user": { "id": "LCBGL8EJ7L", "email": "testman@gmail.com", "username": "testman", "phone": "", "name": " ", "ip": "108.214.170.129", "userAgent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:146.0) Gecko/20100101 Firefox/146.0" } }
-
-  const paymentData = {
-    timeRange,
-    package: subscriptionData,
-    // plan: subscriptionData,
-    user
-  };
-
   try {
+    const { checkoutSessionId, user } = req.body;
 
-
-    const { package: pkg, timeRange, user } = paymentData;
-
-    if (!pkg || !timeRange || !user) {
+    if (!checkoutSessionId) {
       return res.status(400).json({
-        error: 'Missing required fields: package, timeRange, and user are required',
-        status: 'invalid_input'
+        success: false,
+        message: 'Missing checkoutSessionId'
       });
     }
 
-    console.log(`[INFO] Verifying subscription data for package: ${JSON.stringify(pkg)}, timeRange: ${JSON.stringify(timeRange)}, user: ${JSON.stringify(user)}`);
-
-    const timeRangeStart = timeRange.start;
-    const timeRangeEnd = timeRange.end;
-
-    // Fetch recent payments to search through
-    const details = await getRecentPayments(20, true);
-
-    // console.log("Recent payments fetched:", details.payments);
-
-    if (details.error) {
-      console.error('[ERROR] Could not fetch recent payments:', details.error);
-      const statusCode = details.status === 'server_error' ? 500 : 404;
-      return res.status(statusCode).json(details);
-    }
-
-    let possiblePaymentFound = false;
-    const possibleMatchingPayments = [];
-
-    console.log(`[INFO] Searching through ${details.payments.length} recent payments for matches.`);
-
-    // Verify creation time and amount
-    for (const payment of details.payments || []) {
-      const created = payment.created * 1000; // convert to ms
-
-      // console.log(`[DEBUG] Checking payment ${payment.id}: created=${created}, amount=${payment.amount}`);
-
-      // Check time range
-      if (timeRangeStart && created < timeRangeStart) {
-        continue;
-      }
-      if (timeRangeEnd && created > timeRangeEnd) {
-        continue;
-      }
-
-      // Check payment amount
-      if (payment.amount !== pkg.amount) {
-        continue;
-      }
-
-      console.log(`[DEBUG] Possible matching payment found: ${payment.id}`);
-
-      possiblePaymentFound = true;
-      possibleMatchingPayments.push(payment);
-    }
-
-
-    console.log(' Is there a possibleMatchingPayment?: ', possiblePaymentFound);
-
-    if (!possiblePaymentFound) {
-      console.log('[INFO] No possible matching payments found in the specified time range.');
-      return res.status(404).json({
-        error: 'No PaymentIntent found in the specified time range',
-        status: 'not_found'
+    if (!user?.id || !user?.username) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing user details'
       });
     }
 
-    let potentialVerifiedPayment = null;
+    let session = null;
+    let sessionStripeClient = stripe;
+    let lastSessionErr = null;
 
-    // If multiple possible payments found, verify customer details
-    if (possibleMatchingPayments.length > 1) {
-      for (const payment of possibleMatchingPayments) {
-        const customerData = payment.customer || {};
-        const email = customerData.email || '';
-        const name = customerData.name || '';
-        const phone = customerData.phone || '';
-
-        if (email !== user.email) {
-          continue;
-        }
-        if (name !== user.name) {
-          continue;
-        }
-        if (phone !== user.phone) {
-          continue;
-        }
-
-        potentialVerifiedPayment = payment;
+    const stripeCandidates = getStripeClientsForSessionId(checkoutSessionId);
+    for (const candidate of stripeCandidates) {
+      try {
+        session = await candidate.client.checkout.sessions.retrieve(checkoutSessionId, {
+          expand: ['subscription', 'customer']
+        });
+        sessionStripeClient = candidate.client;
+        console.log(`[INFO] verify-stripe-subscription: checkout session resolved via ${candidate.label} Stripe client`);
         break;
+      } catch (err) {
+        lastSessionErr = err;
+        const msg = String(err?.message || '');
+        if (!msg.includes('No such checkout.session')) {
+          throw err;
+        }
       }
-    } else {
-      potentialVerifiedPayment = possibleMatchingPayments[0];
     }
 
-    if (!potentialVerifiedPayment) {
+    if (!session) {
+      const modeHint = /^cs_live_/i.test(checkoutSessionId)
+        ? ' Session ID is live-mode; configure STRIPE_SECRET_KEY_LIVE with your sk_live key or point STRIPE_SECRET_KEY to live mode.'
+        : (/^cs_test_/i.test(checkoutSessionId)
+          ? ' Session ID is test-mode; configure STRIPE_SECRET_KEY_TEST with your sk_test key or point STRIPE_SECRET_KEY to test mode.'
+          : '');
+
+      const sessionErrMsg = String(lastSessionErr?.message || 'Unable to retrieve checkout session');
       return res.status(404).json({
-        error: 'No matching PaymentIntent found after verification',
-        status: 'not_found'
+        success: false,
+        message: `${sessionErrMsg}.${modeHint}`.trim(),
       });
     }
 
-    console.log(`[INFO] Verified PaymentIntent Subscription: ${JSON.stringify(potentialVerifiedPayment)}`);
+    if (session.mode !== 'subscription') {
+      return res.status(400).json({
+        success: false,
+        message: `Checkout session is not a subscription session (mode=${session.mode || 'unknown'})`
+      });
+    }
+
+    if (session.payment_status !== 'paid') {
+      return res.status(400).json({
+        success: false,
+        message: `Payment not completed. Status: ${session.payment_status}`
+      });
+    }
 
     const PACKAGES = [
-      { credits: 2500, dollars: 2.50, label: "Basic", color: '#4caf50', priceId: 'price_1SR08eEViYxfJNd2ihaRH9Fk' },
-      { credits: 5250, dollars: 5, label: "Standard", color: '#2196f3', priceId: 'price_1SR09uEViYxfJNd2jL3JklFl' },
-      { credits: 11200, dollars: 10, label: "Premium", color: '#9c27b0', priceId: 'price_1SR0A9EViYxfJNd258I14txA' },
-
+      // { credits: 2500, dollars: 2.50, label: 'Basic', planType: 'basic', priceId: 'price_1SR08eEViYxfJNd2ihaRH9Fk' },
+      { credits: 5250, dollars: 5, label: 'Standard', planType: 'standard', priceId: 'price_1SR09uEViYxfJNd2jL3JklFl' },
+      { credits: 11200, dollars: 10, label: 'Premium', planType: 'premium', priceId: 'price_1SR0A9EViYxfJNd258I14txA' },
     ];
 
-    const packageData = PACKAGES.find(pkg => pkg.dollars === potentialVerifiedPayment.amount / 100);
-
-    if (potentialVerifiedPayment.status == 'succeeded') {
-      // Log the purchase in the database
-      const data = {
-        username: user.username,
-        userId: user.id,
-        name: user.name,
-        email: user.email,
-        walletAddress: "Stripe",
-        transactionId: potentialVerifiedPayment.id,
-        stripe_customer_id: potentialVerifiedPayment.customer,
-        stripe_subscription_id: potentialVerifiedPayment.created, // using created time as a placeholder
-        priceId: packageData.priceId,
-        label: packageData.label,
-        blockExplorerLink: 'Stripe Payment',
-        currency: 'USD',
-        amount: potentialVerifiedPayment.amount,
-        cryptoAmount: packageData.dollars,
-        rate: null,
-        session_id: user.id, // this is a useless metric here but i am keep it for reference and to maintain similar data structure
-        orderLoggingEnabled: false,
-        userAgent: user.userAgent,
-        ip: user.ip,
-        dollars: packageData.dollars,
-        credits: packageData.credits,
-        planType: packageData.label.toLowerCase(),
-        plan: packageData.label
-
-      }
-
-      await stripeBuySubscription(data);
+    const packageData = PACKAGES.find((pkg) => Math.abs(Number(pkg.dollars) - (Number(session.amount_total || 0) / 100)) < 0.5);
+    if (!packageData) {
+      return res.status(400).json({
+        success: false,
+        message: `Unrecognized subscription amount: ${(Number(session.amount_total || 0) / 100).toFixed(2)}`
+      });
     }
 
-    console.log('Payment verification completed successfully.');
+    const subscriptionId = typeof session.subscription === 'string'
+      ? session.subscription
+      : session.subscription?.id || null;
 
-    return res.json(potentialVerifiedPayment);
+    const stripeSubscription = subscriptionId
+      ? await sessionStripeClient.subscriptions.retrieve(subscriptionId)
+      : null;
 
+    const data = {
+      username: user.username,
+      userId: user.id,
+      name: user.name,
+      email: user.email,
+      walletAddress: 'Stripe',
+      transactionId: session.payment_intent || session.id,
+      stripe_customer_id: typeof session.customer === 'string' ? session.customer : session.customer?.id || null,
+      stripe_subscription_id: subscriptionId,
+      priceId: packageData.priceId,
+      label: packageData.label,
+      blockExplorerLink: 'Stripe Payment',
+      currency: String(session.currency || 'usd').toUpperCase(),
+      amount: Number(session.amount_total || 0),
+      cryptoAmount: packageData.dollars,
+      rate: null,
+      session_id: session.id,
+      orderLoggingEnabled: false,
+      userAgent: user.userAgent,
+      ip: user.ip,
+      dollars: packageData.dollars,
+      credits: packageData.credits,
+      planType: packageData.planType,
+      plan: packageData.label,
+    };
+
+    await stripeBuySubscription(data);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Subscription payment verified successfully',
+      data: {
+        sessionId: session.id,
+        status: session.payment_status,
+        customerEmail: session.customer_details?.email || session.customer_email,
+        amount: session.amount_total,
+        subscriptionId,
+        subscriptionStatus: stripeSubscription?.status || null,
+      }
+    });
   } catch (error) {
-    console.error('Payment verification error:', error.message);
-    res.status(500).json({ error: 'Payment verification failed' });
+    console.error('Subscription verification error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error during subscription verification',
+      error: error.message
+    });
+  }
+});
+
+function getStripeClientsForSubscriptionLookup() {
+  const clients = [];
+  const addClient = (client, label) => {
+    if (!client) return;
+    if (clients.some((entry) => entry.client === client)) return;
+    clients.push({ client, label });
+  };
+
+  addClient(stripe, 'default');
+  addClient(stripeLive, 'live');
+  addClient(stripeTest, 'test');
+  return clients;
+}
+
+function normalizeMembershipLevel(planValue) {
+  const raw = String(planValue || '').trim().toLowerCase();
+  if (raw.includes('premium')) return 'premium';
+  if (raw.includes('standard')) return 'standard';
+  return 'free';
+}
+
+function getMonthlySubscriptionBonusCredits(level) {
+  const normalizedLevel = normalizeMembershipLevel(level);
+  if (normalizedLevel === 'premium') return 5000;
+  if (normalizedLevel === 'standard') return 2500;
+  return 0;
+}
+
+async function ensureSubscriptionBonusAwardsTable() {
+  await knex.raw(`
+    CREATE TABLE IF NOT EXISTS subscriptionBonusAwards (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      userId VARCHAR(10) NOT NULL,
+      bonusMonth CHAR(7) NOT NULL,
+      subscriptionLevel VARCHAR(20) NOT NULL,
+      creditsAwarded INT NOT NULL DEFAULT 0,
+      relatedWalletTransactionId VARCHAR(36) DEFAULT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_subscription_bonus_user_month (userId, bonusMonth),
+      KEY idx_subscription_bonus_month (bonusMonth),
+      KEY idx_subscription_bonus_user (userId)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+  `);
+}
+
+async function resolveUserSubscriptionLevel(userId) {
+  const resolvedUserId = String(userId || '').trim();
+  if (!resolvedUserId) {
+    return {
+      level: 'free',
+      active: false,
+      status: 'inactive',
+      expiresAt: null,
+      subscription: null,
+      checkedWithStripe: false,
+    };
+  }
+
+  const subscriptionRow = await knex('subscriptions')
+    .where('user_id', resolvedUserId)
+    .orderByRaw(`CASE
+      WHEN status IN ('active', 'trialing', 'canceling') THEN 0
+      WHEN status IN ('past_due', 'unpaid') THEN 1
+      ELSE 2
+    END`)
+    .orderBy('current_period_end', 'desc')
+    .orderBy('updated_at', 'desc')
+    .first();
+
+  if (!subscriptionRow) {
+    await knex('userData').where('id', resolvedUserId).update({ accountPlan: 'free' }).catch(() => {});
+    return {
+      level: 'free',
+      active: false,
+      status: 'inactive',
+      expiresAt: null,
+      subscription: null,
+      checkedWithStripe: false,
+    };
+  }
+
+  let mergedRow = { ...subscriptionRow };
+  let checkedWithStripe = false;
+
+  if (subscriptionRow.stripe_subscription_id) {
+    const stripeClients = getStripeClientsForSubscriptionLookup();
+    let stripeSubscription = null;
+
+    for (const candidate of stripeClients) {
+      try {
+        stripeSubscription = await candidate.client.subscriptions.retrieve(subscriptionRow.stripe_subscription_id);
+        checkedWithStripe = true;
+        console.log(`[INFO] subscription-level: resolved ${subscriptionRow.stripe_subscription_id} via ${candidate.label} Stripe client`);
+        break;
+      } catch (err) {
+        const msg = String(err?.message || '');
+        if (!msg.includes('No such subscription')) {
+          console.warn(`[WARN] subscription-level Stripe lookup failed (${candidate.label}):`, msg);
+        }
+      }
+    }
+
+    if (stripeSubscription) {
+      const remotePatch = {
+        status: stripeSubscription.status || mergedRow.status,
+        current_period_start: stripeSubscription.current_period_start ? toMySQLDateTime(stripeSubscription.current_period_start) : mergedRow.current_period_start,
+        current_period_end: stripeSubscription.current_period_end ? toMySQLDateTime(stripeSubscription.current_period_end) : mergedRow.current_period_end,
+        cancel_at_period_end: stripeSubscription.cancel_at_period_end ? 1 : 0,
+        canceled_at: stripeSubscription.canceled_at ? toMySQLDateTime(stripeSubscription.canceled_at) : null,
+        updated_at: knex.fn.now(),
+      };
+
+      await knex('subscriptions')
+        .where('id', mergedRow.id)
+        .update(remotePatch)
+        .catch((err) => console.warn('[WARN] subscription-level DB sync skipped:', err.message || err));
+
+      mergedRow = { ...mergedRow, ...remotePatch };
+    }
+  }
+
+  const expiresAt = mergedRow.current_period_end ? new Date(mergedRow.current_period_end).toISOString() : null;
+  const expiresAtMs = expiresAt ? new Date(expiresAt).getTime() : null;
+  const now = Date.now();
+  const status = String(mergedRow.status || '').toLowerCase();
+  const isActiveStatus = ['active', 'trialing', 'canceling'].includes(status);
+  const hasUsableExpiry = expiresAtMs != null;
+  const isExpired = hasUsableExpiry && expiresAtMs <= now;
+  const levelFromPlan = normalizeMembershipLevel(mergedRow.plan_name || mergedRow.plan_id);
+  const isConfirmedActive = isActiveStatus && ((hasUsableExpiry && !isExpired) || (!hasUsableExpiry && checkedWithStripe));
+  const effectiveLevel = isConfirmedActive ? levelFromPlan : 'free';
+  const effectiveStatus = effectiveLevel === 'free' ? (isExpired ? 'expired' : status || 'inactive') : status;
+
+  if (effectiveLevel === 'free' && status !== effectiveStatus) {
+    await knex('subscriptions')
+      .where('id', mergedRow.id)
+      .update({ status: effectiveStatus, updated_at: knex.fn.now() })
+      .catch(() => {});
+  }
+
+  await knex('userData')
+    .where('id', resolvedUserId)
+    .update({ accountPlan: effectiveLevel })
+    .catch(() => {});
+
+  return {
+    level: effectiveLevel,
+    active: effectiveLevel !== 'free',
+    status: effectiveStatus,
+    expiresAt,
+    subscription: mergedRow,
+    checkedWithStripe,
+  };
+}
+
+async function awardMonthlySubscriptionBonus(userId, options = {}) {
+  const resolvedUserId = String(userId || '').trim();
+  if (!resolvedUserId) {
+    return { success: false, awarded: false, reason: 'missing_user_id' };
+  }
+
+  await ensureSubscriptionBonusAwardsTable();
+
+  const awardDate = options.awardDate ? new Date(options.awardDate) : new Date();
+  const awardMonth = Number.isNaN(awardDate.getTime())
+    ? new Date().toISOString().slice(0, 7)
+    : awardDate.toISOString().slice(0, 7);
+
+  const subscriptionState = await resolveUserSubscriptionLevel(resolvedUserId);
+  const creditsToAward = getMonthlySubscriptionBonusCredits(subscriptionState.level);
+
+  if (creditsToAward <= 0) {
+    return {
+      success: true,
+      awarded: false,
+      reason: 'not_eligible',
+      level: subscriptionState.level,
+      awardMonth,
+    };
+  }
+
+  const result = await knex.transaction(async (trx) => {
+    const existingAward = await trx('subscriptionBonusAwards')
+      .where({ userId: resolvedUserId, bonusMonth: awardMonth })
+      .first()
+      .forUpdate();
+
+    if (existingAward) {
+      return {
+        success: true,
+        awarded: false,
+        reason: 'already_awarded',
+        level: subscriptionState.level,
+        awardMonth,
+        creditsAwarded: existingAward.creditsAwarded,
+      };
+    }
+
+    const userRow = await trx('userData')
+      .where('id', resolvedUserId)
+      .select('username', 'credits')
+      .first()
+      .forUpdate();
+
+    if (!userRow) {
+      return { success: false, awarded: false, reason: 'user_not_found' };
+    }
+
+    await trx('userData')
+      .where('id', resolvedUserId)
+      .increment('credits', creditsToAward);
+
+    const updatedUserRow = await trx('userData')
+      .where('id', resolvedUserId)
+      .select('username', 'credits')
+      .first();
+
+    const walletTransactionId = require('crypto').randomUUID();
+    await safeInsertWalletTransaction({
+      id: walletTransactionId,
+      userId: resolvedUserId,
+      type: 'bonus',
+      amount: creditsToAward,
+      balanceAfter: Number(updatedUserRow?.credits || 0),
+      description: `Monthly ${subscriptionState.level} subscription bonus (${awardMonth})`,
+      created_at: trx.fn.now(),
+    }, trx);
+
+    await trx('subscriptionBonusAwards').insert({
+      userId: resolvedUserId,
+      bonusMonth: awardMonth,
+      subscriptionLevel: subscriptionState.level,
+      creditsAwarded: creditsToAward,
+      relatedWalletTransactionId: walletTransactionId,
+    });
+
+    return {
+      success: true,
+      awarded: true,
+      reason: 'awarded',
+      level: subscriptionState.level,
+      awardMonth,
+      creditsAwarded: creditsToAward,
+      username: updatedUserRow?.username || userRow.username || null,
+      balanceAfter: Number(updatedUserRow?.credits || 0),
+    };
+  });
+
+  if (result.awarded && result.username) {
+    await CreateNotification(
+      resolvedUserId,
+      'subscription_monthly_bonus',
+      'Monthly Subscription Bonus Applied',
+      `Your ${result.level} monthly subscription bonus of ${Number(result.creditsAwarded || 0).toLocaleString()} credits has been added.`,
+      'purchase',
+      result.username,
+      'success'
+    ).catch((err) => {
+      console.warn('[WARN] subscription monthly bonus notification failed:', err.message || err);
+    });
+  }
+
+  return result;
+}
+
+async function runMonthlySubscriptionBonusBatch(options = {}) {
+  await ensureSubscriptionBonusAwardsTable();
+
+  const candidateRows = await knex('subscriptions')
+    .distinct('user_id')
+    .whereIn('status', ['active', 'trialing', 'canceling']);
+
+  let awardedUsers = 0;
+  let skippedUsers = 0;
+  let totalCreditsAwarded = 0;
+
+  for (const row of candidateRows) {
+    const result = await awardMonthlySubscriptionBonus(row.user_id, options);
+    if (result?.awarded) {
+      awardedUsers += 1;
+      totalCreditsAwarded += Number(result.creditsAwarded || 0);
+    } else {
+      skippedUsers += 1;
+    }
+  }
+
+  console.log(`🎁 Monthly subscription bonus batch complete: ${awardedUsers} awarded, ${skippedUsers} skipped, ${totalCreditsAwarded} credits total.`);
+
+  return {
+    success: true,
+    awardedUsers,
+    skippedUsers,
+    totalCreditsAwarded,
+    processedUsers: candidateRows.length,
+  };
+}
+
+server.get(PROXY + '/api/subscription-level', authenticateToken, async (req, res) => {
+  try {
+    const userId = String(req.user?.id || '').trim();
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const result = await resolveUserSubscriptionLevel(userId);
+
+    return res.status(200).json({
+      success: true,
+      level: result.level,
+      active: result.active,
+      status: result.status,
+      expiresAt: result.expiresAt,
+      checkedWithStripe: result.checkedWithStripe,
+      subscriptionId: result.subscription?.stripe_subscription_id || null,
+      planName: result.subscription?.plan_name || null,
+      planId: result.subscription?.plan_id || null,
+    });
+  } catch (error) {
+    console.error('Error fetching subscription status:', error);
+    return res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
@@ -9177,25 +9473,32 @@ async function stripeBuySubscription(data) {
       credits
     } = data;
 
-    console.log('💰 Logging Stripe purchase for user:', username);
+    console.log('💰 Logging Stripe subscription for user:', username);
 
 
     console.log("data: ", data)
 
 
     // check for duplicate transactionId
-    if (transactionId) {
+    if (stripe_subscription_id) {
       // const [existing] = await pool.execute(
       //   'SELECT * FROM CreditPurchases WHERE transactionHash = ?',
       //   [transactionId]
       // );
-      const existing = await knex('CreditPurchases')
-        .where('transactionId', transactionId);
+      const existing = await knex('subscriptions')
+        .where('stripe_subscription_id', stripe_subscription_id);
       if (existing.length > 0) {
-        console.log('⚠️  Duplicate transaction ID detected:', transactionId);
-        return ({ error: 'Duplicate transaction ID' });
+        console.log('⚠️  Duplicate stripe_subscription_id ID detected:', stripe_subscription_id);
+        // print the active user subscription details
+        const activeSubscription = await knex('subscriptions')
+          .where('user_id', userId)
+          .andWhere('status', 'active');
+        console.log('Active subscription for user:', activeSubscription);
+        return ({ error: 'Duplicate stripe_subscription_id ID' });
       }
     }
+
+    
 
     // Basic validation
     try {
@@ -9283,6 +9586,10 @@ async function stripeBuySubscription(data) {
         package: dollars + "$ " + planType + '_subscription'
       });
       const purchases = { insertId: purchaseInsertId };
+
+      console.log('Purchase logged with ID:', purchaseInsertId, "upgrading account plan for user:", userId, "to plan:", planType, "account update ID:", accountUpdateId);
+
+      const [accountUpdateId] = await knex('userData').update({ accountPlan: planType }).where('id', userId);
 
       await CreateNotification(
         'credits_purchased',

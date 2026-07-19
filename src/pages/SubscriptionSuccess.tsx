@@ -4,7 +4,7 @@
  * Displayed after successful Stripe subscription checkout
  */
 
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Container,
   Box,
@@ -27,19 +27,29 @@ import {
   ArrowForward as ArrowForwardIcon
 } from '@mui/icons-material';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { useToast } from '../contexts/ToastContext';
+import { useToast } from '../context/ToastContext';
+import { useAuth } from '../context/AuthContext';
+import { api } from '../lib/api';
 
 const SubscriptionSuccess = () => {
   const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState(null);
   const [error, setError] = useState(null);
+
+  const { user, refreshUser } = useAuth();
+  // const [searchParams] = useSearchParams();
+
+  // const sessionId = searchParams.get('session_id');
+  // const [status, setStatus] = useState('loading');
+  // const [message, setMessage] = useState('Verifying your payment...');
   const navigate = useNavigate();
   const { showToast } = useToast();
+  
 
   useEffect(() => {
     const sessionId = searchParams.get('session_id');
-    
+
     if (!sessionId) {
       setError('No session ID found');
       setLoading(false);
@@ -51,22 +61,52 @@ const SubscriptionSuccess = () => {
 
   const verifySession = async (sessionId) => {
     try {
-      const API_URL = import.meta.env.VITE_API_SERVER_URL || 'http://localhost:4000';        const response = await fetch(`${API_URL}/api/subscription/verify-session?session_id=${sessionId}`);
-      
-      if (!response.ok) {
-        throw new Error('Failed to verify session');
-      }
+      const API_URL = import.meta.env.VITE_API_SERVER_URL || 'http://localhost:5000';
 
-      const data = await response.json();
-      
-      if (data.success) {
-        setSession(data.session);
-        
+      // const response = await fetch(`${API_URL}/api/subscription/verify-session?session_id=${sessionId}`);
+
+      // const response = await fetch(`${API_URL}/api/verify-stripe-subscription?session_id=${sessionId}`);
+
+      console.log('Verifying session with ID:', sessionId, 'for user:', user.username);
+
+      const response = await api.post('/api/verify-stripe-subscription', {
+        checkoutSessionId: sessionId,
+        user: {
+          id: user.id,
+          username: user.username,
+          email: user.email,
+        },
+      });
+
+
+
+      // if (!response.ok) {
+      //   throw new Error('Failed to verify session');
+      // }
+
+      // const data = await response.json();
+      const data = response.data;
+
+      console.log('Verification response data:', data);
+
+      // {
+      //   "sessionId": "cs_test_a1mgDItepBnIywG5wKXoBCdykCn9TOVyhiZo4dgFPbM4xM5TFjeeCGRT1M",
+      //     "status": "paid",
+      //       "customerEmail": "rapper@gmail.com",
+      //         "amount": 500,
+      //           "subscriptionId": "sub_1TuTSg3julCtRIb5zrimYUkv",
+      //             "subscriptionStatus": "active"
+      // }
+
+      if (data.subscriptionStatus === 'active') {
+        setSession(data);
+        await refreshUser();
+
         // Update user's subscription status in localStorage
         const userData = JSON.parse(localStorage.getItem('userdata') || '{}');
-        userData.subscription = data.session.subscription;
+        userData.subscription = data.subscriptionId;
         localStorage.setItem('userdata', JSON.stringify(userData));
-        
+
         showToast('Subscription activated successfully!', 'success');
       } else {
         throw new Error(data.message || 'Verification failed');

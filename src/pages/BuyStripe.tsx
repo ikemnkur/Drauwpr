@@ -1,9 +1,7 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { CreditCard, CheckCircle, XCircle, Loader2, ArrowLeft } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { CreditCard, ArrowLeft } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import axios from 'axios'; 
-// import { api } from '../lib/api';
 import { DEFAULT_ECONOMY_SETTINGS, fetchEconomySettings } from '../lib/economySettings';
 
 const PACK_CONFIG = [
@@ -34,8 +32,6 @@ const STRIPE_IDS: Record<number, string> = {
 export default function BuyStripe() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const checkoutSessionId = searchParams.get('session_id');
 
   const [selected, setSelected] = useState(2); // default $25
   const [economy, setEconomy] = useState(DEFAULT_ECONOMY_SETTINGS);
@@ -56,12 +52,6 @@ export default function BuyStripe() {
 
   const [showModal, setShowModal] = useState(false);
   const [pendingPack, setPendingPack] = useState<typeof PACKS[0] | null>(null);
-  const [startTimestamp, setStartTimestamp] = useState<number | null>(null);
-  const [isWaitingForReturn, setIsWaitingForReturn] = useState(false);
-  const [isVerifying, setIsVerifying] = useState(false);
-  const [verifyResult, setVerifyResult] = useState<{ success: boolean; message: string } | null>(null);
-
-  const SHOW_COMPLETE_PAYMENT_BOX = false;
 
   const getStripeUrl = (credits: number) => {
     const id = STRIPE_IDS[credits];
@@ -70,7 +60,6 @@ export default function BuyStripe() {
 
   const handleStartPurchase = () => {
     setPendingPack(PACKS[selected]);
-    setVerifyResult(null);
     setShowModal(true);
   };
 
@@ -78,152 +67,10 @@ export default function BuyStripe() {
     if (!pendingPack) return;
     const url = getStripeUrl(pendingPack.credits);
     if (!url) return;
-    const startedAt = Date.now();
-    setStartTimestamp(startedAt);
-    sessionStorage.setItem('stripe_pending_start', String(startedAt));
+    sessionStorage.setItem('stripe_pending_start', String(Date.now()));
     sessionStorage.setItem('stripe_pending_pack', JSON.stringify(pendingPack));
     setShowModal(false);
     window.location.assign(url);
-  };
-
-  const submitVerification = async (payload: {
-    checkoutSessionId?: string;
-    start: number;
-    end: number;
-    packageData?: { credits: number; amount: number; dollars: number };
-  }) => {
-    if (!user) return;
-
-    // const response = await api.post<{ status?: string; pending?: boolean; message?: string }>('/api/verify-stripe-payment', {
-    //   checkoutSessionId: payload.checkoutSessionId,
-    //   timeRange: { start: payload.start, end: payload.end },
-    //   user: { id: user.id, username: user.username, email: user.email },
-    //   packageData: payload.packageData,
-    // });
-
-    const configured = String(import.meta.env.VITE_API_URL || 'http://localhost:5000').trim();
-
-    console.log({
-      checkoutSessionId: payload.checkoutSessionId,
-      timeRange: { start: payload.start, end: payload.end },
-      user: { id: user.id, username: user.username, email: user.email },
-      packageData: payload.packageData,
-    });
-
-    const response = await axios.post(`${configured}/api/verify-stripe-payment`, {
-      checkoutSessionId: payload.checkoutSessionId,
-      timeRange: { start: payload.start, end: payload.end },
-      user: { id: user.id, username: user.username, email: user.email },
-      packageData: payload.packageData,
-    });
-
-    if (response.data.status === 'succeeded') {
-      const grantedCredits = payload.packageData?.credits;
-      setVerifyResult({
-        success: true,
-        message: grantedCredits
-          ? `${grantedCredits.toLocaleString()} credits have been added to your account!`
-          : 'Your payment was verified and credits have been added to your account!',
-      });
-      setIsWaitingForReturn(false);
-      setPendingPack(null);
-      setStartTimestamp(null);
-      sessionStorage.removeItem('stripe_pending_start');
-      sessionStorage.removeItem('stripe_pending_pack');
-      return;
-    }
-
-    if (response.data.pending || response.data.status === 'pending') {
-      setVerifyResult({
-        success: false,
-        message:
-          response.data.message ||
-          'This payment could not be auto-verified and has been submitted for manual review. Credits will be applied once approved.',
-      });
-      setIsWaitingForReturn(false);
-      setPendingPack(null);
-      setStartTimestamp(null);
-      sessionStorage.removeItem('stripe_pending_start');
-      sessionStorage.removeItem('stripe_pending_pack');
-      return;
-    }
-
-    setVerifyResult({ success: false, message: 'Payment not yet confirmed. Please wait a moment and try again.' });
-  };
-
-  const handleVerifyPayment = async () => {
-    if (!pendingPack || !startTimestamp || !user) return;
-    setIsVerifying(true);
-    setVerifyResult(null);
-    try {
-      await submitVerification({
-        start: startTimestamp,
-        end: Date.now(),
-        packageData: { credits: pendingPack.credits, amount: pendingPack.dollars * 100, dollars: pendingPack.dollars },
-      });
-    } catch (err: unknown) {
-      const e = err as { data?: { error?: string }; message?: string };
-      setVerifyResult({
-        success: false,
-        message:
-          e?.data?.error ||
-          e?.message ||
-          'This payment could not be auto-verified and has been submitted for manual review. Credits will be applied once approved.',
-      });
-    } finally {
-      setIsVerifying(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!checkoutSessionId || !user) return;
-
-    const storedStart = Number(sessionStorage.getItem('stripe_pending_start') || 0);
-    const rawPack = sessionStorage.getItem('stripe_pending_pack');
-    let storedPack: { credits: number; dollars: number } | null = null;
-
-    if (rawPack) {
-      try {
-        const parsed = JSON.parse(rawPack);
-        if (parsed && Number(parsed.credits) > 0 && Number(parsed.dollars) > 0) {
-          storedPack = { credits: Number(parsed.credits), dollars: Number(parsed.dollars) };
-        }
-      } catch {
-        storedPack = null;
-      }
-    }
-
-    const start = Number.isFinite(storedStart) && storedStart > 0 ? storedStart : Date.now() - (20 * 60 * 1000);
-
-    setIsVerifying(true);
-    setVerifyResult(null);
-
-    void submitVerification({
-      checkoutSessionId,
-      start,
-      end: Date.now(),
-      packageData: storedPack
-        ? { credits: storedPack.credits, dollars: storedPack.dollars, amount: storedPack.dollars * 100 }
-        : undefined,
-    }).catch((err: unknown) => {
-      const e = err as { data?: { error?: string }; message?: string };
-      setVerifyResult({
-        success: false,
-        message:
-          e?.data?.error ||
-          e?.message ||
-          'This payment could not be auto-verified and has been submitted for manual review. Credits will be applied once approved.',
-      });
-    }).finally(() => {
-      setIsVerifying(false);
-    });
-  }, [checkoutSessionId, user]);
-
-  const handleCancelWaiting = () => {
-    setIsWaitingForReturn(false);
-    setPendingPack(null);
-    setStartTimestamp(null);
-    setVerifyResult(null);
   };
 
   return (
@@ -270,69 +117,6 @@ export default function BuyStripe() {
                 Proceed to Payment
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Complete Your Payment banner */}
-      {SHOW_COMPLETE_PAYMENT_BOX && isWaitingForReturn && pendingPack && (
-        <div className="mb-6 bg-surface-2 border border-brand/30 rounded-2xl p-5">
-          <h3 className="text-base font-bold text-text mb-1">Complete Your Payment</h3>
-          <p className="text-sm text-text-muted mb-4">
-            A payment window was opened for{' '}
-            <span className="font-medium text-brand">
-              {pendingPack.credits.toLocaleString()} credits ({pendingPack.price})
-            </span>
-            . Once the payment is done, click below to verify and receive your credits.
-          </p>
-          {verifyResult && !verifyResult.success && (
-            <div className="flex items-start gap-2 mb-3 text-sm text-red-400 bg-red-400/10 rounded-lg p-3">
-              <XCircle className="w-4 h-4 mt-0.5 shrink-0" />
-              <span>{verifyResult.message}</span>
-            </div>
-          )}
-          <div className="flex gap-3">
-            <button
-              onClick={handleCancelWaiting}
-              className="py-2 px-4 rounded-xl bg-surface-3 text-text-muted text-sm hover:text-text transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleVerifyPayment}
-              disabled={isVerifying}
-              className="flex-1 py-2.5 rounded-xl bg-brand text-white text-sm font-bold hover:bg-brand-dark disabled:opacity-60 transition-colors flex items-center justify-center gap-2"
-            >
-              {isVerifying ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Verifying...
-                </>
-              ) : (
-                "I've Completed Payment"
-              )}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {isVerifying && !verifyResult && (
-        <div className="mb-6 flex items-start gap-3 text-sm bg-surface-2 border border-surface-3 rounded-xl p-4">
-          <Loader2 className="w-5 h-5 mt-0.5 shrink-0 animate-spin text-brand" />
-          <div>
-            <p className="font-bold text-text">Verifying Stripe Payment</p>
-            <p className="text-text-muted mt-0.5">Please wait while we confirm your checkout session.</p>
-          </div>
-        </div>
-      )}
-
-      {/* Success notification */}
-      {verifyResult?.success && (
-        <div className="mb-6 flex items-start gap-3 text-sm bg-green-400/10 border border-green-400/20 rounded-xl p-4">
-          <CheckCircle className="w-5 h-5 mt-0.5 shrink-0 text-green-400" />
-          <div>
-            <p className="font-bold text-green-300">Payment Verified!</p>
-            <p className="text-green-400/80 mt-0.5">{verifyResult.message}</p>
           </div>
         </div>
       )}

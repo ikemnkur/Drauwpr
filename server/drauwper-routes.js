@@ -3280,7 +3280,9 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
   server.get(PROXY + '/api/history/purchases', authenticateToken, async (req, res) => {
     try {
       const [rows] = await pool.query(
-        `SELECT id, credits, amountPaid, currency, paymentMethod, status, txHash, created_at
+        `SELECT id, credits,
+                COALESCE(amountPaid, ROUND(amount / 100, 2), 0) AS amountPaid,
+                currency, paymentMethod, status, txHash, created_at
          FROM CreditPurchases
          WHERE userId = ?
          ORDER BY created_at DESC

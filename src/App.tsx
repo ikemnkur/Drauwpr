@@ -26,7 +26,6 @@ import Explore from './pages/Explore';
 import Verification from './pages/Verification';
 import Plans from './pages/Plans';
 import EditProfile from './pages/EditProfile';
-import SubscriptionCallback from './pages/SubscriptionCallback';
 import AdminPortal from './pages/AdminPortal';
 import ForgotPassword from './pages/ForgotPasswordPage';
 import ResetPassword from './pages/ResetPasswordPage';
@@ -39,6 +38,9 @@ import DropPublicView from './pages/DropPublicView';
 import DropPublicInfo from './pages/DropPublicInfo';
 import DropAuthRoute from './components/DropAuthRoute';
 import AccountSettings from './pages/AccountSettings';
+
+import SubscriptionSuccess from './pages/SubscriptionSuccess';
+import PurchaseSuccessful from './pages/PurchaseSuccessful';
 
 export default function App() {
   return (
@@ -91,7 +93,13 @@ export default function App() {
               <Route path="/create" element={<ProtectedRoute><CreateDrop /></ProtectedRoute>} />
               <Route path="/drop/:id/edit" element={<ProtectedRoute><EditDrop /></ProtectedRoute>} />
               <Route path="/plans" element={<ProtectedRoute><Plans /></ProtectedRoute>} />
-              <Route path="/subscription/stripe" element={<ProtectedRoute><SubscriptionCallback /></ProtectedRoute>} />
+              <Route path="/subscription/stripe" element={<ProtectedRoute><SubscriptionSuccess /></ProtectedRoute>} />
+
+              {/* Subscription success page */}
+              <Route path="/subscription/success" element={<ProtectedRoute><SubscriptionSuccess /></ProtectedRoute>} />
+              {/* payment success page */}
+              <Route path="/purchase/success" element={<ProtectedRoute><PurchaseSuccessful /></ProtectedRoute>} />
+
               <Route path="/edit-profile" element={<ProtectedRoute><EditProfile /></ProtectedRoute>} />
               <Route path="/account/settings" element={<ProtectedRoute><AccountSettings /></ProtectedRoute>} />
             </Route>

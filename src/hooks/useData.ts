@@ -315,8 +315,8 @@ export interface PurchaseEntry {
 interface PurchasesResponse {
   purchases: {
     id: string;
-    credits: number;
-    amountPaid: number;
+    credits: number | string | null;
+    amountPaid: number | string | null;
     currency: string;
     paymentMethod: string;
     status: string;
@@ -341,8 +341,8 @@ export function usePurchaseHistory() {
         if (cancelled) return;
         setEntries(res.purchases.map(p => ({
           id: p.id,
-          credits: p.credits,
-          amountPaid: p.amountPaid,
+          credits: Number.isFinite(Number(p.credits)) ? Number(p.credits) : 0,
+          amountPaid: Number.isFinite(Number(p.amountPaid)) ? Number(p.amountPaid) : 0,
           currency: p.currency || 'USD',
           paymentMethod: p.paymentMethod,
           status: p.status,

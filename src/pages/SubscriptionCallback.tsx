@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams, useNavigate, Link } from 'react-router-dom';
+import { useSearchParams, Link } from 'react-router-dom';
 import { CheckCircle, XCircle, Loader2, Crown } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
@@ -21,7 +21,6 @@ type Status = 'loading' | 'success' | 'error';
 
 export default function SubscriptionCallback() {
   const [searchParams] = useSearchParams();
-  const navigate = useNavigate();
   const { refreshUser } = useAuth();
   const sessionId = searchParams.get('session_id');
 
@@ -46,8 +45,6 @@ export default function SubscriptionCallback() {
           // Refresh auth so user.accountType updates everywhere
           await refreshUser();
           setStatus('success');
-          // Auto-redirect after 3s
-          setTimeout(() => { if (!cancelled) navigate('/account', { replace: true }); }, 3000);
         } else {
           setErrorMsg(res.message ?? 'Payment could not be verified.');
           setStatus('error');
@@ -90,7 +87,7 @@ export default function SubscriptionCallback() {
               <Crown className="w-4 h-4" />
               {planName} plan activated
             </div>
-            <p className="text-xs text-text-muted">Redirecting you to your account in a moment…</p>
+            <p className="text-xs text-text-muted">Your subscription is active. Continue when you're ready.</p>
             <Link
               to="/account"
               className="inline-block bg-brand hover:bg-orange-400 text-white font-semibold px-6 py-2.5 rounded-xl transition text-sm"

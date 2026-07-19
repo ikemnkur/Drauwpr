@@ -157,6 +157,10 @@ export default function History() {
     return !q || (e.description ?? '').toLowerCase().includes(q);
   }), [promoCharges.entries, cutoff, q, statusFilter]);
 
+  const fmtMoney = (value: number | string | null | undefined) => (
+    Number.isFinite(Number(value)) ? Number(value).toFixed(2) : 'N/A'
+  );
+
   // ── Export helpers ────────────────────────────────
   function exportCSV() {
     if (tab === 'contributions') {
@@ -445,9 +449,9 @@ export default function History() {
                   </div>
                   <div className="text-right shrink-0 flex flex-col items-end gap-1">
                     <span className="text-sm font-mono font-semibold text-green-400">
-                      +{p.credits.toLocaleString()} cr
+                      +{p.credits.toLocaleString()} Crd
                     </span>
-                    <span className="text-xs text-text-muted">{p.amountPaid} {p.currency}</span>
+                    <span className="text-xs text-text-muted">{fmtMoney(p.amountPaid)} {p.currency || 'USD'}</span>
                     <StatusBadge status={p.status} />
                   </div>
                 </div>

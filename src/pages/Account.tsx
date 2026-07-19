@@ -1,10 +1,23 @@
+import { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
 import { User, CreditCard, Settings, LogOut, ShieldCheck, ShieldX, ChevronRight, TimerIcon, Star, Crown, Zap, Pencil, Eye } from 'lucide-react';
+import { api } from '../lib/api';
+
+type MembershipLevel = 'free' | 'standard' | 'premium';
+
+interface SubscriptionLevelResponse {
+  success: boolean;
+  level: MembershipLevel;
+  active: boolean;
+  status: string;
+  expiresAt: string | null;
+}
 
 export default function Account() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [subscriptionLevel, setSubscriptionLevel] = useState<MembershipLevel>((user?.accountPlan ?? 'free').toLowerCase() as MembershipLevel);
 
   const handleSignOut = async () => {
     await logout();
@@ -23,12 +36,31 @@ export default function Account() {
 
   const membership = (user.accountPlan ?? 'free').toLowerCase() as 'free' | 'standard' | 'premium';
 
+  useEffect(() => {
+    let cancelled = false;
+
+    void api.get<SubscriptionLevelResponse>('/api/subscription-level')
+      .then((data) => {
+        if (cancelled || !data?.success) return;
+        setSubscriptionLevel(data.level || 'free');
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error('Error fetching subscription level:', error);
+        setSubscriptionLevel(membership);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [membership]);
+
   const membershipMeta = {
     free:     { label: 'Free',     Icon: Zap,    color: 'text-text-muted',  desc: 'Upgrade for more credits and premium features' },
     standard: { label: 'Standard', Icon: Star,   color: 'text-blue-400',    desc: 'Your Standard subscription is active' },
     premium:  { label: 'Premium',  Icon: Crown,  color: 'text-brand',       desc: 'Your Premium subscription is active' },
   };
-  const tier = membershipMeta[membership] ?? membershipMeta.free;
+  const tier = membershipMeta[subscriptionLevel] ?? membershipMeta.free;
   const TierIcon = tier.Icon;
 
   return (
@@ -102,7 +134,7 @@ export default function Account() {
               <div>
                 <div className="flex items-center gap-2">
                   <p className="text-sm font-medium text-text">{tier.label} Plan</p>
-                  {membership !== 'free' && (
+                  {subscriptionLevel !== 'free' && (
                     <span className="inline-flex items-center gap-1 bg-green-500/15 border border-green-500/30 text-green-400 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full">
                       Active
                     </span>
