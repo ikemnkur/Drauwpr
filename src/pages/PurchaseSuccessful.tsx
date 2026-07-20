@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Container,
   Typography,
@@ -42,6 +42,7 @@ export default function PurchaseSuccessful() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { user, refreshUser } = useAuth();
+  const verificationAttemptRef = useRef<string | null>(null);
 
   const sessionId = searchParams.get('session_id');
   const [status, setStatus] = useState('loading');
@@ -68,16 +69,20 @@ export default function PurchaseSuccessful() {
       return;
     }
 
+    // Prevent duplicate verification requests for the same checkout session.
+    if (verificationAttemptRef.current === sessionId) {
+      return;
+    }
+
     if (!user?.id || !user?.username || !user?.email) {
       setStatus('error');
       setMessage('Your account details are unavailable. Please sign in and try again.');
       return;
     }
 
-    let cancelled = false;
-
     const verify = async () => {
       try {
+        verificationAttemptRef.current = sessionId;
         setStatus('loading');
         setMessage('Verifying your payment...');
 
@@ -97,8 +102,6 @@ export default function PurchaseSuccessful() {
             : undefined,
         });
 
-        if (cancelled) return;
-
         if (response?.success) {
           await refreshUser();
           sessionStorage.removeItem('stripe_pending_start');
@@ -117,7 +120,8 @@ export default function PurchaseSuccessful() {
         setStatus('error');
         setMessage(response?.message || 'Payment verification could not be completed.');
       } catch (err: unknown) {
-        if (cancelled) return;
+        // Allow retry on future renders if verification fails.
+        verificationAttemptRef.current = null;
         const text = getErrorMessage(err, 'Payment verification failed. Please contact support.');
         setStatus('error');
         setMessage(text);
@@ -125,11 +129,7 @@ export default function PurchaseSuccessful() {
     };
 
     void verify();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId, user, refreshUser, pendingPack]);
+  }, [sessionId, user?.id, user?.username, user?.email, refreshUser, pendingPack]);
 
   return (
     <Container maxWidth="sm" sx={{ py: 8, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>

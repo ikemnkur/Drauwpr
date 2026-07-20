@@ -8486,6 +8486,26 @@ server.post(PROXY + '/api/verify-stripe-subscription', async (req, res) => {
       ? await sessionStripeClient.subscriptions.retrieve(subscriptionId)
       : null;
 
+    const dbSubscription = subscriptionId
+      ? await knex('subscriptions')
+        .where('stripe_subscription_id', subscriptionId)
+        .orderBy('created_at', 'desc')
+        .first()
+      : null;
+
+    const toEpochSeconds = (value) => {
+      if (!value) return null;
+      if (typeof value === 'number') return Math.floor(value);
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return null;
+      return Math.floor(date.getTime() / 1000);
+    };
+
+    const resolvedCurrentPeriodStart =
+      stripeSubscription?.current_period_start ?? toEpochSeconds(dbSubscription?.current_period_start);
+    const resolvedCurrentPeriodEnd =
+      stripeSubscription?.current_period_end ?? toEpochSeconds(dbSubscription?.current_period_end);
+
     const data = {
       username: user.username,
       userId: user.id,
@@ -8514,6 +8534,16 @@ server.post(PROXY + '/api/verify-stripe-subscription', async (req, res) => {
 
     await stripeBuySubscription(data);
 
+    console.log('[INFO] verify-stripe-subscription period fields:', {
+      subscriptionId,
+      stripe_current_period_start: stripeSubscription?.current_period_start ?? null,
+      stripe_current_period_end: stripeSubscription?.current_period_end ?? null,
+      db_current_period_start: dbSubscription?.current_period_start ?? null,
+      db_current_period_end: dbSubscription?.current_period_end ?? null,
+      resolvedCurrentPeriodStart,
+      resolvedCurrentPeriodEnd,
+    });
+
     return res.status(200).json({
       success: true,
       message: 'Subscription payment verified successfully',
@@ -8524,6 +8554,12 @@ server.post(PROXY + '/api/verify-stripe-subscription', async (req, res) => {
         amount: session.amount_total,
         subscriptionId,
         subscriptionStatus: stripeSubscription?.status || null,
+        current_period_start: resolvedCurrentPeriodStart,
+        current_period_end: resolvedCurrentPeriodEnd,
+        cancel_at_period_end: stripeSubscription?.cancel_at_period_end || null,
+        canceled_at: stripeSubscription?.canceled_at || null,
+        trial_start: stripeSubscription?.trial_start || null,
+        trial_end: stripeSubscription?.trial_end || null,
       }
     });
   } catch (error) {
@@ -8894,7 +8930,7 @@ async function stripeBuySubscription(data) {
     console.log('💰 Logging Stripe subscription for user:', username);
 
 
-    console.log("data: ", data)
+    // console.log("data: ", data)
 
 
     // check for duplicate transactionId
@@ -8924,7 +8960,7 @@ async function stripeBuySubscription(data) {
 
       // if (result.success) {
 
-      console.log('✅ Logging purchase for user:', username);
+      console.log('✅ Logging subscription for user:', username);
 
       // CREATE TABLE
       // `subscriptions` (
@@ -8972,7 +9008,11 @@ async function stripeBuySubscription(data) {
         created_at: toMySQLDateTime(currentTime),
         updated_at: toMySQLDateTime(currentTime)
       });
+
+
       const subscription = { insertId: subscriptionInsertId };
+
+      console.log('Subscription object:', subscription);
 
       function convertUTCtoMySQLDatetime(utcSeconds) {
         const date = new Date(utcSeconds * 1000);
@@ -9003,9 +9043,10 @@ async function stripeBuySubscription(data) {
         paymentMethod: "stripe_subscription",
         package: dollars + "$ " + planType + '_subscription'
       });
-      const purchases = { insertId: purchaseInsertId };
+      
+      // const purchases = { insertId: purchaseInsertId };
 
-      console.log('Purchase logged with ID:', purchaseInsertId, "upgrading account plan for user:", userId, "to plan:", planType, "account update ID:", accountUpdateId);
+      console.log('Subscription logged with ID:', subscriptionInsertId, "and purchase logged with ID:", purchaseInsertId, "upgrading account plan for user:", userId, "to plan:", planType, "account update ID:", accountUpdateId);
 
       const [accountUpdateId] = await knex('userData').update({ accountPlan: planType }).where('id', userId);
 
@@ -9050,7 +9091,7 @@ async function stripeBuySubscription(data) {
         });
       }
 
-      return ({ success: true, purchases, subscription });
+      return ({ success: true, subscription });
 
     } catch (error) {
       console.error('Transaction verification error:', error);

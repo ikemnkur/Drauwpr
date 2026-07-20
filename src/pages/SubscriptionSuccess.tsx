@@ -34,7 +34,8 @@ import { api } from '../lib/api';
 type SubscriptionDetails = {
   planName?: string;
   interval?: string;
-  current_period_end?: number;
+  current_period_start?: number | string;
+  current_period_end?: number | string;
 };
 
 type SubscriptionSession = {
@@ -42,9 +43,56 @@ type SubscriptionSession = {
   customer_email?: string;
   subscriptionId?: string;
   subscriptionStatus?: string;
+  status?: string;
   message?: string;
   subscription?: SubscriptionDetails;
+  success?: boolean;
 };
+
+type SubscriptionVerifyResponse = {
+  success?: boolean;
+  message?: string;
+  data?: {
+    sessionId?: string;
+    status?: string;
+    customerEmail?: string;
+    amount?: number;
+    subscriptionId?: string;
+    subscriptionStatus?: string;
+    current_period_start?: number | string;
+    current_period_end?: number | string;
+  };
+  sessionId?: string;
+  status?: string;
+  customerEmail?: string;
+  amount?: number;
+  subscriptionId?: string;
+  subscriptionStatus?: string;
+  current_period_start?: number | string;
+  current_period_end?: number | string;
+  currentPeriodStart?: number | string;
+  currentPeriodEnd?: number | string;
+};
+
+function normalizeSessionPayload(response: SubscriptionVerifyResponse): SubscriptionSession {
+  const payload = (response.data || response) as SubscriptionVerifyResponse;
+  const periodStart = payload.current_period_start ?? payload.currentPeriodStart;
+  const periodEnd = payload.current_period_end ?? payload.currentPeriodEnd;
+  return {
+    success: response.success,
+    message: response.message,
+    status: payload.status,
+    amount_total: typeof payload.amount === 'number' ? payload.amount : 0,
+    customer_email: payload.customerEmail || '',
+    subscriptionId: payload.subscriptionId,
+    subscriptionStatus: payload.subscriptionStatus,
+    subscription: {
+      interval: 'month',
+      current_period_start: periodStart,
+      current_period_end: periodEnd,
+    },
+  };
+}
 
 function getErrorMessage(err: unknown, fallback: string): string {
   if (err instanceof Error && err.message) return err.message;
@@ -91,7 +139,7 @@ const SubscriptionSuccess = () => {
 
       console.log('Verifying session with ID:', sessionId, 'for user:', user.username);
 
-      const data = await api.post<SubscriptionSession>('/api/verify-stripe-subscription', {
+      const response = await api.post<SubscriptionVerifyResponse>('/api/verify-stripe-subscription', {
         checkoutSessionId: sessionId,
         user: {
           id: user.id,
@@ -99,6 +147,10 @@ const SubscriptionSuccess = () => {
           email: user.email,
         },
       });
+
+      console.log('Subscription verify raw response:', response);
+
+      const data = normalizeSessionPayload(response);
 
 
 
@@ -117,7 +169,7 @@ const SubscriptionSuccess = () => {
       //             "subscriptionStatus": "active"
       // }
 
-      if (data.subscriptionStatus === 'active') {
+      if (data.subscriptionStatus === 'active' || data.success === true) {
         setSession(data);
         await refreshUser();
 
@@ -128,7 +180,7 @@ const SubscriptionSuccess = () => {
 
         showToast('Subscription activated successfully!', 'success');
       } else {
-        throw new Error(data.message || 'Verification failed');
+        throw new Error(data.message || response.message || 'Verification failed');
       }
     } catch (err: unknown) {
       console.error('Verification error:', err);
@@ -139,9 +191,15 @@ const SubscriptionSuccess = () => {
     }
   };
 
-  const formatDate = (timestamp?: number) => {
+  const formatDate = (timestamp?: number | string) => {
     if (!timestamp) return 'N/A';
-    return new Date(timestamp * 1000).toLocaleDateString('en-US', {
+    const date = typeof timestamp === 'number'
+      ? new Date(timestamp * 1000)
+      : new Date(timestamp);
+
+    if (Number.isNaN(date.getTime())) return 'N/A';
+
+    return date.toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'long',
       day: 'numeric'

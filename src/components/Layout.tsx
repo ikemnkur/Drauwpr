@@ -585,7 +585,7 @@ export default function Layout() {
 
       {/* Footer */}
       <footer className="border-t border-surface-3 py-4 text-center text-xs text-text-muted">
-        &copy; 2026 Drauwper. BLOW the LUCK up.
+        &copy; 2026 Drauwper. Drauwp it whens its hot.
       </footer>
     </div>
   );
