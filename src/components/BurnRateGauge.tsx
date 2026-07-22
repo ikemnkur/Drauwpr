@@ -1,4 +1,11 @@
-import { Flame, Snowflake, Droplets, Wind, Thermometer, Zap } from 'lucide-react';
+import { Flame, Snowflake, Droplets, Wind, Thermometer, Zap, Rocket  } from 'lucide-react';
+{/* <WavesVertical /> */}
+
+// import { WavesVertical } from 'lucide-react';
+let WavesVerticalIcon = (
+  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-waves-vertical-icon lucide-waves-vertical"><path d="M12 2q2 2.5 0 5t0 5 0 5 0 5"/><path d="M19 2q2 2.5 0 5t0 5 0 5 0 5"/><path d="M5 2q2 2.5 0 5t0 5 0 5 0 5"/></svg>
+);
+{/* <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-waves-vertical-icon lucide-waves-vertical"><path d="M12 2q2 2.5 0 5t0 5 0 5 0 5"/><path d="M19 2q2 2.5 0 5t0 5 0 5 0 5"/><path d="M5 2q2 2.5 0 5t0 5 0 5 0 5"/></svg> */}
 
 interface Props {
   rate: number;
@@ -15,7 +22,7 @@ type Tier = {
 };
 
 function getTier(pct: number): Tier {
-  if (pct < 25) return {
+  if (pct < 15) return {
     Icon: Snowflake,
     label: 'Frozen',
     color: '#bae6fd',          // sky-200
@@ -23,7 +30,7 @@ function getTier(pct: number): Tier {
     barGradient: 'linear-gradient(90deg, #0ea5e9, #bae6fd)',
     subLabel: 'ice cold',
   };
-  if (pct < 50) return {
+  if (pct < 25) return {
     Icon: Droplets,
     label: 'Thawing',
     color: '#60a5fa',          // blue-400
@@ -31,7 +38,17 @@ function getTier(pct: number): Tier {
     barGradient: 'linear-gradient(90deg, #2563eb, #60a5fa)',
     subLabel: 'melting slowly',
   };
-  if (pct < 75) return {
+
+  if (pct < 50) return {
+    Icon: () => WavesVerticalIcon,
+    label: 'Evaporating',
+    color: '#9098a4',          // slate-400
+    glow: 'rgba(148,163,184,0.5)',
+    barGradient: 'linear-gradient(90deg, #475569, #cbd5e1)',
+    subLabel: 'lukewarm',
+  };
+  
+  if (pct < 70) return {
     Icon: Wind,
     label: 'Steaming',
     color: '#94a3b8',          // slate-400
@@ -39,29 +56,39 @@ function getTier(pct: number): Tier {
     barGradient: 'linear-gradient(90deg, #475569, #cbd5e1)',
     subLabel: 'heating up',
   };
-  if (pct < 95) return {
+  if (pct < 80) return {
     Icon: Thermometer,
-    label: 'Hot',
+    label: 'Smoldering',
     color: '#f87171',          // red-400
     glow: 'rgba(248,113,113,0.7)',
     barGradient: 'linear-gradient(90deg, #dc2626, #fca5a5)',
-    subLabel: 'running hot',
+    subLabel: 'Glowing Hot',
   };
-  if (pct < 100) return {
+  if (pct < 90) return {
     Icon: Zap,
     label: 'Sparking',
     color: '#fde047',          // yellow-300
     glow: 'rgba(253,224,71,0.8)',
     barGradient: 'linear-gradient(90deg, #ca8a04, #fde047)',
-    subLabel: 'almost ignited',
+    subLabel: 'Igniting',
   };
-  return {
+  
+ if (pct <= 99) return {
     Icon: Flame,
     label: 'Ignited',
     color: '#f97316',          // orange-500
     glow: 'rgba(249,115,22,0.9)',
     barGradient: 'linear-gradient(90deg, #f97316, #ef4444)',
-    subLabel: 'fully lit 🔥',
+    subLabel: 'On Fire 🔥',
+  };
+
+   if (pct > 100) return {
+    Icon: Rocket,
+    label: 'Blast Off',
+    color: '#f97316',          // orange-500
+    glow: 'rgba(249,115,22,0.9)',
+    barGradient: 'linear-gradient(90deg, #f97316, #ef4444)',
+    subLabel: '🔥 Kaboom... To The Moon 🔥',
   };
 }
 
@@ -111,7 +138,7 @@ export default function BurnRateGauge({ rate, goalPct = 100 }: Props) {
           <div
             className="h-full rounded-full transition-all duration-500"
             style={{
-              width: `${Math.min(1+rate^2, 100)}%`,
+              width: `${Math.min(rate*10, 100)}%`,
               background: tier.barGradient,
               boxShadow: `0 0 6px ${tier.glow}`,
             }}

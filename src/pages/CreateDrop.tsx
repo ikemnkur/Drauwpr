@@ -27,6 +27,7 @@ export default function CreateDrop() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const isPremium = (user?.accountPlan ?? '').toLowerCase() === 'premium';
+  const isStandard = (user?.accountPlan ?? '').toLowerCase() === 'standard';
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bannerInputRef = useRef<HTMLInputElement>(null);
   const trailerInputRef = useRef<HTMLInputElement>(null);
@@ -245,7 +246,15 @@ export default function CreateDrop() {
       const durationMs = Number(durationDays) * 24 * 60 * 60 * 1000;
       const now = Date.now();
       const scheduledDropTime = new Date(now + durationMs).toISOString();
-      const expiresAt = new Date(now + durationMs + 2 * 24 * 60 * 60 * 1000).toISOString();
+
+    // exirpy delay depends on account plan type
+    // free plan: add 2 days to expiry
+    // standard plan: add 4 days to expiry
+    // premium plan: add 7 days to expiry
+
+    const delayDays = isPremium ? 7 : isStandard ? 4 : 2;
+
+      const expiresAt = new Date(now + durationMs + delayDays * 24 * 60 * 60 * 1000).toISOString();
 
       // 1. Create the drop record
       setUploadStep('Creating drop…');
@@ -704,7 +713,7 @@ export default function CreateDrop() {
               <label className="block text-xs text-text-muted mb-1.5">Base Price (credits after drop)</label>
               <input
                 type="number"
-                min="100"
+                min="50"
                 step="1"
                 value={basePrice}
                 onChange={(e) => setBasePrice(e.target.value)}

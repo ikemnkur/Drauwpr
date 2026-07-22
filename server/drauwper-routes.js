@@ -46,6 +46,25 @@ function engineApplyContribution(burnRate, contribution, goalAmount) {
   return burnRate + (goalAmount > 0 ? contribution / goalAmount : 0);
 }
 
+function resolveFuseTimeMs(row, nowMs = Date.now()) {
+  if (!row) return 0;
+
+  const rawFuse = Number(row.fusetime);
+  const storedFuse = Number.isFinite(rawFuse)
+    ? rawFuse
+    : Math.max(0, new Date(row.scheduledDropTime).getTime() - new Date(row.created_at).getTime());
+
+  const burnRate = Math.max(1, Number(row.burnRate) || 1);
+  const anchorMs = row.lastMomentumUpdate
+    ? new Date(row.lastMomentumUpdate).getTime()
+    : new Date(row.created_at).getTime();
+
+  if (!Number.isFinite(anchorMs)) return Math.max(0, storedFuse);
+
+  const elapsedMs = Math.max(0, nowMs - anchorMs);
+  return Math.max(0, storedFuse - (burnRate * elapsedMs));
+}
+
 function computeDownloadPricing({
   basePrice,
   goalAmount,
@@ -415,6 +434,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
     if (!row || typeof row !== 'object') return row;
     return {
       ...row,
+      fusetime: resolveFuseTimeMs(row),
       thumbnailUrl: resolveDropAssetUrl(row.thumbnailUrl),
       trailerUrl: resolveDropAssetUrl(row.trailerUrl),
     };
@@ -975,20 +995,25 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
         ? Math.min(1, Math.max(0, parseFloat(expiryThreshold) || 0))
         : null;
 
+      const createdAtMs = Date.now();
+      const scheduledDropTimeMs = new Date(scheduledDropTime).getTime();
+      const fuseTimeMs = Math.max(0, scheduledDropTimeMs - createdAtMs);
+
       const dropId = uuidv4();
       await pool.query(
         `INSERT INTO drops
          (id, creatorId, title, description, fileType, tags,
           goalAmount, basePrice, scheduledDropTime, expiresAt,
-          expiry_behaviour, expiry_threshold,
+          expiry_behaviour, expiry_threshold, fusetime,
           trailerUrl, thumbnailUrl, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
         [
           dropId, userId, title, description || '',
           fileType || 'other', JSON.stringify(tags || []),
           +goalAmount, +(basePrice || 0),
           new Date(scheduledDropTime), new Date(expiresAt),
           behaviour, threshold,
+          fuseTimeMs,
           trailerUrl || null, thumbnailUrl || null,
         ]
       );
@@ -1037,6 +1062,10 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
           } else if (['scheduledDropTime', 'expiresAt'].includes(key)) {
             sets.push(`${key} = ?`);
             vals.push(new Date(req.body[key]));
+            if (key === 'scheduledDropTime') {
+              sets.push('fusetime = ?');
+              vals.push(Math.max(0, new Date(req.body[key]).getTime() - Date.now()));
+            }
           } else {
             sets.push(`${key} = ?`);
             vals.push(req.body[key]);
@@ -1166,6 +1195,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       const now = Date.now();
       const newContributions = drop.currentContributions + amount;
       const newContributorCount = drop.contributorCount + 1;
+      const currentFuseTimeMs = resolveFuseTimeMs(drop, now);
 
       // If goal just met → activate
       let newStatus = drop.status;
@@ -1182,10 +1212,11 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
         `UPDATE drops SET
           currentContributions = ?, contributorCount = ?,
           burnRate = ?,
+          fusetime = ?,
           lastContributionTime = NOW(),
           lastMomentumUpdate = NOW(), status = ?
          WHERE id = ?`,
-        [newContributions, newContributorCount, newBurnRate, newStatus, dropId]
+        [newContributions, newContributorCount, newBurnRate, currentFuseTimeMs, newStatus, dropId]
       );
 
       // Deduct user credits
@@ -1340,6 +1371,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
         await conn.rollback();
         return res.status(400).json({ error: 'This drop cannot be stalled' });
       }
+      const currentFuseTimeMs = resolveFuseTimeMs(drop);
 
       // Recalculate price inside the transaction (use live data)
       const totalMinutesLeft = Math.max(1, (new Date(drop.expiresAt).getTime() - Date.now()) / 60_000);
@@ -1360,17 +1392,17 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       const newBalance = user.credits - price;
       await conn.query('UPDATE userData SET credits = ? WHERE id = ?', [newBalance, userId]);
 
-      // Extend both expiresAt and scheduledDropTime so the analog clock reflects the extra time
+      // Extend expiresAt and fuseTime; scheduledDropTime stays fixed as the planned release date.
       const stallMs = stallMinutes * 60_000;
       const expiresAtBefore = drop.expiresAt;
       const newExpiresAt = new Date(new Date(drop.expiresAt).getTime() + stallMs);
-      const newScheduledDropTime = new Date(new Date(drop.scheduledDropTime).getTime() + stallMs);
+      const newFuseTime = currentFuseTimeMs + stallMs;
       await conn.query(
-        'UPDATE drops SET expiresAt = ?, scheduledDropTime = ? WHERE id = ?',
-        [newExpiresAt, newScheduledDropTime, dropId]
+        'UPDATE drops SET expiresAt = ?, fusetime = ?, lastMomentumUpdate = NOW() WHERE id = ?',
+        [newExpiresAt, newFuseTime, dropId]
       );
 
-      console.log(`Drop ${dropId} stalled by ${stallMinutes} min. expiresAt: ${expiresAtBefore} → ${newExpiresAt}, scheduledDropTime → ${newScheduledDropTime}`);
+      console.log(`Drop ${dropId} stalled by ${stallMinutes} min. expiresAt: ${expiresAtBefore} → ${newExpiresAt}, fuseTime → ${newFuseTime}`);
 
       // Log wallet transaction
       const txId = uuidv4();
@@ -1400,7 +1432,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
         creditCost: price,
         newBalance,
         expiresAt: newExpiresAt.toISOString(),
-        scheduledDropTime: newScheduledDropTime.toISOString(),
+        fusetime: newFuseTime,
       });
     } catch (err) {
       await conn.rollback();
@@ -2601,7 +2633,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
   server.post(PROXY + '/api/engine/decay-tick', async (req, res) => {
     try {
       const [activeDrops] = await pool.query(
-        `SELECT id, burnRate, created_at, expiresAt, scheduledDropTime, status,
+        `SELECT id, burnRate, created_at, expiresAt, scheduledDropTime, fusetime, lastMomentumUpdate, status,
                 creatorId, title
          FROM drops WHERE status = 'active'`
       );
@@ -2614,21 +2646,20 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
         const expiresAtMs = new Date(drop.expiresAt).getTime();
         const S = engineSensitivity(now, createdAtMs, expiresAtMs);
         const newBurnRate = engineTickDecay(drop.burnRate, S);
+        const currentFuseTimeMs = resolveFuseTimeMs(drop, now);
 
-        // Check if countdown reached zero → mark as dropped
-        const scheduledMs = new Date(drop.scheduledDropTime).getTime();
-        const realRemaining = (scheduledMs - now) / 1000;
-        // Each K-minute tick consumes burnRate × K×60 clock-seconds
-        const accelRemaining = realRemaining - newBurnRate * ENGINE_K * 60;
+        // Each K-minute tick consumes burnRate × K×60 clock-seconds from the fuse.
+        const fuseConsumptionMs = newBurnRate * ENGINE_K * 60 * 1000;
+        const nextFuseTimeMs = Math.max(0, currentFuseTimeMs - fuseConsumptionMs);
 
         let newStatus = drop.status;
-        if (realRemaining <= 0 || accelRemaining <= 0) {
+        if (nextFuseTimeMs <= 0) {
           newStatus = 'dropped';
         }
 
         await pool.query(
-          `UPDATE drops SET burnRate = ?, lastMomentumUpdate = NOW(), status = ? WHERE id = ?`,
-          [newBurnRate, newStatus, drop.id]
+          `UPDATE drops SET burnRate = ?, fusetime = ?, lastMomentumUpdate = NOW(), status = ? WHERE id = ?`,
+          [newBurnRate, nextFuseTimeMs, newStatus, drop.id]
         );
 
         // Log the tick
@@ -2636,12 +2667,12 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
           `INSERT INTO momentumLog
            (dropId, momentumBefore, momentumAfter, burnRateBefore, burnRateAfter, clockSecondsRemaining, eventType)
            VALUES (?, 0, 0, ?, ?, ?, 'decay_tick')`,
-          [drop.id, drop.burnRate, newBurnRate, Math.max(0, realRemaining)]
+          [drop.id, drop.burnRate, newBurnRate, Math.max(0, nextFuseTimeMs / 1000)]
         );
 
         // If just dropped → set actualDropTime and notify contributors
         if (newStatus === 'dropped' && drop.status === 'active') {
-          await pool.query('UPDATE drops SET actualDropTime = NOW() WHERE id = ?', [drop.id]);
+          await pool.query('UPDATE drops SET actualDropTime = NOW(), fusetime = 0 WHERE id = ?', [drop.id]);
 
           // Notify all contributors that the drop is now available
           pool.query('SELECT DISTINCT userId FROM contributions WHERE dropId = ? AND isRefunded = 0', [drop.id])
@@ -2858,6 +2889,8 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
     'application/zip', 'application/x-zip-compressed',
     'application/x-rar-compressed',
     'application/x-7z-compressed',
+    'text/html', 'text/plain',
+    "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     // Apps / Games
     'application/octet-stream',
     'application/x-msdownload',

@@ -5,7 +5,7 @@ import { mapDrop, type ServerDrop } from '../hooks/useData';
 import type { Drop } from '../types';
 import { Flame, Tag, HardDrive, ArrowRight, CheckCircle2 } from 'lucide-react';
 import AnalogClock from '../components/AnalogClock';
-import { estimateRealSecondsRemaining } from '../engine/burnRate';
+import { useFuseCountdown } from '../hooks/useFuseCountdown';
 
 export default function DropPublicView() {
   const { id } = useParams<{ id: string }>();
@@ -25,37 +25,21 @@ export default function DropPublicView() {
       .finally(() => setLoading(false));
   }, [id]);
 
-  // Redirect to /info if already released on load
+  const fuseTimeMs = useFuseCountdown(
+    drop?.fuseTime ?? (drop ? Math.max(0, drop.scheduledDropTime - drop.createdAt) : 0),
+    drop?.burnRate ?? 1,
+    Boolean(drop && drop.status !== 'dropped')
+  );
+  const remainingSeconds = fuseTimeMs / 1000;
+
   useEffect(() => {
     if (!drop || redirectedRef.current) return;
-    const alreadyReleased = drop.status === 'dropped' || Date.now() >= drop.scheduledDropTime;
+    const alreadyReleased = drop.status === 'dropped' || fuseTimeMs <= 0;
     if (alreadyReleased) {
       redirectedRef.current = true;
       navigate(`/drop/${id}/info`, { replace: true });
     }
-  }, [drop, id, navigate]);
-
-  // Poll every 500ms and redirect when estimatedReal hits 0
-  useEffect(() => {
-    if (!drop || drop.status === 'dropped' || redirectedRef.current) return;
-    const iv = window.setInterval(() => {
-      if (redirectedRef.current) { window.clearInterval(iv); return; }
-      const clockSecs = Math.max(0, (drop.scheduledDropTime - Date.now()) / 1000);
-      const real = estimateRealSecondsRemaining(
-        clockSecs,
-        drop.burnRate,
-        Date.now(),
-        drop.createdAt,
-        drop.expiresAt,
-      );
-      if (real <= 0) {
-        redirectedRef.current = true;
-        window.clearInterval(iv);
-        navigate(`/drop/${id}/info`, { replace: true });
-      }
-    }, 500);
-    return () => window.clearInterval(iv);
-  }, [drop, id, navigate]);
+  }, [drop, fuseTimeMs, id, navigate]);
 
   if (loading) {
     return (
@@ -74,18 +58,8 @@ export default function DropPublicView() {
     );
   }
 
-  const isReleased = drop.status === 'dropped' || Date.now() >= drop.scheduledDropTime;
+  const isReleased = drop.status === 'dropped' || fuseTimeMs <= 0;
   const goalPct = Math.min(100, (drop.currentContributions / drop.goalAmount) * 100);
-
-  // Clock + calendar calculations
-  const clockSecondsFromSchedule = Math.max(0, (drop.scheduledDropTime - Date.now()) / 1000);
-  const estimatedReal = estimateRealSecondsRemaining(
-    clockSecondsFromSchedule,
-    drop.burnRate,
-    Date.now(),
-    drop.createdAt,
-    drop.expiresAt,
-  );
   const dropDate = new Date(drop.scheduledDropTime);
   const calYear = dropDate.getFullYear();
   const calMonth = dropDate.getMonth();
@@ -107,35 +81,11 @@ export default function DropPublicView() {
 
   return (
     <div className="min-h-screen bg-[#111827] text-[#e2e8f0]">
-      {/* Nav */}
-      {/* <nav className="sticky top-0 z-50 bg-[#111827]/90 backdrop-blur border-b border-[#35354d]">
-        <div className="max-w-5xl mx-auto flex items-center justify-between px-6 py-4">
-          <Link to="/" className="flex items-center gap-2 text-orange-500 font-bold text-xl">
-            <Flame className="w-6 h-6" />
-            Drauwper
-          </Link>
-          <div className="flex items-center gap-3">
-            <Link to="/login" className="text-sm text-[#94a3b8] hover:text-white transition">
-              Sign In
-            </Link>
-            <Link
-              to="/register"
-              className="bg-orange-500 hover:bg-orange-600 text-white text-sm font-semibold px-4 py-2 rounded-lg transition shadow-lg shadow-orange-500/20"
-            >
-              Get Started Free
-            </Link>
-          </div>
-        </div>
-      </nav> */}
-
-      {/* Banner */}
       <div className="w-full h-52 overflow-hidden">
         <img src={thumbnailUrl} alt={drop.title} className="w-full h-full object-cover" />
       </div>
 
       <div className="max-w-4xl mx-auto px-6 py-8 space-y-8">
-
-        {/* Title row */}
         <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
           <div>
             {isReleased ? (
@@ -173,26 +123,8 @@ export default function DropPublicView() {
           )}
         </div>
 
-        {/* Description */}
         <p className="text-[#94a3b8] leading-relaxed">{drop.description}</p>
 
-        {/* Stats */}
-        {/* <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          {[
-            { label: 'Contributors', value: drop.contributorCount.toLocaleString(), icon: <Users className="w-4 h-4 text-orange-400" /> },
-            { label: 'Credits Burned', value: drop.currentContributions.toLocaleString(), icon: <Flame className="w-4 h-4 text-orange-400" /> },
-            { label: 'Goal', value: drop.goalAmount.toLocaleString(), icon: <Zap className="w-4 h-4 text-orange-400" /> },
-            { label: 'Base Price', value: `${drop.basePrice.toLocaleString()} cr`, icon: <Lock className="w-4 h-4 text-orange-400" /> },
-          ].map((s) => (
-            <div key={s.label} className="bg-[#1e1e2e] border border-[#35354d] rounded-xl p-4 text-center">
-              <div className="flex justify-center mb-2">{s.icon}</div>
-              <p className="text-lg font-bold text-white font-mono">{s.value}</p>
-              <p className="text-xs text-[#94a3b8]">{s.label}</p>
-            </div>
-          ))}
-        </div> */} 
-        
-        {/* Goal progress bar */}
         <div className="bg-[#1e1e2e] border border-[#35354d] rounded-2xl p-5">
           <div className="flex justify-between text-sm mb-2">
             <span className="text-[#94a3b8]">Community Progress</span>
@@ -209,12 +141,9 @@ export default function DropPublicView() {
           </p>
         </div>
 
-
-        {/* Clock + Calendar */}
         <div className="bg-[#1e1e2e] border border-[#35354d] rounded-2xl p-4 sm:p-6 flex flex-col sm:flex-row items-center justify-center gap-6">
-          {/* Analog Clock */}
           <div className="flex flex-col items-center gap-2">
-            <AnalogClock remainingSeconds={estimatedReal} burnRate={drop.burnRate} size={180} />
+            <AnalogClock remainingSeconds={remainingSeconds} size={180} />
             {isReleased && (
               <span className="text-xs text-green-400 font-semibold bg-green-500/10 border border-green-500/30 px-3 py-1 rounded-full">
                 🎉 Dropped!
@@ -222,7 +151,6 @@ export default function DropPublicView() {
             )}
           </div>
 
-          {/* Calendar */}
           <div className="flex flex-col items-center shrink-0 gap-1 border-2 border-[#35354d] rounded-2xl p-3">
             <p className="text-[11px] font-semibold text-[#94a3b8] uppercase tracking-widest mb-1">{calMonthLabel}</p>
             <div className="grid grid-cols-7 gap-0.5 text-center">
@@ -263,8 +191,6 @@ export default function DropPublicView() {
           </div>
         </div>
 
-       
-        {/* CTA */}
         <div className="bg-gradient-to-br from-orange-500/10 to-red-500/5 border border-orange-500/20 rounded-2xl p-6 text-center">
           {isReleased ? (
             <>
@@ -313,7 +239,6 @@ export default function DropPublicView() {
             </>
           )}
         </div>
-
       </div>
     </div>
   );

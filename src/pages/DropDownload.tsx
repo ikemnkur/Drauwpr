@@ -8,7 +8,7 @@ import PriceDisplay from '../components/PriceDisplay';
 import ContributorList from '../components/ContributorList';
 import ReviewForm from '../components/ReviewForm';
 import type { Drop, Contributor, Review } from '../types';
-import { Download, Tag, HardDrive, ThumbsUp, ThumbsDown, Star, Check, Loader2, Lock, ChevronDown, ChevronUp, Share2, Link2,  MessageCircle, Send } from 'lucide-react';
+import { Download, Tag, HardDrive, ThumbsUp, ThumbsDown, Star, Check, Loader2, Lock, ChevronDown, ChevronUp, Share2, Link2,  MessageCircle, Send, Calendar } from 'lucide-react';
 import XIcon from '@mui/icons-material/X';
 import FacebookIcon from '@mui/icons-material/Facebook';
 
@@ -65,8 +65,11 @@ export default function DropDownload() {
   const [dlError, setDlError] = useState<string | null>(null);
   const [showPriceDetail, setShowPriceDetail] = useState(false);
   const [copiedInline, setCopiedInline] = useState(false);
+  const [downloadTimestamp, setDownloadTimestamp] = useState<number | null>(null);
+  const [currentTime, setCurrentTime] = useState(Date.now());
 
   const drop = localDrop ?? fetchedDrop;
+  const isReleased = drop?.status === 'dropped';
 
   useEffect(() => {
     if (!id) return;
@@ -126,6 +129,33 @@ export default function DropDownload() {
     return () => { cancelled = true; };
   }, [id, localDrop]);
 
+  // Load download timestamp from localStorage
+  useEffect(() => {
+    if (!id) return;
+    const stored = localStorage.getItem(`drop-download-${id}`);
+    if (stored) {
+      const timestamp = parseInt(stored, 10);
+      if (!isNaN(timestamp)) {
+        setDownloadTimestamp(timestamp);
+      }
+    }
+  }, [id]);
+
+  // Update current time every second for countdown
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (!drop || !id) return;
+    if (drop.status !== 'dropped') {
+      navigate(`/drop/${id}`, { replace: true });
+    }
+  }, [drop, id, navigate]);
+
   if (loading) {
     return (
       <div className="text-center py-20">
@@ -144,6 +174,11 @@ export default function DropDownload() {
   }
 
   async function handleDownload() {
+    if (!drop || !isReleased) {
+      setDlError('This drop is not released yet.');
+      return;
+    }
+
     if (!isAuthenticated) {
       navigate(`/login?redirect=/drop/${id}`);
       return;
@@ -173,6 +208,11 @@ export default function DropDownload() {
       a.click();
       document.body.removeChild(a);
       setDlState('done');
+      const timestamp = Date.now();
+      setDownloadTimestamp(timestamp);
+      if (id) {
+        localStorage.setItem(`drop-download-${id}`, timestamp.toString());
+      }
       setPricePreview((p) => p ? { ...p, alreadyDownloaded: true } : p);
       if (pricePreview?.finalPrice && !pricePreview.isFree && !pricePreview.isCreator) {
         updateBalance(-pricePreview.finalPrice);
@@ -194,6 +234,15 @@ export default function DropDownload() {
     ? reviews.filter((r) => r.liked === false).length
     : drop.dislikeCount;
   const reviewCount = reviews.length > 0 ? reviews.length : drop.reviewCount;
+
+  // Check if user can review (must have downloaded and waited 5 minutes)
+  const hasDownloaded = downloadTimestamp !== null || pricePreview?.alreadyDownloaded;
+  const REVIEW_DELAY_MS = 5 * 60 * 1000; // 5 minutes
+  const timeElapsedMs = downloadTimestamp ? currentTime - downloadTimestamp : 0;
+  const canReviewNow = hasDownloaded && timeElapsedMs >= REVIEW_DELAY_MS;
+  const timeRemainingMs = hasDownloaded ? Math.max(0, REVIEW_DELAY_MS - timeElapsedMs) : 0;
+  const minutesRemaining = Math.ceil(timeRemainingMs / 60000);
+  const secondsRemaining = Math.ceil((timeRemainingMs % 60000) / 1000);
 
   const handleReviewSubmit = async (data: { comment: string; liked: boolean | null; rating: number }) => {
     try {
@@ -273,6 +322,8 @@ export default function DropDownload() {
             <span className="text-surface-3">|</span>
             <span className="flex items-center gap-1"><HardDrive className="w-4 h-4" /> {drop.fileSize}</span>
             <span className="flex items-center gap-1"><Tag className="w-4 h-4" /> {drop.fileType}</span>
+            {/* drop date */}
+            <span className="flex items-center gap-1"><Calendar className="w-4 h-4" /> {new Date(drop.createdAt).toLocaleDateString()}</span>
           </div>
 
           <p className="text-sm text-text-muted leading-relaxed">{drop.description}</p>
@@ -468,9 +519,43 @@ export default function DropDownload() {
         </div>
 
         {/* Review submission form */}
-        <div className="mb-6">
-          <ReviewForm onSubmit={handleReviewSubmit} />
-        </div>
+        {hasDownloaded ? (
+          <div className="mb-6">
+            {!canReviewNow ? (
+              <div className="bg-surface-2 rounded-xl p-4 border border-brand/20">
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="w-10 h-10 rounded-full bg-brand/10 flex items-center justify-center">
+                    <Star className="w-5 h-5 text-brand" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-sm font-semibold text-text">Review unlocking...</h3>
+                    <p className="text-xs text-text-muted">
+                      You can leave a review in {minutesRemaining > 0 ? `${minutesRemaining}m ${secondsRemaining}s` : `${secondsRemaining}s`}
+                    </p>
+                  </div>
+                </div>
+                <div className="h-1.5 bg-surface-3 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-brand transition-all duration-1000"
+                    style={{ width: `${(timeElapsedMs / REVIEW_DELAY_MS) * 100}%` }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <ReviewForm onSubmit={handleReviewSubmit} />
+            )}
+          </div>
+        ) : (
+          <div className="mb-6 bg-surface-2 rounded-xl p-4 border border-surface-3">
+            <div className="flex items-center gap-3">
+              <Lock className="w-5 h-5 text-text-muted" />
+              <div>
+                <h3 className="text-sm font-semibold text-text">Download required</h3>
+                <p className="text-xs text-text-muted">You must download this drop before leaving a review</p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Reviews list */}
         {reviews.length === 0 ? (

@@ -16,6 +16,7 @@ export interface Drop {
   mimeType: string | null;
   scheduledDropTime: number;    // unix ms
   actualDropTime: number | null;// unix ms — filled when drop unlocks
+  fuseTime?: number;            // unix ms remaining in the fuse countdown
   createdAt: number;            // unix ms
   expiresAt: number;            // unix ms
   goalAmount: number;           // credits (Spark Threshold)

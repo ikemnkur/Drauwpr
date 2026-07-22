@@ -21,6 +21,7 @@ export interface ServerDrop {
   tags: string | string[] | null;
   scheduledDropTime: string;
   actualDropTime: string | null;
+  fusetime?: number | string | null;
   expiresAt: string;
   goalAmount: number;
   currentContributions: number;
@@ -77,6 +78,9 @@ export function mapDrop(d: ServerDrop): Drop & { myContribution?: number } {
     link: d.link ?? null,
     scheduledDropTime: new Date(d.scheduledDropTime).getTime(),
     actualDropTime: d.actualDropTime ? new Date(d.actualDropTime).getTime() : null,
+    fuseTime: d.fusetime != null
+      ? Number(d.fusetime)
+      : Math.max(0, new Date(d.scheduledDropTime).getTime() - new Date(d.created_at).getTime()),
     createdAt: new Date(d.created_at).getTime(),
     expiresAt: new Date(d.expiresAt).getTime(),
     goalAmount: d.goalAmount,

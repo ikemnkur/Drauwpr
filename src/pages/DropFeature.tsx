@@ -14,9 +14,9 @@ import ShareModal from '../components/ShareModal';
 import DropCelebrationModal from '../components/DropCelebrationModal';
 import XIcon from '@mui/icons-material/X';
 import FacebookIcon from '@mui/icons-material/Facebook';
-import { estimateRealSecondsRemaining } from '../engine/burnRate';
-import { Tag, HardDrive, ChevronDown, ChevronUp, Film, Image, Timer, Share2, Link2, Check, MessageCircle, Send, AlertTriangle } from 'lucide-react';
+import { Tag, HardDrive, ChevronDown, ChevronUp, Film, Image, Timer, Share2, Link2, Check, MessageCircle, Send, AlertTriangle, Calendar } from 'lucide-react';
 import ExpirationGauge from '../components/ExpirationGauge';
+import { useFuseCountdown } from '../hooks/useFuseCountdown';
 
 interface ServerContributor {
   userId: string;
@@ -64,11 +64,51 @@ export default function DropFeature() {
   const [dropDayPulse, setDropDayPulse] = useState(false);
   const [copiedInline, setCopiedInline] = useState(false);
   const [stallExpiresAt, setStallExpiresAt] = useState<number | null>(null);
-  const [stallScheduledDropTime, setStallScheduledDropTime] = useState<number | null>(null);
 
   const localDrop = drops.find((d) => d.id === id);
   const drop = localDrop ?? fetchedDrop;
+  const goalMet = drop ? drop.currentContributions >= drop.goalAmount : false;
+  
 
+
+  const expiryThresholdMet =
+    drop
+      ? (() => {
+        const d = drop as Drop & {
+          expiryThreshold?: number | null;
+          expiryThresholdMet?: boolean | null;
+        };
+
+        if (typeof d.expiryThresholdMet === 'boolean') return d.expiryThresholdMet;
+        if (typeof d.expiryThreshold === 'number') return drop.currentContributions >= d.expiryThreshold;
+        return false;
+      })()
+      : false;
+
+
+  const baseFuseTimeMs = drop
+    ? (drop.fuseTime ?? Math.max(0, drop.scheduledDropTime - drop.createdAt))
+    : 0;
+
+  const fuseTimeMs = useFuseCountdown(
+    baseFuseTimeMs,
+    drop?.burnRate ?? 1,
+    Boolean(drop && goalMet && drop.status !== 'dropped' && drop.status !== 'expired')
+  );
+
+  // const isCelebrationReady =
+  //   !!drop &&
+  //   (
+  //     (goalMet && (drop.status === 'dropped' || fuseTimeMs <= 0)) ||
+  //     (drop.status === 'expired' && !goalMet && expiryThresholdMet)
+  //   );
+
+  // const baseFuseTimeMs = drop
+  //   ? (drop.fuseTime ?? Math.max(0, drop.scheduledDropTime - drop.createdAt))
+  //   : 0;
+
+
+ 
   function resolveAssetUrl(pathOrUrl: string | null, fallbackUrl: string | null): string {
     const raw = (pathOrUrl || fallbackUrl || '').trim();
     if (!raw) return 'https://picsum.photos/seed/dropfeature-ad/800/420';
@@ -86,6 +126,87 @@ export default function DropFeature() {
     return `/drop/${t}`;
   }
 
+  function resolveSponsoredMedia(pathOrUrl: string | null, fallbackUrl: string | null): {
+    type: 'youtube' | 'video' | 'image';
+    src: string;
+  } {
+    const raw = (pathOrUrl || fallbackUrl || '').trim();
+    if (!raw) {
+      return { type: 'image', src: 'https://picsum.photos/seed/dropfeature-ad/800/420' };
+    }
+
+    const youtubeEmbed = toYouTubeEmbed(raw);
+    if (youtubeEmbed) {
+      return { type: 'youtube', src: youtubeEmbed };
+    }
+
+    const resolved = resolveAssetUrl(pathOrUrl, fallbackUrl);
+    const isVideo = /\.(mp4|webm|ogg|mov|m4v)(\?|#|$)/i.test(raw) || /\.(mp4|webm|ogg|mov|m4v)(\?|#|$)/i.test(resolved);
+
+    if (isVideo) {
+      return { type: 'video', src: resolved };
+    }
+
+    return { type: 'image', src: resolved };
+  }
+
+  // example Drop object for reference
+  const example_drop = {
+    "id": "5106c2ec-1708-40b5-baa5-10d666a93196",
+    "title": "test",
+    "description": "test",
+    "creatorId": "UJH2MRXCGU",
+    "creatorName": "ikenuru",
+    "creatorAvatar": "https://storage.googleapis.com/cloutcoinclub_bucket/storage_folder/avatars/UJH2MRXCGU/f63b29f6-342d-486f-8ab8-058fc2a1a1da_avatar.webp",
+    "trailerUrl": "",
+    "thumbnailUrl": "",
+    "fileType": "other",
+    "fileSize": "156.3 KB",
+    "fileSizeBytes": 160072,
+    "filePath": "storage_folder/private/drops/UJH2MRXCGU/5106c2ec-1708-40b5-baa5-10d666a93196/ea9e8935-0bf1-46b8-b9f1-842c409f6383_0388388790_clipped_rev_1_75188a42-3e58-405d-ba96-5ae7735e6279.webp",
+    "originalFileName": "0388388790_clipped_rev_1_75188a42-3e58-405d-ba96-5ae7735e6279.webp",
+    "mimeType": "image/webp",
+    "link": null,
+    "scheduledDropTime": 1784858152000,
+    "actualDropTime": null,
+    "fuseTime": 172799996,
+    "createdAt": 1784703351000,
+    "expiresAt": 1785030952000,
+    "goalAmount": 1000,
+    "currentContributions": 0,
+    "contributorCount": 0,
+    "momentum": 0,
+    "burnRate": 1,
+    "lastMomentumUpdate": null,
+    "sensitivity": 5,
+    "decayConstant": 0.0003,
+    "basePrice": 50,
+    "dailyPriceDecayPct": 5,
+    "volumeDecayStep": 1000,
+    "volumeDecayPct": 5,
+    "totalDownloads": 0,
+    "totalRevenue": 0,
+    "avgRating": null,
+    "reviewCount": 0,
+    "likeCount": 0,
+    "dislikeCount": 0,
+    "views": 0,
+    "flagCount": 0,
+    "mature": false,
+    "status": "pending",
+    "isPublic": true,
+    "tags": [],
+    "expiryBehaviour": "refund",
+    "expiryThreshold": null
+}
+
+
+  // Display Drop Data in the Console
+  useEffect(() => {
+    if (!drop) return;
+    console.log('Drop Data:', drop);
+  }, [drop]);
+
   useEffect(() => {
     if (!drop) return;
     // Show expired modal if drop expired without reaching its goal
@@ -94,38 +215,34 @@ export default function DropFeature() {
     if (isExpired) setShowExpiredModal(true);
   }, [drop, stallExpiresAt]);
 
+  // Show celebration modal when the drop is about to be released
+  // 1. contribution goal has been met
+  // 2. fusetime is 0
+  // 3. the drop is exprired (contibutributions are still not at goal amount at the scheduled drop datetime) but the contribution threshold (expiry_threshold on the DB in the drops table) has been met.
   useEffect(() => {
-    if (!drop || drop.status === 'dropped' || celebrationFired.current) return;
-    const iv = window.setInterval(() => {
-      if (celebrationFired.current) { window.clearInterval(iv); return; }
-      const clockSecs = Math.max(0, ((stallScheduledDropTime ?? drop.scheduledDropTime) - Date.now()) / 1000);
-      const real = estimateRealSecondsRemaining(
-        clockSecs,
-        drop.burnRate,
-        Date.now(),
-        drop.createdAt,
-        stallExpiresAt ?? drop.expiresAt,
-      );
-      if (real <= 3) {
-        celebrationFired.current = true;
-        setShowCelebration(true);
-        window.clearInterval(iv);
-      }
-    }, 500);
-    return () => window.clearInterval(iv);
-  }, [drop, stallScheduledDropTime, stallExpiresAt]);
+
+    // check condition 1
+    if (!goalMet) return; // condition 1 not met
+    // check condition 2
+    if (drop?.fuseTime && fuseTimeMs > 0) return; // condition 2 not met
+    // check condition 3
+    if ((drop?.status === 'expired' || (drop?.expiresAt - nowMs <= 0)) && !expiryThresholdMet) return; // condition 3 not met
+   
+    if ((goalMet && ((drop.status === 'dropped' || drop.status === 'active') || fuseTimeMs <= 0))) {
+      celebrationFired.current = true;
+      setShowCelebration(true);
+    }
+  }, [drop, fuseTimeMs]);
 
   useEffect(() => {
     if (!id || !drop) return;
 
-    const windowClosed = Date.now() >= drop.scheduledDropTime;
-    const goalReached = drop.currentContributions >= drop.goalAmount;
-    const released = drop.status === 'dropped' || (goalReached && windowClosed);
+    const released = goalMet && (drop.status === 'dropped' || fuseTimeMs <= 0);
 
     if (released) {
       navigate(`/drop/${id}/download`, { replace: true });
     }
-  }, [drop, id, navigate]);
+  }, [drop, fuseTimeMs, goalMet, id, navigate]);
 
   useEffect(() => {
     let cancelled = false;
@@ -216,20 +333,44 @@ export default function DropFeature() {
     return () => { cancelled = true; };
   }, [id, localDrop]);
 
+  // useEffect(() => {
+  //   if (!drop || drop.status === 'dropped' || celebrationFired.current) return;
+  //   if (!isCelebrationReady) return;
+
+  //   celebrationFired.current = true;
+  //   setShowCelebration(true);
+  // }, [drop, isCelebrationReady]);
+
+
+  // Replace by a button in the celebration modal
+  // useEffect(() => {
+  //   if (!id || !drop) return;
+
+  //   const released =
+  //     (goalMet && (drop.status === 'dropped' || fuseTimeMs <= 0)) ||
+  //     (drop.status === 'expired' && !goalMet && expiryThresholdMet);
+
+  //   if (released) {
+  //     navigate(`/drop/${id}/download`, { replace: true });
+  //   }
+  // }, [drop, expiryThresholdMet, fuseTimeMs, goalMet, id, navigate]);
+
   useEffect(() => {
     if (!drop) return;
 
-    const effectiveScheduledDropTime = stallScheduledDropTime ?? drop.scheduledDropTime;
-    const clockSecondsFromSchedule = Math.max(0, (effectiveScheduledDropTime - nowMs) / 1000);
-    const effectiveExpiresAt = stallExpiresAt ?? drop.expiresAt;
-    const estimatedReal = estimateRealSecondsRemaining(
-      clockSecondsFromSchedule,
-      drop.burnRate,
-      nowMs,
-      drop.createdAt,
-      effectiveExpiresAt,
-    );
-    const projectedDropDate = new Date(nowMs + estimatedReal * 1000);
+    const isExpired =
+      drop.status === 'expired' ||
+      (Date.now() > (stallExpiresAt ?? drop.expiresAt) && drop.currentContributions < drop.goalAmount);
+
+    if (isExpired && !(drop.status === 'expired' && !goalMet && expiryThresholdMet)) {
+      setShowExpiredModal(true);
+    }
+  }, [drop, stallExpiresAt, goalMet, expiryThresholdMet]);
+
+  useEffect(() => {
+    if (!drop) return;
+
+    const projectedDropDate = new Date(nowMs + (fuseTimeMs / Math.max(1, drop.burnRate)));
     const projectedDayKey = `${projectedDropDate.getFullYear()}-${projectedDropDate.getMonth() + 1}-${projectedDropDate.getDate()}`;
 
     if (!prevProjectedDayKeyRef.current) {
@@ -242,7 +383,7 @@ export default function DropFeature() {
     setDropDayPulse(true);
     const timeout = window.setTimeout(() => setDropDayPulse(false), 1000);
     return () => window.clearTimeout(timeout);
-  }, [drop, nowMs, stallScheduledDropTime, stallExpiresAt]);
+  }, [drop, nowMs, fuseTimeMs, stallExpiresAt]);
 
   if (loading) {
     return (
@@ -261,18 +402,9 @@ export default function DropFeature() {
     );
   }
 
-  const effectiveScheduledDropTime = stallScheduledDropTime ?? drop.scheduledDropTime;
-  const clockSecondsFromSchedule = Math.max(0, (effectiveScheduledDropTime - nowMs) / 1000);
   const effectiveExpiresAt = stallExpiresAt ?? drop.expiresAt;
-  const estimatedReal = estimateRealSecondsRemaining(
-    clockSecondsFromSchedule,
-    drop.burnRate,
-    nowMs,
-    drop.createdAt,
-    effectiveExpiresAt,
-  );
+  const remainingSeconds = fuseTimeMs / 1000;
   const totalMinutesLeft = Math.max(0, (effectiveExpiresAt - nowMs) / 60_000);
-  const goalMet = drop.currentContributions >= drop.goalAmount;
 
   const uniqueContributorCount = contributors.length > 0 ? contributors.length : drop.contributorCount;
   const lastBurnMs = drop.lastContributionTime
@@ -292,7 +424,7 @@ export default function DropFeature() {
     ? Math.floor(drop.currentContributions / drop.contributorCount)
     : 0;
 
-  const projectedDropDate = new Date(nowMs + estimatedReal * 1000);
+  const projectedDropDate = new Date(nowMs + (fuseTimeMs / Math.max(1, drop.burnRate)));
   const bannerRaw = String(drop.thumbnailUrl || '').trim();
   const bannerUrl = bannerRaw
     ? (/^https?:\/\//i.test(bannerRaw)
@@ -321,6 +453,9 @@ export default function DropFeature() {
   const todayDate = new Date(nowMs);
   const isSameMonth = todayDate.getMonth() === calMonth && todayDate.getFullYear() === calYear;
   const todayDay = isSameMonth ? todayDate.getDate() : -1;
+  const expiryDate = new Date(effectiveExpiresAt);
+  const calExpiryDay = expiryDate.getDate();
+  const isExpiryInSameMonth = expiryDate.getMonth() === calMonth && expiryDate.getFullYear() === calYear;
 
   return (
     <div className="max-w-5xl mx-auto">
@@ -402,13 +537,15 @@ export default function DropFeature() {
             </Link>
             <span className="flex items-center gap-1"><HardDrive className="w-4 h-4" /> {drop.fileSize}</span>
             <span className="flex items-center gap-1"><Tag className="w-4 h-4" /> {drop.fileType}</span>
-           
-           
+            {/* Date Created */}
+            <span className="flex items-center gap-1"><Calendar className="w-4 h-4" /> {new Date(drop.createdAt).toLocaleDateString()}</span>
+
+
 
           </div>
-          <div className="mt-2"> 
-           {/* <br/> */}
-             {/* Description */}
+          <div className="mt-2">
+            {/* <br/> */}
+            {/* Description */}
             <span className="text-sm text-text-muted mt-8 leading-relaxed">{drop.description}</span>
           </div>
         </div>
@@ -427,7 +564,7 @@ export default function DropFeature() {
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-surface-3 text-text-muted hover:text-brand hover:border-brand/40 text-sm transition"
               >
                 <Share2 className="w-4 h-4" />
-               
+
               </button>
             </div>
           </div>
@@ -443,7 +580,7 @@ export default function DropFeature() {
           <div className="bg-surface-2 rounded-2xl p-4 sm:p-6 flex flex-col sm:flex-row items-center justify-center gap-4 sm:gap-6">
             {/* Clock — shrunk on mobile */}
             <div className="flex flex-col items-center gap-3">
-              <AnalogClock remainingSeconds={estimatedReal} burnRate={drop.burnRate} size={180} />
+              <AnalogClock remainingSeconds={remainingSeconds} size={180} />
               {/* Stall button — only for active/pending drops */}
               {(drop.status === 'active' || drop.status === 'pending') && (
                 <button
@@ -471,6 +608,7 @@ export default function DropFeature() {
                 {Array.from({ length: calDays }, (_, i) => i + 1).map(day => {
                   const isDropDay = day === calDropDay;
                   const isToday = day === todayDay;
+                  const isExpiryDay = isExpiryInSameMonth && day === calExpiryDay;
                   return (
                     <div
                       key={day}
@@ -478,9 +616,11 @@ export default function DropFeature() {
                         'w-6 h-6 flex items-center justify-center rounded-lg text-[11px] font-mono transition',
                         isDropDay
                           ? `bg-brand text-white font-bold ring-2 ring-brand/40 scale-110 ${dropDayPulse ? 'animate-pulse' : ''}`
-                          : isToday
-                            ? 'bg-surface-3 text-text font-semibold'
-                            : 'text-text-muted hover:text-text',
+                          : isExpiryDay
+                            ? 'bg-red-500 text-white font-bold ring-2 ring-red-500/40'
+                            : isToday
+                              ? 'bg-surface-3 text-text font-semibold'
+                              : 'text-text-muted hover:text-text',
                       ].join(' ')}
                     >
                       {day}
@@ -494,7 +634,7 @@ export default function DropFeature() {
                   🔥 {projectedDropDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
                 </p>
                 <p className="text-[10px] text-text-muted mt-0.5">
-                  {estimatedReal > 0 ? 'estimated drop' : 'drop date'}
+                  {fuseTimeMs > 0 ? 'estimated drop' : 'drop date'}
                 </p>
               </div>
             </div>
@@ -530,7 +670,8 @@ export default function DropFeature() {
             {/* Todo: only show the BurnRateGauge if Goal has been met 100% else show Expiration Gauge */}
 
             {(goalMet
-              ? <BurnRateGauge rate={drop.burnRate} goalPct={Math.min((drop.currentContributions / drop.goalAmount) * 100, 100)} />
+              // ? <BurnRateGauge rate={drop.burnRate} goalPct={Math.min((drop.currentContributions / drop.goalAmount) * 100, 100)} />
+              ? <BurnRateGauge rate={drop.burnRate} goalPct={drop.burnRate*10} />
               : <ExpirationGauge
                 createdAt={drop.createdAt}
                 expiresAt={drop.expiresAt}
@@ -653,17 +794,35 @@ export default function DropFeature() {
               const target = resolveTarget(sponsoredAd.targetDropId);
               const external = /^https?:\/\//i.test(target);
               const classes = 'hidden lg:block bg-surface-2 rounded-xl border border-surface-3 overflow-hidden no-underline group';
+              const media = resolveSponsoredMedia(sponsoredAd.assetPath, sponsoredAd.mediaUrl);
               const content = (
                 <>
                   <div className="aspect-[16/10] overflow-hidden bg-surface-3">
-                    <img
-                      src={resolveAssetUrl(sponsoredAd.assetPath, sponsoredAd.mediaUrl)}
-                      alt={sponsoredAd.title}
-                      className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform"
-                    />
+                    {media.type === 'youtube' ? (
+                      <iframe
+                        src={media.src}
+                        title={sponsoredAd.title}
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                        allowFullScreen
+                        className="w-full h-full"
+                      />
+                    ) : media.type === 'video' ? (
+                      <video
+                        src={media.src}
+                        controls
+                        preload="metadata"
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <img
+                        src={media.src}
+                        alt={sponsoredAd.title}
+                        className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform"
+                      />
+                    )}
                   </div>
                   <div className="p-3">
-                    <p className="text-[10px] uppercase tracking-wider font-bold text-brand/80">Sponsored</p>
+                    <p className="text-[10px] uppercase tracking-wider font-bold text-brand/80">Sponsored/AD</p>
                     <p className="text-sm font-semibold text-text mt-1 line-clamp-1">{sponsoredAd.title}</p>
                     <p className="text-xs text-text-muted mt-0.5 line-clamp-2">{sponsoredAd.description || 'Sponsored content'}</p>
                     <p className="text-xs text-brand font-semibold mt-2">{sponsoredAd.ctaText || 'Learn more'}</p>
@@ -761,9 +920,8 @@ export default function DropFeature() {
           dropTitle={drop.title}
           totalMinutesLeft={totalMinutesLeft}
           onClose={() => setShowStallModal(false)}
-          onStalled={(newExpiresAt, _creditsSpent, _newBalance, newScheduledDropTime) => {
+          onStalled={(newExpiresAt, _creditsSpent, _newBalance, _newFuseTime) => {
             setStallExpiresAt(new Date(newExpiresAt).getTime());
-            setStallScheduledDropTime(new Date(newScheduledDropTime).getTime());
             refreshDrop();
           }}
         />
