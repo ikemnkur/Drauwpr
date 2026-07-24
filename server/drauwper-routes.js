@@ -986,7 +986,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       rows[0].creatorName = rows2[0]?.creatorName || rows[0].creatorName;
       rows[0].creatorAvatar = rows2[0]?.creatorAvatar || rows[0].creatorAvatar;
 
-      console.log('rows:', rows[0]);
+      // console.log('rows:', rows[0]);
 
       if (!rows.length) return res.status(404).json({ error: 'Drop not found' });
       res.json(normalizeDropMediaFields(rows[0]));
