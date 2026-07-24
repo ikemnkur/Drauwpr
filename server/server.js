@@ -2678,7 +2678,7 @@ async function runPromoBillingCron() {
         await safeInsertWalletTransaction({
           id: require('crypto').randomUUID(),
           userId: livePromo.userId,
-          type: 'admin_adjustment',
+          type: 'promo-charge',
           amount: -chargeAmount,
           balanceAfter: newBalance,
           relatedDropId,
@@ -7398,7 +7398,7 @@ async function safeInsertWalletTransaction(tx, db = knex) {
     contributor_reward: 'bonus',
     download_payment: 'contribution',
     creator_earning: 'bonus',
-    creator_payout: 'admin_adjustment',
+    creator_payout: 'payout',
   };
 
   try {
@@ -8161,7 +8161,7 @@ async function stripeCreditPurchases(data) {
           type: 'credit_purchase',
           amount: Math.floor(credits),
           balanceAfter: Number(userRow?.credits || 0),
-          relatedPurchaseId: purchaseRecordId,
+          relatedUserId: purchaseRecordId,
           description: 'Stripe payment completed',
           created_at: knex.fn.now(),
         });
@@ -8225,6 +8225,7 @@ async function stripeCreditPurchases(data) {
 /////////////////////////////////////////////////////////
 //  Subscription Purchase Logging
 /////////////////////////////////////////////////////////
+
 
 
 // Get subscription data from Stripe by subscription ID or customer ID
@@ -8569,6 +8570,339 @@ server.post(PROXY + '/api/verify-stripe-subscription', async (req, res) => {
       message: 'Internal server error during subscription verification',
       error: error.message
     });
+  }
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SUBSCRIPTION RENEWAL & CREDIT BONUS CRON
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Ensure the subscriptions table has the 'reviewed' column for tracking processed renewals
+ */
+async function ensureSubscriptionReviewedColumn() {
+  try {
+    // Check if column exists
+    const [columns] = await knex.raw("SHOW COLUMNS FROM subscriptions LIKE 'reviewed'");
+    
+    if (columns.length === 0) {
+      console.log('📝 Adding reviewed column to subscriptions table...');
+      await knex.raw(`
+        ALTER TABLE subscriptions 
+        ADD COLUMN reviewed TINYINT(1) DEFAULT 0 
+        COMMENT 'Tracks if renewal has been processed for credit bonus'
+      `);
+      console.log('✅ Added reviewed column to subscriptions table');
+      
+      // Mark all existing records as reviewed to avoid retroactive processing
+      await knex('subscriptions')
+        .whereNull('reviewed')
+        .update({ reviewed: 1 });
+      console.log('✅ Marked all existing subscriptions as reviewed');
+    }
+  } catch (error) {
+    console.error('⚠️ Error ensuring reviewed column:', error.message);
+  }
+}
+
+async function processSubscriptionRenewals() {
+  console.log('🔄 Starting subscription renewal check...');
+  
+  // Ensure the reviewed column exists
+  await ensureSubscriptionReviewedColumn();
+  
+  try {
+    // Find subscriptions that renewed in the last 24 hours and haven't been reviewed yet
+    const renewedSubscriptions = await knex('subscriptions')
+      .where('status', 'active')
+      .where('current_period_start', '>=', knex.raw('DATE_SUB(NOW(), INTERVAL 24 HOUR)'))
+      .where('current_period_start', '<=', knex.raw('NOW()'))
+      .where(function() {
+        this.where('reviewed', 0).orWhereNull('reviewed');
+      })
+      .select('*');
+
+    console.log(`📊 Found ${renewedSubscriptions.length} subscriptions to process`);
+
+    let creditsAwarded = 0;
+    let recordsCreated = 0;
+    let standardCancelled = 0;
+
+    for (const sub of renewedSubscriptions) {
+      try {
+        const userId = sub.user_id;
+        const planName = String(sub.plan_name || '').toLowerCase();
+
+        // Mark as reviewed immediately to prevent duplicate processing if cron runs again
+        await knex('subscriptions')
+          .where('id', sub.id)
+          .update({ reviewed: 1 });
+
+        console.log(`✅ Marked subscription ${sub.id} as reviewed for user ${userId}`);
+
+        // Verify subscription is still active with Stripe
+        let stripeSubscription;
+        try {
+          stripeSubscription = await stripe.subscriptions.retrieve(sub.stripe_subscription_id);
+          
+          // Update our record if Stripe shows it's cancelled
+          if (stripeSubscription.status === 'canceled' || stripeSubscription.cancel_at_period_end) {
+            await knex('subscriptions')
+              .where('id', sub.id)
+              .update({ 
+                status: stripeSubscription.status,
+                cancel_at_period_end: stripeSubscription.cancel_at_period_end ? 1 : 0
+              });
+            console.log(`⏭️ Skipping cancelled subscription for user ${userId}`);
+            continue;
+          }
+        } catch (stripeError) {
+          console.error(`⚠️ Could not verify Stripe subscription ${sub.stripe_subscription_id}:`, stripeError.message);
+          continue;
+        }
+
+        // Determine credit bonus amount
+        let bonusCredits = 0;
+        if (planName === 'standard') {
+          bonusCredits = 2500;
+        } else if (planName === 'premium') {
+          bonusCredits = 5000;
+        } else {
+          console.log(`⚠️ Unknown plan name: ${planName} for user ${userId}`);
+          continue;
+        }
+
+        // Award bonus credits
+        const [[userRow]] = await knex.raw(
+          'UPDATE userData SET credits = credits + ? WHERE id = ? RETURNING credits',
+          [bonusCredits, userId]
+        );
+
+        if (!userRow) {
+          console.error(`❌ User ${userId} not found`);
+          continue;
+        }
+
+        const newBalance = userRow.credits || 0;
+
+        // Create wallet transaction for bonus credits
+        const txId = uuidv4();
+        await knex('walletTransactions').insert({
+          id: txId,
+          userId: userId,
+          type: 'bonus',
+          amount: bonusCredits,
+          balanceAfter: newBalance,
+          relatedDropId: null,
+          relatedPurchaseId: null,
+          relatedContributionId: null,
+          description: `${planName.charAt(0).toUpperCase() + planName.slice(1)} subscription renewal bonus credits`
+        });
+
+        // Create a new subscription record for this renewal period
+        const renewalId = uuidv4();
+        await knex('subscriptions').insert({
+          id: renewalId,
+          user_id: userId,
+          username: sub.username,
+          stripe_subscription_id: sub.stripe_subscription_id,
+          stripe_customer_id: sub.stripe_customer_id,
+          plan_id: sub.plan_id,
+          plan_name: sub.plan_name,
+          status: stripeSubscription.status,
+          current_period_start: new Date(stripeSubscription.current_period_start * 1000),
+          current_period_end: new Date(stripeSubscription.current_period_end * 1000),
+          cancel_at_period_end: stripeSubscription.cancel_at_period_end ? 1 : 0,
+          trial_start: stripeSubscription.trial_start ? new Date(stripeSubscription.trial_start * 1000) : null,
+          trial_end: stripeSubscription.trial_end ? new Date(stripeSubscription.trial_end * 1000) : null,
+          reviewed: 0  // Mark as unreviewed so it will be processed next renewal cycle
+        });
+
+        console.log(`✅ Awarded ${bonusCredits} credits to user ${userId} for ${planName} renewal`);
+        creditsAwarded += bonusCredits;
+        recordsCreated++;
+
+        // Check if user has both Standard and Premium subscriptions
+        const [activeSubscriptions] = await knex('subscriptions')
+          .where('user_id', userId)
+          .where('status', 'active')
+          .whereNull('canceled_at')
+          .where('cancel_at_period_end', 0)
+          .groupBy('plan_name')
+          .select('plan_name', 'stripe_subscription_id', 'id')
+          .orderBy('created_at', 'desc');
+
+        const hasStandard = activeSubscriptions.some(s => String(s.plan_name || '').toLowerCase() === 'standard');
+        const hasPremium = activeSubscriptions.some(s => String(s.plan_name || '').toLowerCase() === 'premium');
+
+        if (hasStandard && hasPremium) {
+          // Cancel Standard subscription
+          const standardSub = activeSubscriptions.find(s => String(s.plan_name || '').toLowerCase() === 'standard');
+          
+          if (standardSub) {
+            try {
+              // Cancel with Stripe
+              await stripe.subscriptions.update(standardSub.stripe_subscription_id, {
+                cancel_at_period_end: true
+              });
+
+              // Update database
+              await knex('subscriptions')
+                .where('stripe_subscription_id', standardSub.stripe_subscription_id)
+                .update({
+                  cancel_at_period_end: 1,
+                  status: 'canceling'
+                });
+
+              console.log(`🔄 Cancelled Standard subscription for user ${userId} (has Premium)`);
+              standardCancelled++;
+
+              // Notify user
+              await createNotif(pool, {
+                userId: userId,
+                type: 'subscription_update',
+                title: '📢 Standard Subscription Cancelled',
+                message: 'Your Standard subscription has been cancelled since you have an active Premium subscription. It will remain active until the end of the current billing period.',
+                priority: 'info',
+                category: 'subscription_update',
+                actionUrl: '/settings/subscription'
+              });
+            } catch (cancelError) {
+              console.error(`❌ Failed to cancel Standard subscription for user ${userId}:`, cancelError.message);
+            }
+          }
+        }
+
+        // Send renewal confirmation notification
+        await createNotif(pool, {
+          userId: userId,
+          type: 'subscription_renewed',
+          title: '🎉 Subscription Renewed',
+          message: `Your ${planName.charAt(0).toUpperCase() + planName.slice(1)} subscription has been renewed! You received ${bonusCredits.toLocaleString()} bonus credits.`,
+          priority: 'success',
+          category: 'subscription_renewed',
+          actionUrl: '/settings/subscription'
+        });
+
+      } catch (subError) {
+        console.error(`❌ Error processing subscription ${sub.id}:`, subError.message);
+      }
+    }
+
+    console.log(`\n✅ Subscription renewal check complete:`);
+    console.log(`   - ${creditsAwarded.toLocaleString()} total credits awarded`);
+    console.log(`   - ${recordsCreated} renewal records created`);
+    console.log(`   - ${standardCancelled} Standard subscriptions cancelled (user has Premium)`);
+
+    return {
+      success: true,
+      processed: renewedSubscriptions.length,
+      creditsAwarded,
+      recordsCreated,
+      standardCancelled
+    };
+
+  } catch (error) {
+    console.error('❌ Subscription renewal cron error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Schedule renewal check every 12 hours
+cron.schedule('0 */12 * * *', async () => {
+  try {
+    console.log('⏰ Running scheduled subscription renewal check...');
+    await processSubscriptionRenewals();
+  } catch (err) {
+    console.error('❌ Subscription renewal cron failed:', err);
+  }
+});
+
+// Run once on startup (after a short delay to ensure DB is ready)
+setTimeout(() => {
+  processSubscriptionRenewals().catch(err => {
+    console.error('Startup subscription renewal check failed:', err);
+  });
+}, 30_000); // 30 seconds after startup
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ADMIN ENDPOINT: Manual Subscription Renewal Trigger
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /api/admin/process-renewals
+ * Manually trigger subscription renewal processing (admin only)
+ */
+server.post(PROXY + '/api/admin/process-renewals', authenticateToken, async (req, res) => {
+  try {
+    // // Check if user is admin
+    // const [[user]] = await pool.query('SELECT accountType FROM userData WHERE id = ?', [req.user.id]);
+    
+    // if (!user || user.accountType !== 'admin') {
+    //   return res.status(403).json({ error: 'Admin access required' });
+    // }
+
+    console.log(`👤 Admin ${req.user.id} manually triggered subscription renewal processing`);
+    
+    const result = await processSubscriptionRenewals();
+    
+    res.json({
+      success: true,
+      message: 'Subscription renewal processing completed',
+      ...result
+    });
+  } catch (error) {
+    console.error('Manual renewal trigger error:', error);
+    res.status(500).json({ 
+      error: 'Failed to process renewals',
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * GET /api/admin/subscription-stats
+ * Get subscription statistics (admin only)
+ */
+server.get(PROXY + '/api/admin/subscription-stats', authenticateToken, async (req, res) => {
+  try {
+    // // Check if user is admin
+    // const [[user]] = await pool.query('SELECT accountType FROM userData WHERE id = ?', [req.user.id]);
+    
+    // if (!user || user.accountType !== 'admin') {
+    //   return res.status(403).json({ error: 'Admin access required' });
+    // }
+
+    const [stats] = await knex.raw(`
+      SELECT 
+        plan_name,
+        COUNT(*) as total_subscriptions,
+        SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_count,
+        SUM(CASE WHEN cancel_at_period_end = 1 THEN 1 ELSE 0 END) as canceling_count,
+        COUNT(DISTINCT user_id) as unique_users
+      FROM subscriptions
+      WHERE status IN ('active', 'trialing', 'canceling')
+      GROUP BY plan_name
+    `);
+
+    const [[upcomingRenewals]] = await knex.raw(`
+      SELECT COUNT(*) as count
+      FROM subscriptions
+      WHERE status = 'active'
+      AND cancel_at_period_end = 0
+      AND current_period_end BETWEEN NOW() AND DATE_ADD(NOW(), INTERVAL 7 DAY)
+    `);
+
+    res.json({
+      success: true,
+      stats: stats,
+      upcomingRenewals: upcomingRenewals.count || 0
+    });
+  } catch (error) {
+    console.error('Subscription stats error:', error);
+    res.status(500).json({ error: 'Failed to fetch subscription stats' });
   }
 });
 
@@ -9005,6 +9339,7 @@ async function stripeBuySubscription(data) {
         canceled_at: null,
         trial_start: null,
         trial_end: null,
+        reviewed: 0,  // Mark as unreviewed so renewal cron will process it next month
         created_at: toMySQLDateTime(currentTime),
         updated_at: toMySQLDateTime(currentTime)
       });
@@ -9085,7 +9420,7 @@ async function stripeBuySubscription(data) {
           type: 'credit_purchase',
           amount: bonusCredits,
           balanceAfter: Number(userRow?.credits || 0),
-          relatedPurchaseId: purchaseInsertId || null,
+          relatedUserId: purchaseInsertId || null,
           description: `Subscription bonus credits - ${plan} plan`,
           created_at: knex.fn.now(),
         });

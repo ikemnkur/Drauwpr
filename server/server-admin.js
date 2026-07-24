@@ -768,10 +768,10 @@ module.exports = function createAdminRouter(deps = {}) {
     const fallbackTypes = {
       credit_purchase: 'purchase',
       contributor_reward: 'bonus',
-      contribution_refund: 'bonus',
+      contribution_refund: 'refund',
       download_payment: 'contribution',
       creator_earning: 'bonus',
-      creator_payout: 'admin_adjustment',
+      creator_payout: 'creator_payout',
     };
 
     try {
@@ -3594,7 +3594,7 @@ module.exports = function createAdminRouter(deps = {}) {
           type: 'credit_purchase',
           amount: Number(purchase.credits || 0),
           balanceAfter: Number(userRow?.credits || 0),
-          relatedPurchaseId: purchase.id,
+          relatedUserId: purchase.id,
           description: `Admin approved ${String(purchase.paymentMethod || '').toUpperCase()} payment`,
           created_at: trx.fn.now(),
         }).catch(() => {
@@ -3702,7 +3702,7 @@ module.exports = function createAdminRouter(deps = {}) {
             type: 'credit_purchase',
             amount: Number(purchase.credits || 0),
             balanceAfter: Number(userRow?.credits || 0),
-            relatedPurchaseId: purchase.id,
+            relatedUserId: purchase.id,
             description: 'Admin approved Stripe payment',
           });
           notify = {
@@ -3800,15 +3800,15 @@ module.exports = function createAdminRouter(deps = {}) {
       if (action === 'approve' && purchase.status !== 'completed' && purchase.userId) {
         await trx('userData').where('id', purchase.userId).increment('credits', Number(purchase.credits || 0));
         const userRow = await trx('userData').select('credits').where('id', purchase.userId).first();
-        await safeInsertWalletTransaction(trx, {
+        await safeInsertWalletTransaction({
           id: crypto.randomUUID(),
           userId: purchase.userId,
           type: 'credit_purchase',
           amount: Number(purchase.credits || 0),
           balanceAfter: Number(userRow?.credits || 0),
-          relatedPurchaseId: purchase.id,
+          relatedUserId: purchase.id,
           description: `Admin approved crypto purchase (${String(purchase.paymentMethod || '').toUpperCase()})`,
-        });
+        }, trx);
         notify = {
           userId: purchase.userId,
           type: 'credit_purchase',
@@ -3844,9 +3844,10 @@ module.exports = function createAdminRouter(deps = {}) {
   router.post('/api/review/redeem/:id/:action', express.json(), async (req, res) => {
     const { id, action } = req.params;
     const statusMap = { processing: 'processing', complete: 'completed', reject: 'failed' };
+    const trx = await knex.transaction();
     if (!statusMap[action]) return res.status(400).json({ ok: false, error: 'Invalid action' });
 
-    const trx = await knex.transaction();
+    // const trx = await knex.transaction();
     try {
       await ensureRedeemCreditsTable();
       const redeem = await trx('redeemCredits').where('id', id).first();
@@ -3866,10 +3867,10 @@ module.exports = function createAdminRouter(deps = {}) {
       if (action === 'reject' && redeem.userId) {
         await trx('userData').where('id', redeem.userId).increment('credits', Number(redeem.credits || 0));
         const userRow = await trx('userData').select('credits').where('id', redeem.userId).first();
-        await safeInsertWalletTransaction(trx, {
+        await safeInsertWalletTransaction({
           id: crypto.randomUUID(),
           userId: redeem.userId,
-          type: 'admin_adjustment',
+          type: 'creator_payout',
           amount: Number(redeem.credits || 0),
           balanceAfter: Number(userRow?.credits || 0),
           description: `Redeem request rejected — credits returned (${String(redeem.chain || '').toUpperCase()})`,

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   History as HistoryIcon, Flame, ArrowUpRight, Undo2,
   Download, CreditCard, Crown, Search, Filter, FileDown,
@@ -9,7 +9,7 @@ import {
   useContributionHistory,
   usePurchaseHistory,
   useDownloadHistory,
-  useMembershipHistory,
+  useSubscriptionHistory,
   useEarningsHistory,
   usePromoChargeHistory,
   useStallHistory,
@@ -17,7 +17,7 @@ import {
 
 // ── Types ──────────────────────────────────────────────────
 
-type Tab = 'contributions' | 'purchases' | 'downloads' | 'membership' | 'earnings' | 'promo';
+type Tab = 'contributions' | 'purchases' | 'downloads' | 'subscriptions' | 'earnings' | 'promo';
 type DateRange = 'all' | 'month' | '3months' | 'year';
 
 // ── Helpers ────────────────────────────────────────────────
@@ -96,7 +96,7 @@ export default function History() {
   const stalls = useStallHistory();
   const purchases = usePurchaseHistory();
   const downloads = useDownloadHistory();
-  const memberships = useMembershipHistory();
+  const subscriptions = useSubscriptionHistory();
   const earnings = useEarningsHistory();
   const promoCharges = usePromoChargeHistory();
 
@@ -106,7 +106,7 @@ export default function History() {
     tab === 'downloads' ? downloads.loading :
     tab === 'earnings' ? earnings.loading :
     tab === 'promo' ? promoCharges.loading :
-    memberships.loading;
+    subscriptions.loading;
 
   const cutoff = dateRangeCutoff(dateRange);
   const q = search.toLowerCase();
@@ -139,11 +139,11 @@ export default function History() {
     return !q || e.dropTitle.toLowerCase().includes(q);
   }), [downloads.entries, cutoff, q, statusFilter]);
 
-  const filteredMemberships = useMemo(() => memberships.entries.filter(e => {
+  const filteredSubscriptions = useMemo(() => subscriptions.entries.filter(e => {
     if (e.timestamp < cutoff) return false;
     if (statusFilter !== 'all' && e.status.toLowerCase() !== statusFilter) return false;
     return !q || e.plan.toLowerCase().includes(q);
-  }), [memberships.entries, cutoff, q, statusFilter]);
+  }), [subscriptions.entries, cutoff, q, statusFilter]);
 
   const filteredEarnings = useMemo(() => earnings.entries.filter(e => {
     if (e.timestamp < cutoff) return false;
@@ -193,11 +193,11 @@ export default function History() {
         filteredPromoCharges.map(e => [fmtDate(e.timestamp), fmtTime(e.timestamp), Math.abs(e.amount), e.balanceAfter, e.description ?? '']),
         'promo-charges.csv',
       );
-    } else {
+    } else if (tab === 'subscriptions') {
       downloadCSV(
         ['Date', 'Time', 'Plan', 'Amount', 'Billing', 'Status'],
-        filteredMemberships.map(e => [fmtDate(e.timestamp), fmtTime(e.timestamp), e.plan, e.amount, e.billingPeriod, e.status]),
-        'memberships.csv',
+        filteredSubscriptions.map(e => [fmtDate(e.timestamp), fmtTime(e.timestamp), e.plan, e.amount, e.billingPeriod, e.status]),
+        'subscriptions.csv',
       );
     }
   }
@@ -223,10 +223,10 @@ export default function History() {
       await downloadPDF('Promo Charges History', ['Date', 'Time', 'Charge', 'Balance After', 'Description'],
         filteredPromoCharges.map(e => [fmtDate(e.timestamp), fmtTime(e.timestamp), Math.abs(e.amount), e.balanceAfter, e.description ?? '']),
         'promo-charges.pdf');
-    } else {
-      await downloadPDF('Membership History', ['Date', 'Time', 'Plan', 'Amount', 'Billing', 'Status'],
-        filteredMemberships.map(e => [fmtDate(e.timestamp), fmtTime(e.timestamp), e.plan, e.amount, e.billingPeriod, e.status]),
-        'memberships.pdf');
+    } else if (tab === 'subscriptions') {
+      await downloadPDF('Subscription History', ['Date', 'Time', 'Plan', 'Amount', 'Billing', 'Status'],
+        filteredSubscriptions.map(e => [fmtDate(e.timestamp), fmtTime(e.timestamp), e.plan, e.amount, e.billingPeriod, e.status]),
+        'subscriptions.pdf');
     }
   }
 
@@ -244,8 +244,14 @@ export default function History() {
     { id: 'downloads', label: 'Downloads', icon: <Download className="w-4 h-4" />, count: downloads.entries.length },
     { id: 'earnings', label: 'Earnings', icon: <ArrowUpRight className="w-4 h-4" />, count: earnings.entries.length },
     { id: 'promo', label: 'Promo Charges', icon: <Megaphone className="w-4 h-4" />, count: promoCharges.entries.length },
-    { id: 'membership', label: 'Membership', icon: <Crown className="w-4 h-4" />, count: memberships.entries.length },
+    { id: 'subscriptions', label: 'Subscriptions', icon: <Crown className="w-4 h-4" />, count: subscriptions.entries.length },
   ];
+
+  useEffect(() => {
+    // log the subscription history for debugging
+    console.log('Subscriptions:', subscriptions);
+  }, [subscriptions]);
+
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -296,7 +302,7 @@ export default function History() {
         </div>
         <div className="bg-surface-2 rounded-xl p-3">
           <p className="text-xs text-text-muted mb-1">Active plan</p>
-          <p className="text-lg font-bold text-text capitalize">{memberships.activePlan ?? 'None'}</p>
+          <p className="text-lg font-bold text-text capitalize">{subscriptions.activePlan ?? 'None'}</p>
         </div>
       </div>
 
@@ -368,7 +374,7 @@ export default function History() {
               <option value="completed">Completed</option>
               <option value="processing">Processing</option>
               {tab === 'contributions' && <option value="refunded">Refunded</option>}
-              {tab === 'membership' && <option value="active">Active</option>}
+              {tab === 'subscriptions' && <option value="active">Active</option>}
             </select>
             <ChevronDown className="w-3.5 h-3.5 absolute right-2 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
           </div>
@@ -549,42 +555,46 @@ export default function History() {
             </div>
           )}
 
-          {/* Membership tab */}
-          {tab === 'membership' && (
+          {/* Subscription tab */}
+          {tab === 'subscriptions' && (
             <>
-              {memberships.activePlan && (
+              {subscriptions.activePlan && (
                 <div className="bg-gradient-to-r from-brand/20 to-purple-500/10 border border-brand/30 rounded-xl p-4 flex items-center gap-3">
                   <Crown className="w-5 h-5 text-brand shrink-0" />
                   <div>
                     <p className="text-sm font-semibold text-text capitalize">
-                      {memberships.activePlan} Plan — Active
+                      {subscriptions.activePlan} Plan — Active
                     </p>
-                    <p className="text-xs text-text-muted">Your current membership plan</p>
+                    <p className="text-xs text-text-muted">Your current subscription plan</p>
                   </div>
                 </div>
               )}
-              {filteredMemberships.length === 0 ? (
+              {filteredSubscriptions.length === 0 ? (
                 <EmptyState
                   icon={<Crown className="w-8 h-8 text-text-muted" />}
-                  label="No membership charges yet."
+                  label="No subscription charges yet."
                   sub="Standard and Premium plans will appear here once you subscribe."
                 />
               ) : (
                 <div className="space-y-2">
-                  {filteredMemberships.map(m => (
+                  {filteredSubscriptions.map(m => (
                     <div key={m.id} className="bg-surface-2 rounded-xl p-4 flex items-center gap-4">
                       <div className="w-9 h-9 bg-surface-3 rounded-lg flex items-center justify-center shrink-0">
                         <Crown className="w-4 h-4 text-yellow-400" />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-semibold text-text capitalize">{m.plan} Plan</p>
+                        <p className="text-sm font-semibold text-text capitalize">{m.planName} Plan</p>
                         <p className="text-xs text-text-muted">
                           {fmtDate(m.timestamp)} · {m.billingPeriod}
                         </p>
                       </div>
                       <div className="text-right shrink-0 flex flex-col items-end gap-1">
                         <span className="text-sm font-mono font-semibold text-brand">
-                          -{m.amount.toLocaleString()} cr
+                          
+                          {/* {m.amount.toLocaleString()} cr */}
+                           {m.planName === 'Standard' ? '$5' : m.planName === 'Premium' ? '$10' : '$0'} USD
+                          {/* {m.planName} */}
+                          {/* -{m.amount.toLocaleString() === '-10,000' ? '$5' : m.amount.toLocaleString() === '-20,000' ? '$10' : '$0'} */}
                         </span>
                         <StatusBadge status={m.status} />
                       </div>

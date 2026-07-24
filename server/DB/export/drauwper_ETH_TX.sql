@@ -44,7 +44,7 @@ CREATE TABLE `ETH_TX` (
   `confirmations` int DEFAULT '0',
   `status` enum('pending','confirmed','failed') DEFAULT 'pending',
   `purpose` enum('credit_purchase','creator_payout','refund') DEFAULT 'credit_purchase',
-  `relatedPurchaseId` varchar(10) DEFAULT NULL,
+  `relatedUserId` varchar(10) DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   KEY `idx_userId` (`userId`),

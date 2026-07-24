@@ -312,7 +312,7 @@ export default function CreateDrop() {
         }
       }
 
-      // 4. Upload the drop file to GCS
+      // 4. Upload the drop file to CloudFlare r2 Storage
       if (dropFile) {
         const mimeType = dropFileMime || 'application/octet-stream';
 
@@ -332,9 +332,9 @@ export default function CreateDrop() {
         });
       }
 
-      // 5. Publish (draft → pending)
-      setUploadStep('Publishing…');
-      await api.post(`/api/drops/${dropId}/publish`);
+      // // 5. Publish (draft → pending)
+      // setUploadStep('Publishing…');
+      // await api.post(`/api/drops/${dropId}/publish`);
 
       setSubmitted(true);
     } catch (err: unknown) {

@@ -37,7 +37,7 @@ CREATE TABLE `walletTransactions` (
   `amount` int NOT NULL COMMENT 'Positive = credit, negative = debit',
   `balanceAfter` int NOT NULL COMMENT 'User credit balance after this transaction',
   `relatedDropId` varchar(255) DEFAULT NULL,
-  `relatedPurchaseId` varchar(10) DEFAULT NULL,
+  `relatedUserId` varchar(10) DEFAULT NULL,
   `relatedContributionId` varchar(36) DEFAULT NULL,
   `description` varchar(255) DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,

@@ -153,6 +153,14 @@ const WALLET_TX_ENUM_VALUES = [
 ];
 
 const WALLET_TX_TYPE_FALLBACKS = {
+  // credit_purchase: 'purchase',
+  // contribution_refund: 'refund',
+  // contributor_reward: 'bonus',
+  // download_payment: 'contribution',
+  // creator_earning: 'bonus',
+  // creator_payout: 'creator_payout',
+  // stall_purchase: 'stall_purchase',
+
   credit_purchase: 'purchase',
   contribution_refund: 'bonus',
   contributor_reward: 'bonus',
@@ -182,22 +190,28 @@ async function ensureWalletTransactionTypeCompatibility(db) {
 
     if (!missing.length) return;
 
+    // await db.query(`
+    //   ALTER TABLE walletTransactions
+    //   MODIFY COLUMN type ENUM(
+    //     'purchase',
+    //     'credit_purchase',
+    //     'contribution',
+    //     'contribution_refund',
+    //     'contributor_reward',
+    //     'download_payment',
+    //     'creator_earning',
+    //     'creator_payout',
+    //     'admin_adjustment',
+    //     'bonus',
+    //     'stall_purchase'
+    //   ) NOT NULL
+    // `);
+
+    // replaced with varchar
     await db.query(`
       ALTER TABLE walletTransactions
-      MODIFY COLUMN type ENUM(
-        'purchase',
-        'credit_purchase',
-        'contribution',
-        'contribution_refund',
-        'contributor_reward',
-        'download_payment',
-        'creator_earning',
-        'creator_payout',
-        'admin_adjustment',
-        'bonus',
-        'stall_purchase'
-      ) NOT NULL
-    `);
+      MODIFY COLUMN type VARCHAR(50) NOT NULL
+    `); 
 
     console.log(`✅ Updated walletTransactions.type enum to include: ${missing.join(', ')}`);
   } catch (err) {
@@ -207,7 +221,7 @@ async function ensureWalletTransactionTypeCompatibility(db) {
 
 async function insertWalletTransaction(db, tx) {
   const insertSql = `INSERT INTO walletTransactions
-    (id, userId, type, amount, balanceAfter, relatedDropId, relatedPurchaseId, relatedContributionId, description)
+    (id, userId, type, amount, balanceAfter, relatedDropId, relatedUserId, relatedContributionId, description)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
   const id = tx.id || uuidv4();
@@ -218,7 +232,7 @@ async function insertWalletTransaction(db, tx) {
     tx.amount,
     tx.balanceAfter,
     tx.relatedDropId || null,
-    tx.relatedPurchaseId || null,
+    tx.relatedUserId || null,
     tx.relatedContributionId || null,
     tx.description || null,
   ];
@@ -999,6 +1013,13 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       const scheduledDropTimeMs = new Date(scheduledDropTime).getTime();
       const fuseTimeMs = Math.max(0, scheduledDropTimeMs - createdAtMs);
 
+      // visibility mode
+      const isPublic = req.body.isPublic === true || req.body.isPublic === 1 || req.body.isPublic === '1';
+
+      // check if user has any flags against them in the userFlags table
+      const [[flagged]] = await pool.query('SELECT COUNT(*) AS count FROM userFlags WHERE userId = ?', [userId]);
+      const status = flagged.count > 3 ? 'restricted' : 'active';
+
       const dropId = uuidv4();
       await pool.query(
         `INSERT INTO drops
@@ -1006,7 +1027,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
           goalAmount, basePrice, scheduledDropTime, expiresAt,
           expiry_behaviour, expiry_threshold, fusetime,
           trailerUrl, thumbnailUrl, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           dropId, userId, title, description || '',
           fileType || 'other', JSON.stringify(tags || []),
@@ -1015,6 +1036,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
           behaviour, threshold,
           fuseTimeMs,
           trailerUrl || null, thumbnailUrl || null,
+          status
         ]
       );
 
@@ -1033,7 +1055,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
 
   /**
    * PUT /api/drops/:id
-   * Update a drop (creator only, draft/pending only).
+   * Update a drop (creator only).
    */
   server.put(PROXY + '/api/drops/:id', authenticateToken, async (req, res) => {
     try {
@@ -1103,25 +1125,25 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
     }
   });
 
-  /**
-   * POST /api/drops/:id/publish
-   * Move draft → pending (makes it visible, waiting for spark goal).
-   */
-  server.post(PROXY + '/api/drops/:id/publish', authenticateToken, async (req, res) => {
-    try {
-      const userId = req.user.id;
-      const [rows] = await pool.query('SELECT creatorId, status, title FROM drops WHERE id = ?', [req.params.id]);
-      if (!rows.length) return res.status(404).json({ error: 'Drop not found' });
-      if (rows[0].creatorId !== userId) return res.status(403).json({ error: 'Not the creator' });
-      if (rows[0].status !== 'draft') return res.status(400).json({ error: 'Only draft drops can be published' });
+  // /**
+  //  * POST /api/drops/:id/publish
+  //  * Move draft → pending (makes it visible, waiting for spark goal).
+  //  */
+  // server.post(PROXY + '/api/drops/:id/publish', authenticateToken, async (req, res) => {
+  //   try {
+  //     const userId = req.user.id;
+  //     const [rows] = await pool.query('SELECT creatorId, status, title FROM drops WHERE id = ?', [req.params.id]);
+  //     if (!rows.length) return res.status(404).json({ error: 'Drop not found' });
+  //     if (rows[0].creatorId !== userId) return res.status(403).json({ error: 'Not the creator' });
+  //     if (rows[0].status !== 'draft') return res.status(400).json({ error: 'Only draft drops can be published' });
 
-      await pool.query(`UPDATE drops SET status = 'pending' WHERE id = ?`, [req.params.id]);
-      res.json({ message: `"${rows[0].title}" is now live and awaiting contributions` });
-    } catch (err) {
-      console.error('POST /api/drops/:id/publish error:', err);
-      res.status(500).json({ error: 'Failed to publish drop' });
-    }
-  });
+  //     await pool.query(`UPDATE drops SET status = 'pending' WHERE id = ?`, [req.params.id]);
+  //     res.json({ message: `"${rows[0].title}" is now live and awaiting contributions` });
+  //   } catch (err) {
+  //     console.error('POST /api/drops/:id/publish error:', err);
+  //     res.status(500).json({ error: 'Failed to publish drop' });
+  //   }
+  // });
 
   /**
    * DELETE /api/drops/:id
@@ -1222,6 +1244,18 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       // Deduct user credits
       await conn.query('UPDATE userData SET credits = credits - ? WHERE id = ?', [totalCost, userId]);
 
+      // Credit the creator so contribution earnings appear in both balance and earnings history.
+      // Skip self-contributions to avoid creating a fake earn event.
+      let creatorBalanceAfter = null;
+      if (userId !== drop.creatorId) {
+        await conn.query(
+          'UPDATE userData SET credits = credits + ?, totalCreditsEarned = totalCreditsEarned + ? WHERE id = ?',
+          [amount, amount, drop.creatorId]
+        );
+        const [[creatorRow]] = await conn.query('SELECT credits FROM userData WHERE id = ? FOR UPDATE', [drop.creatorId]);
+        creatorBalanceAfter = Number(creatorRow?.credits || 0);
+      }
+
       // Insert contribution record — stamp isVerified from the contributing user's current verification status
       const contribId = uuidv4();
       const isVerified = user.verification === 'true' ? 1 : 0;
@@ -1240,7 +1274,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
         [dropId, contribId, drop.burnRate, newBurnRate]
       );
 
-      // Wallet transaction ledger
+      // Wallet transaction ledger (debit)
       await insertWalletTransaction(conn, {
         id: uuidv4(),
         userId,
@@ -1248,9 +1282,26 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
         amount: -totalCost,
         balanceAfter: user.credits - totalCost,
         relatedDropId: dropId,
+        relatedUserId: drop.creatorId,  
         relatedContributionId: contribId,
         description: `Contributed ${amount.toLocaleString()} credits to "${drop.title}"`,
       });
+
+      // Wallet transaction ledger (credit to the drop creator)
+      if (userId !== drop.creatorId) {
+        await insertWalletTransaction(conn, {
+          id: uuidv4(),
+          userId: drop.creatorId,
+          type: 'creator_earning',
+          amount,
+          balanceAfter: creatorBalanceAfter,
+          relatedDropId: dropId,
+          relatedUserId: userId,
+          relatedContributionId: contribId,
+          description: `Contribution earning from "${drop.title}"`,
+        });
+      }
+
 
       await conn.commit();
 
@@ -1363,7 +1414,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       const stallMinutes = Math.min(60, Math.max(5, parseInt(req.body.minutes || '5', 10)));
 
       const [[drop]] = await conn.query(
-        'SELECT id, goalAmount, currentContributions, expiresAt, scheduledDropTime, status FROM drops WHERE id = ? FOR UPDATE',
+        'SELECT id, goalAmount, currentContributions, expiresAt, scheduledDropTime, status, fusetime FROM drops WHERE id = ? FOR UPDATE',
         [dropId]
       );
       if (!drop) { await conn.rollback(); return res.status(404).json({ error: 'Drop not found' }); }
@@ -2842,6 +2893,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
             amount: share,
             balanceAfter: rewardedUser.credits,
             relatedDropId: drop.id,
+            relatedUserId: drop.creatorId,
             description: `Top contributor reward for "${drop.title}"`,
           });
           await createNotif(pool, {
@@ -2879,7 +2931,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
   // Allowed drop file MIME types
   const DROP_MIME_TYPES = new Set([
     // Video
-    'video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo',
+    'video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo', 'video/vnd.avi',
     // Audio
     'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/ogg', 'audio/flac', 'audio/aac',
     // Images
@@ -2911,24 +2963,37 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       const dropId = req.params.id;
       const { fileName, fileType, fileSize } = req.body;
 
+
+
       if (!fileName || !fileType) {
+        console.error('Missing fileName or fileType');
         return res.status(400).json({ error: 'fileName and fileType are required' });
       }
       if (!DROP_MIME_TYPES.has(fileType)) {
+        console.error(`Unsupported file type: ${fileType}`);
         return res.status(400).json({ error: `Unsupported file type: ${fileType}` });
       }
       const MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024; // 5 GB
       if (fileSize && +fileSize > MAX_FILE_SIZE) {
+        console.error(`File exceeds 5 GB limit: ${fileSize}`);
         return res.status(400).json({ error: 'File exceeds 5 GB limit' });
       }
 
       // Verify ownership
       const [[drop]] = await pool.query('SELECT creatorId, status FROM drops WHERE id = ?', [dropId]);
-      if (!drop) return res.status(404).json({ error: 'Drop not found' });
-      if (drop.creatorId !== userId) return res.status(403).json({ error: 'Not the creator' });
-      if (!['draft', 'pending'].includes(drop.status)) {
-        return res.status(400).json({ error: 'Can only upload files for draft or pending drops' });
+      if (!drop) {
+        console.error(`Drop not found: ${dropId}`);
+        return res.status(404).json({ error: 'Drop not found' });
       }
+      if (drop.creatorId !== userId) {
+        console.error(`User ${userId} is not the creator of drop ${dropId}`);
+        return res.status(403).json({ error: 'Not the creator' });
+      }
+
+      // if (!['draft', 'pending'].includes(drop.status)) {
+
+      //   return res.status(400).json({ error: 'Can only upload files for draft or pending drops' });
+      // }
 
       // Build private storage destination path
       const ext = path.extname(fileName) || '';
@@ -3354,35 +3419,59 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
   });
 
   /**
-   * GET /api/history/memberships
-   * Returns membership charge history. Placeholder until the memberships table exists.
+   * GET /api/history/subscriptions
+   * Returns subscription charge history. Placeholder until the subscriptions table exists.
    */
-  server.get(PROXY + '/api/history/memberships', authenticateToken, async (req, res) => {
+  // CREATE TABLE
+  // `subscriptions` (
+  //   `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  //   `user_id` varchar(10) NOT NULL,
+  //   `username` varchar(50) DEFAULT NULL,
+  //   `stripe_subscription_id` varchar(255) NOT NULL,
+  //   `stripe_customer_id` varchar(255) DEFAULT NULL,
+  //   `plan_id` varchar(50) DEFAULT NULL,
+  //   `plan_name` varchar(100) DEFAULT NULL,
+  //   `status` varchar(50) NOT NULL DEFAULT 'active',
+  //   `current_period_start` timestamp NULL DEFAULT NULL,
+  //   `current_period_end` timestamp NULL DEFAULT NULL,
+  //   `cancel_at_period_end` tinyint(1) DEFAULT '0',
+  //   `canceled_at` timestamp NULL DEFAULT NULL,
+  //   `trial_start` timestamp NULL DEFAULT NULL,
+  //   `trial_end` timestamp NULL DEFAULT NULL,
+  //   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  //   `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  //   PRIMARY KEY (`id`),
+  //   UNIQUE KEY `uq_stripe_subscription_id` (`stripe_subscription_id`),
+  //   KEY `idx_sub_user_id` (`user_id`),
+  //   KEY `idx_sub_status` (`status`)
+  // ) ENGINE = InnoDB AUTO_INCREMENT = 40 DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci;
+
+  server.get(PROXY + '/api/history/subscriptions', authenticateToken, async (req, res) => {
     try {
-      // Check if memberships table exists
+      // Check if subscriptions table exists
       const [[tableCheck]] = await pool.query(
         `SELECT COUNT(*) AS cnt FROM information_schema.tables
-         WHERE table_schema = DATABASE() AND table_name = 'memberships'`
+         WHERE table_schema = DATABASE() AND table_name = 'subscriptions'`
       );
       if (!tableCheck || tableCheck.cnt === 0) {
-        return res.json({ memberships: [], activePlan: null });
+        return res.json({ subscriptions: [], activePlan: null });
       }
       const [rows] = await pool.query(
-        `SELECT id, plan, amount, billingPeriod, status, created_at
-         FROM memberships
-         WHERE userId = ?
+        `SELECT id, plan_name AS plan, current_period_start, current_period_end, status, created_at
+         FROM subscriptions
+         WHERE user_id = ?
          ORDER BY created_at DESC
          LIMIT 200`,
         [req.user.id]
       );
       const [[active]] = await pool.query(
-        `SELECT plan FROM memberships WHERE userId = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1`,
+        `SELECT plan_name AS plan FROM subscriptions WHERE user_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1`,
         [req.user.id]
       );
-      res.json({ memberships: rows, activePlan: active?.plan || null });
+      res.json({ subscriptions: rows, activePlan: active?.plan || null });
     } catch (err) {
-      console.error('GET /api/history/memberships error:', err);
-      res.status(500).json({ error: 'Failed to fetch membership history' });
+      console.error('GET /api/history/subscriptions error:', err);
+      res.status(500).json({ error: 'Failed to fetch subscription history' });
     }
   });
 
@@ -3393,14 +3482,17 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
   server.get(PROXY + '/api/history/earnings', authenticateToken, async (req, res) => {
     try {
       const [rows] = await pool.query(
-        `SELECT wt.id, wt.amount, wt.balanceAfter, wt.relatedDropId, wt.description, wt.created_at,
+        `SELECT wt.id, wt.amount, wt.balanceAfter, wt.relatedDropId, wt.relatedUserId, wt.description, wt.created_at,
                 d.title AS dropTitle
          FROM walletTransactions wt
          LEFT JOIN drops d ON d.id = wt.relatedDropId
-         WHERE wt.userId = ? AND wt.type = 'creator_earning'
+         WHERE (wt.userId = ? AND wt.type = 'creator_earning')
+         OR (wt.relatedUserId = ? AND wt.type = 'download_payment')
+         OR (wt.userId = ? AND wt.type = 'contribution_refund')
+         OR (wt.userId = ? AND wt.type = 'creator_earning')
          ORDER BY wt.created_at DESC
          LIMIT 200`,
-        [req.user.id]
+        [req.user.id, req.user.id, req.user.id, req.user.id, req.user.id]
       );
 
       // Calculate total earnings

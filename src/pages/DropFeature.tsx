@@ -403,7 +403,10 @@ export default function DropFeature() {
   }
 
   const effectiveExpiresAt = stallExpiresAt ?? drop.expiresAt;
-  const remainingSeconds = fuseTimeMs / 1000;
+  const goalNotMet = drop.currentContributions < drop.goalAmount;
+  const remainingSeconds = goalNotMet
+    ? Math.max(0, (effectiveExpiresAt - nowMs) / 1000)
+    : fuseTimeMs / 1000;
   const totalMinutesLeft = Math.max(0, (effectiveExpiresAt - nowMs) / 60_000);
 
   const uniqueContributorCount = contributors.length > 0 ? contributors.length : drop.contributorCount;
@@ -580,7 +583,12 @@ export default function DropFeature() {
           <div className="bg-surface-2 rounded-2xl p-4 sm:p-6 flex flex-col sm:flex-row items-center justify-center gap-4 sm:gap-6">
             {/* Clock — shrunk on mobile */}
             <div className="flex flex-col items-center gap-3">
-              <AnalogClock remainingSeconds={remainingSeconds} size={180} />
+              <AnalogClock
+                remainingSeconds={remainingSeconds}
+                size={180}
+                label={goalNotMet ? 'Countdown to expiry' : 'Time left (to burn) until drop'}
+                notice={goalNotMet ? 'Drop Countdown starts after the goal is 100% met' : undefined}
+              />
               {/* Stall button — only for active/pending drops */}
               {(drop.status === 'active' || drop.status === 'pending') && (
                 <button

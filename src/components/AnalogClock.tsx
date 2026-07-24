@@ -1,9 +1,11 @@
 interface Props {
   remainingSeconds: number;
   size?: number;
+  label?: string;
+  notice?: string;
 }
 
-export default function AnalogClock({ remainingSeconds, size: sizeProp }: Props) {
+export default function AnalogClock({ remainingSeconds, size: sizeProp, label, notice }: Props) {
   const remaining = Math.max(0, remainingSeconds);
   const expired = remaining <= 0;
 
@@ -79,8 +81,13 @@ export default function AnalogClock({ remainingSeconds, size: sizeProp }: Props)
           </div>
         )}
         <p className={`text-xs mt-1 ${expired ? 'text-red-400' : 'text-text-muted'}`}>
-          {expired ? 'Drop window closed' : ' Time left (to burn) until drop'}
+          {expired ? 'Drop window closed' : (label || 'Time left until drop')}
         </p>
+        {notice && !expired && (
+          <p className="text-[10px] mt-1 text-text-muted">
+            {notice}
+        </p>
+        )}
       </div>
     </div>
   );

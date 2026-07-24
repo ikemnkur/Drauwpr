@@ -8743,7 +8743,7 @@ async function stripeCreditPurchases(data) {
           type: 'credit_purchase',
           amount: Math.floor(credits),
           balanceAfter: Number(userRow?.credits || 0),
-          relatedPurchaseId: purchaseRecordId,
+          relatedUserId: purchaseRecordId,
           description: 'Stripe payment completed',
           created_at: knex.fn.now(),
         });
@@ -9626,7 +9626,7 @@ async function stripeBuySubscription(data) {
           type: 'credit_purchase',
           amount: bonusCredits,
           balanceAfter: Number(userRow?.credits || 0),
-          relatedPurchaseId: purchaseInsertId || null,
+          relatedUserId: purchaseInsertId || null,
           description: `Subscription bonus credits - ${plan} plan`,
           created_at: knex.fn.now(),
         });

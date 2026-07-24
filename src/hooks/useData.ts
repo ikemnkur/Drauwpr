@@ -433,32 +433,35 @@ export function useDownloadHistory() {
   return { entries, loading, error };
 }
 
-// ── Membership history hook ────────────────────────────────
+// ── Subscription history hook ────────────────────────────────
 
-export interface MembershipEntry {
+export interface SubscriptionEntry {
   id: string;
-  plan: 'standard' | 'premium';
+  plan: string;
+  planName: string;
   amount: number;
   billingPeriod: string;
   status: string;
+  currentPeriodStart: number;
+  currentPeriodEnd: number;
   timestamp: number;
 }
 
-interface MembershipsResponse {
-  memberships: {
+interface SubscriptionsResponse {
+  subscriptions: {
     id: string;
-    plan: 'standard' | 'premium';
-    amount: number;
-    billingPeriod: string;
+    plan: string;
+    current_period_start: string | null;
+    current_period_end: string | null;
     status: string;
     created_at: string;
   }[];
   activePlan: string | null;
 }
 
-export function useMembershipHistory() {
+export function useSubscriptionHistory() {
   const { isAuthenticated } = useAuth();
-  const [entries, setEntries] = useState<MembershipEntry[]>([]);
+  const [entries, setEntries] = useState<SubscriptionEntry[]>([]);
   const [activePlan, setActivePlan] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -469,19 +472,32 @@ export function useMembershipHistory() {
     (async () => {
       setLoading(true);
       try {
-        const res = await api.get<MembershipsResponse>('/api/history/memberships');
+        const res = await api.get<SubscriptionsResponse>('/api/history/subscriptions');
         if (cancelled) return;
-        setEntries(res.memberships.map(m => ({
-          id: m.id,
-          plan: m.plan,
-          amount: m.amount,
-          billingPeriod: m.billingPeriod,
-          status: m.status,
-          timestamp: new Date(m.created_at).getTime(),
-        })));
+        setEntries(res.subscriptions.map(m => {
+          const planLower = (m.plan || '').toLowerCase();
+          const amount = planLower === 'standard' ? 10000 : planLower === 'premium' ? 20000 : 0;
+          const periodStart = m.current_period_start ? new Date(m.current_period_start).getTime() : 0;
+          const periodEnd = m.current_period_end ? new Date(m.current_period_end).getTime() : 0;
+          const billingPeriod = periodStart && periodEnd
+            ? `${new Date(periodStart).toLocaleDateString()} - ${new Date(periodEnd).toLocaleDateString()}`
+            : 'N/A';
+          
+          return {
+            id: m.id,
+            plan: planLower,
+            planName: m.plan || 'Unknown',
+            amount,
+            billingPeriod,
+            status: m.status,
+            currentPeriodStart: periodStart,
+            currentPeriodEnd: periodEnd,
+            timestamp: new Date(m.created_at).getTime(),
+          };
+        }));
         setActivePlan(res.activePlan);
       } catch {
-        if (!cancelled) setError('Failed to load membership history');
+        if (!cancelled) setError('Failed to load subscription history');
       } finally {
         if (!cancelled) setLoading(false);
       }

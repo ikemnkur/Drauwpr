@@ -30,7 +30,12 @@ export default function DropPublicView() {
     drop?.burnRate ?? 1,
     Boolean(drop && drop.status !== 'dropped')
   );
-  const remainingSeconds = fuseTimeMs / 1000;
+  const goalNotMet = drop ? drop.currentContributions < drop.goalAmount : false;
+  const remainingSeconds = drop
+    ? (goalNotMet
+      ? Math.max(0, (drop.expiresAt - Date.now()) / 1000)
+      : fuseTimeMs / 1000)
+    : 0;
 
   useEffect(() => {
     if (!drop || redirectedRef.current) return;
@@ -143,7 +148,12 @@ export default function DropPublicView() {
 
         <div className="bg-[#1e1e2e] border border-[#35354d] rounded-2xl p-4 sm:p-6 flex flex-col sm:flex-row items-center justify-center gap-6">
           <div className="flex flex-col items-center gap-2">
-            <AnalogClock remainingSeconds={remainingSeconds} size={180} />
+            <AnalogClock
+              remainingSeconds={remainingSeconds}
+              size={180}
+              label={goalNotMet ? 'Countdown to expiry' : 'Time left (to burn) until drop'}
+              notice={goalNotMet ? 'Countdown starts after the goal is met' : undefined}
+            />
             {isReleased && (
               <span className="text-xs text-green-400 font-semibold bg-green-500/10 border border-green-500/30 px-3 py-1 rounded-full">
                 🎉 Dropped!

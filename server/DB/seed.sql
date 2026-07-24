@@ -253,7 +253,7 @@ VALUES
 -- -----------------------------------------------------------
 INSERT INTO `walletTransactions`
   (`id`, `userId`, `type`, `amount`, `balanceAfter`,
-   `relatedDropId`, `relatedPurchaseId`, `relatedContributionId`,
+   `relatedDropId`, `relatedUserId`, `relatedContributionId`,
    `description`, `created_at`)
 VALUES
   -- Credit purchases (positive)
