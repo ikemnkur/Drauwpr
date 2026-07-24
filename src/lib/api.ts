@@ -26,9 +26,41 @@ function resolveApiBase(): string {
 const API_BASE = resolveApiBase();
 // const API_BASE = 'http://localhost:4000';
 
+const TOKEN_KEY = 'drauwper_token';
+const USER_KEY = 'drauwper_user';
+
+function isTokenExpiredPayload(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const payload = data as { success?: unknown; message?: unknown; error?: unknown };
+  const message = String(payload.message || payload.error || '').toLowerCase();
+  const explicitlyFailed = payload.success === false;
+  if (!message) return false;
+  return explicitlyFailed && /invalid|expired/.test(message) && /token/.test(message);
+}
+
+function forceClientLogout(reason = 'Your session has expired. Please sign in again.'): void {
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+  } catch {
+    // No-op: clearing auth storage should never crash the request pipeline.
+  }
+
+  if (typeof window === 'undefined') return;
+
+  window.dispatchEvent(new CustomEvent('drauwper:auth-expired', { detail: { reason } }));
+
+  const isAlreadyOnLogin = /^\/login\/?$/i.test(window.location.pathname);
+  if (!isAlreadyOnLogin) {
+    const next = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const redirect = `/login?reason=session-expired&next=${encodeURIComponent(next)}`;
+    window.location.replace(redirect);
+  }
+}
+
 class ApiClient {
   private getToken(): string | null {
-    return localStorage.getItem('drauwper_token');
+    return localStorage.getItem(TOKEN_KEY);
   }
 
   private async request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -49,6 +81,11 @@ class ApiClient {
     console.log(`API Request: ${API_BASE}${path} -`, options.method || 'GET', path, options.body ? JSON.parse(options.body as string) : '');
 
     const data = await res.json();
+
+    if (isTokenExpiredPayload(data) || res.status === 401) {
+      forceClientLogout(String((data as { message?: string })?.message || 'Invalid or expired token'));
+      throw new ApiError('Invalid or expired token', 401, data);
+    }
 
     if (!res.ok) {
       throw new ApiError(data.message || res.statusText, res.status, data);
@@ -99,6 +136,10 @@ class ApiClient {
     });
 
     const data = await res.json();
+    if (isTokenExpiredPayload(data) || res.status === 401) {
+      forceClientLogout(String((data as { message?: string })?.message || 'Invalid or expired token'));
+      throw new ApiError('Invalid or expired token', 401, data);
+    }
     if (!res.ok) throw new ApiError(data.message || res.statusText, res.status, data);
     return data as T;
   }

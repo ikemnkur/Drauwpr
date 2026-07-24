@@ -22,7 +22,10 @@ const PACK_CONFIG = [
 // };
 
 const STRIPE_IDS: Record<number, string> = {
-  5_000:   'dRmeVeekngJ59WPfz89AA01',
+  // 5_000:   'dRmeVeekngJ59WPfz89AA01',
+  5_000:   '3cI4gA0tx50ngldev49AA0c',
+
+
   10_000:  '00wfZi2BF2Sf3yr4Uu9AA02',
   25_000:  'cNi28s4JN1Ob8SLbiS9AA06',
   50_000:  'fZu00k6RV64r8SL3Qq9AA03',
