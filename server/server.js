@@ -2678,7 +2678,7 @@ async function runPromoBillingCron() {
         await safeInsertWalletTransaction({
           id: require('crypto').randomUUID(),
           userId: livePromo.userId,
-          type: 'promo-charge',
+          type: 'admin_adjustment',
           amount: -chargeAmount,
           balanceAfter: newBalance,
           relatedDropId,
@@ -7399,6 +7399,8 @@ async function safeInsertWalletTransaction(tx, db = knex) {
     download_payment: 'contribution',
     creator_earning: 'bonus',
     creator_payout: 'payout',
+    'promo-charge': 'admin_adjustment',
+    promo_charge: 'admin_adjustment',
   };
 
   try {

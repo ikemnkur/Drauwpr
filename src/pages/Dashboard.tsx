@@ -319,6 +319,8 @@ export default function Dashboard() {
               const mins = Math.floor((remaining % 3600) / 60);
               const goalPct = Math.min((drop.currentContributions / drop.goalAmount) * 100, 100);
 
+              console.log('drop:', drop);
+
               return (
                 <Link
                   key={drop.id}

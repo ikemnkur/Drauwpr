@@ -13,21 +13,21 @@ const PACK_CONFIG = [
 ];
 
 // Stripe test checkout payment link IDs
-const STRIPE_IDS: Record<number, string> = {
-  5_000:   'test_4gM4gs1lVbJMa7rgDD0sU04',
-  10_000:  'test_3cIeV6d4DdRU4N7gDD0sU03',
-  25_000:  'test_6oUcMY3u3g02frLaff0sU02',
-  50_000:  'test_eVq14g8OnbJM7Zjdrr0sU01',
-  100_000: 'test_4gM6oA2pZeVYfrLcnn0sU00',
-};
-
 // const STRIPE_IDS: Record<number, string> = {
-//   5_000:   'dRmeVeekngJ59WPfz89AA01',
-//   10_000:  '00wfZi2BF2Sf3yr4Uu9AA02',
-//   25_000:  'cNi28s4JN1Ob8SLbiS9AA06',
-//   50_000:  'fZu00k6RV64r8SL3Qq9AA03',
-//   100_000: '5kQ9AU5NRdwT4CvbiS9AA04',
+//   5_000:   'test_4gM4gs1lVbJMa7rgDD0sU04',
+//   10_000:  'test_3cIeV6d4DdRU4N7gDD0sU03',
+//   25_000:  'test_6oUcMY3u3g02frLaff0sU02',
+//   50_000:  'test_eVq14g8OnbJM7Zjdrr0sU01',
+//   100_000: 'test_4gM6oA2pZeVYfrLcnn0sU00',
 // };
+
+const STRIPE_IDS: Record<number, string> = {
+  5_000:   'dRmeVeekngJ59WPfz89AA01',
+  10_000:  '00wfZi2BF2Sf3yr4Uu9AA02',
+  25_000:  'cNi28s4JN1Ob8SLbiS9AA06',
+  50_000:  'fZu00k6RV64r8SL3Qq9AA03',
+  100_000: '5kQ9AU5NRdwT4CvbiS9AA04',
+};
 
 export default function BuyStripe() {
   const { user } = useAuth();

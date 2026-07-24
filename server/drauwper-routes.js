@@ -965,13 +965,29 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
    */
   server.get(PROXY + '/api/drops/:id', async (req, res) => {
     try {
+
+
+
       const [rows] = await pool.query(
-        `SELECT d.*, u.username AS creatorName, u.profilePicture AS creatorAvatar
-         FROM drops d
-         JOIN userData u ON u.id = d.creatorId
+        `SELECT d.* FROM drops d
+        
          WHERE d.id = ?`,
         [req.params.id]
       );
+
+       const [rows2] = await pool.query(
+        `SELECT u.username AS creatorName, u.profilePicture AS creatorAvatar
+          FROM userData u
+         WHERE u.id = ?`,
+        [rows[0].creatorId]
+      );
+
+
+      rows[0].creatorName = rows2[0]?.creatorName || rows[0].creatorName;
+      rows[0].creatorAvatar = rows2[0]?.creatorAvatar || rows[0].creatorAvatar;
+
+      console.log('rows:', rows[0]);
+
       if (!rows.length) return res.status(404).json({ error: 'Drop not found' });
       res.json(normalizeDropMediaFields(rows[0]));
     } catch (err) {

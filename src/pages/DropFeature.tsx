@@ -150,57 +150,6 @@ export default function DropFeature() {
     return { type: 'image', src: resolved };
   }
 
-  // example Drop object for reference
-  const example_drop = {
-    "id": "5106c2ec-1708-40b5-baa5-10d666a93196",
-    "title": "test",
-    "description": "test",
-    "creatorId": "UJH2MRXCGU",
-    "creatorName": "ikenuru",
-    "creatorAvatar": "https://storage.googleapis.com/cloutcoinclub_bucket/storage_folder/avatars/UJH2MRXCGU/f63b29f6-342d-486f-8ab8-058fc2a1a1da_avatar.webp",
-    "trailerUrl": "",
-    "thumbnailUrl": "",
-    "fileType": "other",
-    "fileSize": "156.3 KB",
-    "fileSizeBytes": 160072,
-    "filePath": "storage_folder/private/drops/UJH2MRXCGU/5106c2ec-1708-40b5-baa5-10d666a93196/ea9e8935-0bf1-46b8-b9f1-842c409f6383_0388388790_clipped_rev_1_75188a42-3e58-405d-ba96-5ae7735e6279.webp",
-    "originalFileName": "0388388790_clipped_rev_1_75188a42-3e58-405d-ba96-5ae7735e6279.webp",
-    "mimeType": "image/webp",
-    "link": null,
-    "scheduledDropTime": 1784858152000,
-    "actualDropTime": null,
-    "fuseTime": 172799996,
-    "createdAt": 1784703351000,
-    "expiresAt": 1785030952000,
-    "goalAmount": 1000,
-    "currentContributions": 0,
-    "contributorCount": 0,
-    "momentum": 0,
-    "burnRate": 1,
-    "lastMomentumUpdate": null,
-    "sensitivity": 5,
-    "decayConstant": 0.0003,
-    "basePrice": 50,
-    "dailyPriceDecayPct": 5,
-    "volumeDecayStep": 1000,
-    "volumeDecayPct": 5,
-    "totalDownloads": 0,
-    "totalRevenue": 0,
-    "avgRating": null,
-    "reviewCount": 0,
-    "likeCount": 0,
-    "dislikeCount": 0,
-    "views": 0,
-    "flagCount": 0,
-    "mature": false,
-    "status": "pending",
-    "isPublic": true,
-    "tags": [],
-    "expiryBehaviour": "refund",
-    "expiryThreshold": null
-}
-
-
   // Display Drop Data in the Console
   useEffect(() => {
     if (!drop) return;
@@ -220,19 +169,20 @@ export default function DropFeature() {
   // 2. fusetime is 0
   // 3. the drop is exprired (contibutributions are still not at goal amount at the scheduled drop datetime) but the contribution threshold (expiry_threshold on the DB in the drops table) has been met.
   useEffect(() => {
+    if (!drop) return;
 
     // check condition 1
     if (!goalMet) return; // condition 1 not met
     // check condition 2
-    if (drop?.fuseTime && fuseTimeMs > 0) return; // condition 2 not met
+    if (drop.fuseTime && fuseTimeMs > 0) return; // condition 2 not met
     // check condition 3
-    if ((drop?.status === 'expired' || (drop?.expiresAt - nowMs <= 0)) && !expiryThresholdMet) return; // condition 3 not met
+    if ((drop.status === 'expired' || (drop.expiresAt - nowMs <= 0)) && !expiryThresholdMet) return; // condition 3 not met
    
-    if ((goalMet && ((drop.status === 'dropped' || drop.status === 'active') || fuseTimeMs <= 0))) {
+    if (goalMet && ((drop.status === 'dropped' || drop.status === 'active') || fuseTimeMs <= 0)) {
       celebrationFired.current = true;
       setShowCelebration(true);
     }
-  }, [drop, fuseTimeMs]);
+  }, [drop, expiryThresholdMet, fuseTimeMs, goalMet, nowMs]);
 
   useEffect(() => {
     if (!id || !drop) return;

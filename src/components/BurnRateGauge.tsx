@@ -3,7 +3,7 @@ import { Flame, Snowflake, Droplets, Wind, Thermometer, Zap, Rocket } from 'luci
 
 // import { WavesVertical } from 'lucide-react';
 let WavesVerticalIcon = (
-  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-waves-vertical-icon lucide-waves-vertical"><path d="M12 2q2 2.5 0 5t0 5 0 5 0 5" /><path d="M19 2q2 2.5 0 5t0 5 0 5 0 5" /><path d="M5 2q2 2.5 0 5t0 5 0 5 0 5" /></svg>
+  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-waves-vertical-icon lucide-waves-vertical"><path d="M12 2q2 2.5 0 5t0 5 0 5 0 5" /><path d="M19 2q2 2.5 0 5t0 5 0 5 0 5" /><path d="M5 2q2 2.5 0 5t0 5 0 5 0 5" /></svg>
 );
 {/* <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-waves-vertical-icon lucide-waves-vertical"><path d="M12 2q2 2.5 0 5t0 5 0 5 0 5"/><path d="M19 2q2 2.5 0 5t0 5 0 5 0 5"/><path d="M5 2q2 2.5 0 5t0 5 0 5 0 5"/></svg> */ }
 

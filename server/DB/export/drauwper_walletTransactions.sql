@@ -33,7 +33,8 @@ DROP TABLE IF EXISTS `walletTransactions`;
 CREATE TABLE `walletTransactions` (
   `id` varchar(36) NOT NULL COMMENT 'UUID',
   `userId` varchar(10) NOT NULL,
-  `type` enum('purchase','credit_purchase','contribution','contribution_refund','contributor_reward','download_payment','creator_earning','creator_payout','admin_adjustment','bonus','stall_purchase') NOT NULL,
+  `type` varchar(50) NOT NULL,
+  -- `type` enum('purchase','credit_purchase','contribution','contribution_refund','contributor_reward','download_payment','creator_earning','creator_payout','admin_adjustment','bonus','stall_purchase') NOT NULL,
   `amount` int NOT NULL COMMENT 'Positive = credit, negative = debit',
   `balanceAfter` int NOT NULL COMMENT 'User credit balance after this transaction',
   `relatedDropId` varchar(255) DEFAULT NULL,

@@ -60,12 +60,13 @@ export interface ServerDrop {
 
 export function mapDrop(d: ServerDrop): Drop & { myContribution?: number } {
   const tags = typeof d.tags === 'string' ? JSON.parse(d.tags) : (d.tags || []);
+  const creatorName = String(d.creatorName || '').trim() || String(d.creatorId || '').trim() || 'Unknown';
   return {
     id: d.id,
     title: d.title,
     description: d.description || '',
     creatorId: d.creatorId,
-    creatorName: d.creatorName || 'Unknown',
+    creatorName: d.creatorName || creatorName,
     creatorAvatar: d.creatorAvatar || `https://i.pravatar.cc/150?u=${d.creatorId}`,
     trailerUrl: d.trailerUrl || '',
     thumbnailUrl: d.thumbnailUrl || '',
@@ -145,6 +146,12 @@ interface DashboardResponse {
   stats: DashboardStats;
 }
 
+interface DashboardCreatorProfile {
+  id: string;
+  username?: string;
+  profilePicture?: string;
+}
+
 export function useDashboard() {
   const { isAuthenticated, updateBalance } = useAuth();
   const [data, setData] = useState<DashboardData | null>(null);
@@ -161,9 +168,58 @@ export function useDashboard() {
     setError('');
     try {
       const res = await api.get<DashboardResponse>('/api/dashboard');
+
+      const allDrops = [...(res.myDrops || []), ...(res.contributed || [])];
+      const missingCreatorIds = Array.from(new Set(
+        allDrops
+          .filter((drop) => {
+            const rawName = String(drop.creatorName || '').trim();
+            const creatorId = String(drop.creatorId || '').trim();
+            return !rawName || rawName === creatorId;
+          })
+          .map((drop) => String(drop.creatorId || '').trim())
+          .filter(Boolean)
+      ));
+
+      const creatorById = new Map<string, { username?: string; profilePicture?: string }>();
+      if (missingCreatorIds.length) {
+        const creatorLookups = await Promise.all(
+          missingCreatorIds.map(async (creatorId) => {
+            try {
+              const profile = await api.get<DashboardCreatorProfile>(`/api/users/${encodeURIComponent(creatorId)}`);
+              return [creatorId, profile] as const;
+            } catch {
+              return [creatorId, null] as const;
+            }
+          })
+        );
+
+        creatorLookups.forEach(([creatorId, profile]) => {
+          if (!profile) return;
+          creatorById.set(creatorId, {
+            username: String(profile.username || '').trim() || undefined,
+            profilePicture: String(profile.profilePicture || '').trim() || undefined,
+          });
+        });
+      }
+
+      const withCreatorProfile = (drop: ServerDrop): ServerDrop => {
+        const creatorId = String(drop.creatorId || '').trim();
+        const creator = creatorById.get(creatorId);
+        const currentName = String(drop.creatorName || '').trim();
+        const currentAvatar = String(drop.creatorAvatar || '').trim();
+        return {
+          ...drop,
+          creatorName: currentName && currentName !== creatorId
+            ? currentName
+            : (creator?.username || currentName || creatorId),
+          creatorAvatar: currentAvatar || creator?.profilePicture || drop.creatorAvatar,
+        };
+      };
+
       setData({
-        myDrops: res.myDrops.map(mapDrop),
-        contributed: res.contributed.map(mapDrop),
+        myDrops: res.myDrops.map(withCreatorProfile).map(mapDrop),
+        contributed: res.contributed.map(withCreatorProfile).map(mapDrop),
         stats: res.stats,
       });
       // Sync credit balance from dashboard response without triggering a re-fetch loop
