@@ -65,10 +65,13 @@ export default function DropFeature() {
   const [copiedInline, setCopiedInline] = useState(false);
   const [stallExpiresAt, setStallExpiresAt] = useState<number | null>(null);
 
+
   const localDrop = drops.find((d) => d.id === id);
   const drop = localDrop ?? fetchedDrop;
   const goalMet = drop ? drop.currentContributions >= drop.goalAmount : false;
-  
+  const dropExpiryDate = drop ? new Date(drop.expiresAt) : null;
+  const dropDate = drop ? new Date(drop.scheduledDropTime) : null;
+
 
 
   const expiryThresholdMet =
@@ -95,6 +98,8 @@ export default function DropFeature() {
     drop?.burnRate ?? 1,
     Boolean(drop && goalMet && drop.status !== 'dropped' && drop.status !== 'expired')
   );
+  
+  const isReleased = fuseTimeMs <= 0;
 
   // const isCelebrationReady =
   //   !!drop &&
@@ -108,7 +113,7 @@ export default function DropFeature() {
   //   : 0;
 
 
- 
+
   function resolveAssetUrl(pathOrUrl: string | null, fallbackUrl: string | null): string {
     const raw = (pathOrUrl || fallbackUrl || '').trim();
     if (!raw) return 'https://picsum.photos/seed/dropfeature-ad/800/420';
@@ -177,7 +182,7 @@ export default function DropFeature() {
     if (drop.fuseTime && fuseTimeMs > 0) return; // condition 2 not met
     // check condition 3
     if ((drop.status === 'expired' || (drop.expiresAt - nowMs <= 0)) && !expiryThresholdMet) return; // condition 3 not met
-   
+
     if (goalMet && ((drop.status === 'dropped' || drop.status === 'active') || fuseTimeMs <= 0)) {
       celebrationFired.current = true;
       setShowCelebration(true);
@@ -605,13 +610,24 @@ export default function DropFeature() {
                 })}
               </div>
 
-              <div className="mt-1 text-center border-[2px] border-brand/40 rounded-xl px-3 py-1.5">
-                <p className="text-xs font-bold text-brand">
-                  🔥 {projectedDropDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
-                </p>
-                <p className="text-[10px] text-text-muted mt-0.5">
-                  {fuseTimeMs > 0 ? 'estimated drop' : 'drop date'}
-                </p>
+              <div style={{ display: "flex", gap: "1rem" }}>
+
+                <div className="mt-2 text-center border-2 border-orange-500/40 rounded-xl px-3 py-1.5">
+                  <p className="text-xs font-bold text-orange-400">
+                    🔥 {dropDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                  </p>
+                  <p className="text-[10px] text-[#94a3b8] mt-0.5">
+                    {isReleased ? 'drop date' : 'possible drop on'}
+                  </p>
+                </div>
+                <div className="mt-2 text-center border-2 border-red-500/40 rounded-xl px-3 py-1.5">
+                  <p className="text-xs font-bold text-red-400">
+                    💀 {dropExpiryDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                  </p>
+                  <p className="text-[10px] text-[#94a3b8] mt-0.5">
+                    {isReleased ? 'expired on' : 'possible deadline'}
+                  </p>
+                </div>
               </div>
             </div>
           </div>
@@ -647,7 +663,7 @@ export default function DropFeature() {
 
             {(goalMet
               // ? <BurnRateGauge rate={drop.burnRate} goalPct={Math.min((drop.currentContributions / drop.goalAmount) * 100, 100)} />
-              ? <BurnRateGauge rate={drop.burnRate} goalPct={drop.burnRate*10} />
+              ? <BurnRateGauge rate={drop.burnRate} goalPct={drop.burnRate * 10} />
               : <ExpirationGauge
                 createdAt={drop.createdAt}
                 expiresAt={drop.expiresAt}

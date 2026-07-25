@@ -39,7 +39,8 @@ export default function DropPublicView() {
 
   useEffect(() => {
     if (!drop || redirectedRef.current) return;
-    const alreadyReleased = drop.status === 'dropped' || fuseTimeMs <= 0;
+    // console.log('Checking if drop is already released:', drop," fuseTimeMs:", fuseTimeMs);
+    const alreadyReleased = drop.status === 'dropped' || drop.fuseTime === 0;
     if (alreadyReleased) {
       redirectedRef.current = true;
       navigate(`/drop/${id}/info`, { replace: true });
@@ -66,6 +67,7 @@ export default function DropPublicView() {
   const isReleased = drop.status === 'dropped' || fuseTimeMs <= 0;
   const goalPct = Math.min(100, (drop.currentContributions / drop.goalAmount) * 100);
   const dropDate = new Date(drop.scheduledDropTime);
+  const dropExpiryDate = new Date(drop.expiresAt);
   const calYear = dropDate.getFullYear();
   const calMonth = dropDate.getMonth();
   const calDropDay = dropDate.getDate();
@@ -152,7 +154,7 @@ export default function DropPublicView() {
               remainingSeconds={remainingSeconds}
               size={180}
               label={goalNotMet ? 'Countdown to expiry' : 'Time left (to burn) until drop'}
-              notice={goalNotMet ? 'Countdown starts after the goal is met' : undefined}
+              notice={goalNotMet ? 'Countdown for the Drop starts after the goal is 100% met' : undefined}
             />
             {isReleased && (
               <span className="text-xs text-green-400 font-semibold bg-green-500/10 border border-green-500/30 px-3 py-1 rounded-full">
@@ -190,14 +192,26 @@ export default function DropPublicView() {
                 );
               })}
             </div>
-            <div className="mt-2 text-center border-2 border-orange-500/40 rounded-xl px-3 py-1.5">
-              <p className="text-xs font-bold text-orange-400">
-                🔥 {dropDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
-              </p>
-              <p className="text-[10px] text-[#94a3b8] mt-0.5">
-                {isReleased ? 'drop date' : 'estimated drop'}
-              </p>
+            <div style={{ display: "flex", gap: "1rem" }}>
+
+              <div className="mt-2 text-center border-2 border-orange-500/40 rounded-xl px-3 py-1.5">
+                <p className="text-xs font-bold text-orange-400">
+                  🔥 {dropDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                </p>
+                <p className="text-[10px] text-[#94a3b8] mt-0.5">
+                  {isReleased ? 'drop date' : 'possible drop on'}
+                </p>
+              </div>
+              <div className="mt-2 text-center border-2 border-red-500/40 rounded-xl px-3 py-1.5">
+                <p className="text-xs font-bold text-red-400">
+                  💀 {dropExpiryDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                </p>
+                <p className="text-[10px] text-[#94a3b8] mt-0.5">
+                  {isReleased ? 'expired on' : 'possible deadline'}
+                </p>
+              </div>
             </div>
+
           </div>
         </div>
 

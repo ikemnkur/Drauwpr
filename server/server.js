@@ -1278,7 +1278,7 @@ server.post(PROXY + '/api/auth/register', async (req, res) => {
       phoneNumber: '',
       birthDate: birthDate || null,
       encryptionKey: `enc_key_${Date.now()}`,
-      credits: 100, // Starting credits
+      credits: 250, // Starting credits
       reportCount: 0,
       isBanned: false,
       banReason: '',

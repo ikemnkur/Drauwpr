@@ -433,6 +433,7 @@ export default function UserProfile() {
 }
 
 function DropCard({ drop }: { drop: import('../types').Drop }) {
+  const API_BASE = import.meta.env.VITE_API_URL || '';
   const pct = Math.min(100, Math.round((drop.currentContributions / drop.goalAmount) * 100));
   const statusColors: Record<string, string> = {
     active: 'bg-green-500/15 text-green-400',
@@ -440,12 +441,33 @@ function DropCard({ drop }: { drop: import('../types').Drop }) {
     dropped: 'bg-blue-500/15 text-blue-400',
     expired: 'bg-red-500/15 text-red-400',
   };
+  const thumbRaw = String(drop.thumbnailUrl || '').trim();
+  const thumbFallback = `https://picsum.photos/seed/profile-drop-${drop.id}/600/320`;
+  const thumbnailSrc = thumbRaw
+    ? (/^https?:\/\//i.test(thumbRaw)
+      ? thumbRaw
+      : thumbRaw.startsWith('/')
+        ? `${API_BASE}${thumbRaw}`
+        : `${API_BASE}/${thumbRaw}`)
+    : thumbFallback;
 
   return (
     <Link
       to={drop.status === 'dropped' ? `/drop/${drop.id}/download` : `/drop/${drop.id}`}
       className="block bg-surface-2 rounded-xl border border-surface-3 p-4 hover:border-brand/50 transition no-underline group"
     >
+      <div className="w-full h-28 rounded-lg overflow-hidden bg-surface-3 mb-3">
+        <img
+          src={thumbnailSrc}
+          alt={`${drop.title} thumbnail`}
+          className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform"
+          onError={(e) => {
+            const img = e.currentTarget;
+            if (img.src !== thumbFallback) img.src = thumbFallback;
+          }}
+        />
+      </div>
+
       <div className="flex items-start justify-between mb-2">
         <h3 className="text-sm font-semibold text-text group-hover:text-brand transition truncate pr-2">
           {drop.title}
