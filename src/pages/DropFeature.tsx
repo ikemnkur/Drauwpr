@@ -69,8 +69,6 @@ export default function DropFeature() {
   const localDrop = drops.find((d) => d.id === id);
   const drop = localDrop ?? fetchedDrop;
   const goalMet = drop ? drop.currentContributions >= drop.goalAmount : false;
-  const dropExpiryDate = drop ? new Date(drop.expiresAt) : null;
-  const dropDate = drop ? new Date(drop.scheduledDropTime) : null;
 
 
 
@@ -358,6 +356,8 @@ export default function DropFeature() {
   }
 
   const effectiveExpiresAt = stallExpiresAt ?? drop.expiresAt;
+  const dropDate = new Date(drop.scheduledDropTime);
+  const dropExpiryDate = new Date(effectiveExpiresAt);
   const goalNotMet = drop.currentContributions < drop.goalAmount;
   const remainingSeconds = goalNotMet
     ? Math.max(0, (effectiveExpiresAt - nowMs) / 1000)
