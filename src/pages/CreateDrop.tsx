@@ -334,7 +334,7 @@ export default function CreateDrop() {
 
       // // 5. Publish (draft → pending)
       // setUploadStep('Publishing…');
-      // await api.post(`/api/drops/${dropId}/publish`);
+      // await api.post(`/api/drops/${dropId}\`);
 
       setSubmitted(true);
     } catch (err: unknown) {

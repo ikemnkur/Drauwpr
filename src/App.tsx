@@ -9,6 +9,7 @@ import Dashboard from './pages/Dashboard';
 import DropFeature from './pages/DropFeature';
 import DropDownload from './pages/DropDownload';
 import DropReview from './pages/DropReview';
+import DropDelete from './pages/DropDelete';
 import ActiveContributions from './pages/ActiveContributions';
 import Login from './pages/Login';
 import Register from './pages/Register';
@@ -79,6 +80,7 @@ export default function App() {
               <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
               <Route path="/drop/:id/download" element={<DropAuthRoute publicSuffix="/info"><DropDownload /></DropAuthRoute>} />
               <Route path="/drop/:id/review" element={<ProtectedRoute><DropReview /></ProtectedRoute>} />
+              <Route path="/drop/:id/delete" element={<ProtectedRoute><DropDelete /></ProtectedRoute>} />
               <Route path="/contributions" element={<ProtectedRoute><ActiveContributions /></ProtectedRoute>} />
               <Route path="/account" element={<ProtectedRoute><Account /></ProtectedRoute>} />
               <Route path="/buy-credits" element={<ProtectedRoute><BuyCredits /></ProtectedRoute>} />

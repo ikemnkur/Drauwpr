@@ -35,7 +35,7 @@ function buildHtml(recipientName) {
   return raw
     .replace(/\{\{USERNAME\}\}/g, recipientName || 'Tester')
     .replace(/\{\{DASHBOARD_LINK\}\}/g, process.env.FRONTEND_URL || 'http://localhost:5174')
-    .replace(/\{\{STARTING_CREDITS\}\}/g, '5,000')
+    .replace(/\{\{STARTING_CREDITS\}\}/g, '200')
     .replace(/\{\{YEAR\}\}/g, String(new Date().getFullYear()));
 }
 

@@ -856,7 +856,7 @@ server.put(PROXY + '/api/users/profile', authenticateToken, async (req, res) => 
     const { email } = req.user; // Get email from authenticated token
     const { bio, bioVideoUrl, bannerUrl, profilePicture, socialLinks } = req.body;
 
-    // const normalizedBannerRef = normalizeStoredAssetReference(bannerUrl);
+    const normalizedBannerRef = normalizeStoredAssetReference(bannerUrl);
 
     // Validate input (you can add more validation as needed)
     if (!email) {

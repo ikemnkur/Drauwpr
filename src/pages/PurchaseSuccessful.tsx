@@ -131,6 +131,18 @@ export default function PurchaseSuccessful() {
     void verify();
   }, [sessionId, user?.id, user?.username, user?.email, refreshUser, pendingPack]);
 
+  useEffect(() => {
+    if (status !== 'loading') return;
+
+    const timeoutId = window.setTimeout(() => {
+      if (status === 'loading') {
+        window.location.reload();
+      }
+    }, 60_000);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [status]);
+
   return (
     <Container maxWidth="sm" sx={{ py: 8, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <Paper

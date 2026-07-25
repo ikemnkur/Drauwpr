@@ -1,6 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
 import { Flame, Clock, Users, Search, Star, Sparkles, Megaphone, TrendingUp, ChevronRight, User } from 'lucide-react';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../lib/api';
@@ -10,6 +10,7 @@ import type { Drop } from '../types';
 
 
 type SearchTab = 'drops' | 'profiles';
+type ExploreTabId = 'recommended' | 'featured' | 'following' | 'hottest' | 'latest';
 
 type CreatorPreview = {
   id: string;
@@ -19,6 +20,8 @@ type CreatorPreview = {
   tags: string[];
 };
 
+type FavoriteDropsResponse = ServerDrop[];
+
 /* ── Drop Card (reused across sections) ── */
 function DropCard({ drop, badge }: { drop: Drop; badge?: string }) {
   const remaining = Math.max(0, (drop.scheduledDropTime - Date.now()) / 1000);
@@ -26,6 +29,7 @@ function DropCard({ drop, badge }: { drop: Drop; badge?: string }) {
   const hours = Math.floor((remaining % 86400) / 3600);
   const goalPct = Math.min((drop.currentContributions / drop.goalAmount) * 100, 100);
   const linkTo = drop.status === 'dropped' ? `/drop/${drop.id}/download` : `/drop/${drop.id}`;
+  const thumbnailSrc = drop.thumbnailUrl || `https://picsum.photos/seed/${drop.id}/400/200`;
 
   return (
     <Link
@@ -38,12 +42,23 @@ function DropCard({ drop, badge }: { drop: Drop; badge?: string }) {
         </span>
       )}
       {/* Thumbnail */}
-      <div className="h-32 bg-surface-3 rounded-xl mb-3 flex items-center justify-center overflow-hidden">
-          <img
-            src={drop.thumbnailUrl || `https://picsum.photos/seed/${drop.id}/400/200`}
+      <div className="relative h-32 bg-surface-3 rounded-xl mb-3 flex items-center justify-center overflow-hidden">
+        <img
+          src={thumbnailSrc}
           alt={drop.title}
-          className="w-full h-full object-cover"
+          className={`w-full h-full object-cover transition-transform duration-300 ${drop.mature ? 'scale-110 blur-lg' : ''}`}
         />
+        {drop.mature && (
+          <>
+            <div className="absolute inset-0 bg-black/45 backdrop-blur-[1px]" />
+            <span className="absolute top-3 left-3 bg-red-500 text-white text-[10px] font-bold uppercase px-2 py-0.5 rounded-full z-10">
+              Mature
+            </span>
+            <div className="absolute inset-x-3 bottom-3 z-10 rounded-lg bg-black/65 px-3 py-2 text-center text-[11px] font-medium text-white">
+              Mature content preview blurred
+            </div>
+          </>
+        )}
       </div>
 
       <h3 className="text-sm font-semibold text-text group-hover:text-brand transition-colors line-clamp-1 mb-1">
@@ -190,46 +205,12 @@ function SectionHeader({ icon: Icon, title, linkTo, linkLabel }: {
 }
 
 /* ── Creator Spotlight Card ── */
-interface TopCreator {
-  id: string;
-  username: string;
-  profilePicture: string | null;
-  bio: string | null;
-  creatorRating: number;
-  totalDropsCreated: number;
-  totalCreditsEarned: number;
-}
-
-function CreatorSpotlight({ creator }: { creator: TopCreator }) {
-  return (
-    <Link
-      to={`/user/${creator.id}`}
-      className="bg-surface-2 rounded-xl p-4 flex items-center gap-3 hover:bg-surface-3 transition no-underline group"
-    >
-      <div className="w-11 h-11 rounded-full bg-surface-3 flex items-center justify-center text-lg font-bold text-brand shrink-0 overflow-hidden">
-        {creator.profilePicture
-          ? <img src={creator.profilePicture} alt={creator.username} className="w-full h-full object-cover" />
-          : creator.username[0].toUpperCase()
-        }
-      </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold text-text group-hover:text-brand transition truncate">{creator.username}</p>
-        <p className="text-xs text-text-muted truncate">{creator.bio || ''}</p>
-      </div>
-      <div className="text-right shrink-0">
-        <p className="text-sm font-bold text-green-500">{creator.creatorRating ?? 0}%</p>
-        <p className="text-[10px] text-text-muted">{creator.totalDropsCreated} drops</p>
-      </div>
-    </Link>
-  );
-}
-
 /* ── Main Page ── */
 interface FeaturedResponse {
   featured: ServerDrop[];
   trending: ServerDrop[];
   newest: ServerDrop[];
-  topCreators: TopCreator[];
+  topCreators: unknown[];
 }
 
 interface FollowingUser {
@@ -277,11 +258,13 @@ export default function Explore() {
   const [featured, setFeatured] = useState<Drop[]>([]);
   const [hottest, setHottest] = useState<Drop[]>([]);
   const [newest, setNewest] = useState<Drop[]>([]);
-  const [topCreators, setTopCreators] = useState<TopCreator[]>([]);
+  const [favoriteDrops, setFavoriteDrops] = useState<Drop[]>([]);
   const [sponsoredPromos, setSponsoredPromos] = useState<SponsoredPromo[]>([]);
   const [activeSponsoredAdId, setActiveSponsoredAdId] = useState<string | null>(null);
   const [adDetailsModalOpen, setAdDetailsModalOpen] = useState(false);
   const [followedCreatorIds, setFollowedCreatorIds] = useState<string[]>([]);
+  const [activeTab, setActiveTab] = useState<ExploreTabId>('recommended');
+  const touchStartXRef = useRef<number | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -319,7 +302,6 @@ export default function Explore() {
         setFeatured(res.featured.map(mapDrop));
         setHottest(res.trending.map(mapDrop));
         setNewest(res.newest.map(mapDrop));
-        setTopCreators(res.topCreators);
       })
       .catch(() => {
         // Fallback to context drops
@@ -339,7 +321,7 @@ export default function Explore() {
           return promos[0]?.id ?? null;
         });
         promos.slice(0, 2).forEach((p) => {
-          void api.post(`/api/promotions/${p.id}/impression`, {}).catch(() => {});
+          void api.post(`/api/promotions/${p.id}/impression`, {}).catch(() => { });
         });
       })
       .catch(() => {
@@ -351,6 +333,27 @@ export default function Explore() {
 
     return () => { cancelled = true; };
   }, [drops]);
+
+  useEffect(() => {
+    if (!user?.id) {
+      setFavoriteDrops([]);
+      return;
+    }
+
+    let cancelled = false;
+    api.get<FavoriteDropsResponse>('/api/user/favorites')
+      .then((rows) => {
+        if (cancelled) return;
+        setFavoriteDrops((rows || []).map(mapDrop));
+      })
+      .catch(() => {
+        if (!cancelled) setFavoriteDrops([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
 
   useEffect(() => {
     if (!user?.id) {
@@ -385,14 +388,75 @@ export default function Explore() {
     pool.forEach((d) => byId.set(d.id, d));
 
     const activeFollowing = [...byId.values()]
-      .filter((d) => d.isPublic && d.status === 'active' && idSet.has(d.creatorId))
-      .sort((a, b) => b.momentum - a.momentum || b.burnRate - a.burnRate)
-      .slice(0, 4);
+      .filter((d) => d.isPublic && !['removed', 'draft', 'hidden'].includes(d.status) && idSet.has(d.creatorId))
+      .sort((a, b) => b.createdAt - a.createdAt || b.currentContributions - a.currentContributions)
+      .slice(0, 10);
 
     setFollowing(activeFollowing);
   }, [followedCreatorIds, drops, featured, hottest, newest]);
 
-  const recommended = useMemo(() => [...drops].sort((a, b) => b.contributorCount - a.contributorCount), [drops]);
+  const visibleDrops = useMemo(
+    () => drops.filter((d) => d.isPublic && !['removed', 'draft', 'hidden'].includes(d.status)),
+    [drops]
+  );
+
+  const recommended = useMemo(() => {
+    const tagCounts = new Map<string, number>();
+
+    const seedDrops = [
+      ...favoriteDrops,
+      ...visibleDrops.filter((d) => followedCreatorIds.includes(d.creatorId)),
+      ...visibleDrops.filter((d) => d.creatorId === user?.id),
+    ];
+
+    seedDrops.forEach((drop) => {
+      (drop.tags || []).forEach((tag) => {
+        const key = String(tag || '').trim().toLowerCase();
+        if (!key) return;
+        tagCounts.set(key, (tagCounts.get(key) || 0) + 1);
+      });
+    });
+
+    const ranked = [...visibleDrops].map((drop) => {
+      const overlapScore = (drop.tags || []).reduce((sum, tag) => {
+        const key = String(tag || '').trim().toLowerCase();
+        return sum + (tagCounts.get(key) || 0);
+      }, 0);
+      const followingBoost = followedCreatorIds.includes(drop.creatorId) ? 3 : 0;
+      const favoriteBoost = favoriteDrops.some((favorite) => favorite.id === drop.id) ? 2 : 0;
+      return {
+        drop,
+        score: overlapScore + followingBoost + favoriteBoost,
+      };
+    });
+
+    const hasSignals = ranked.some((entry) => entry.score > 0);
+    ranked.sort((a, b) => {
+      if (hasSignals && b.score !== a.score) return b.score - a.score;
+      if (b.drop.currentContributions !== a.drop.currentContributions) return b.drop.currentContributions - a.drop.currentContributions;
+      return b.drop.createdAt - a.drop.createdAt;
+    });
+
+    return ranked.map((entry) => entry.drop).slice(0, 10);
+  }, [favoriteDrops, followedCreatorIds, user?.id, visibleDrops]);
+
+  const featuredSlides = useMemo(
+    () => featured.filter((drop) => !drop.mature).slice(0, 10),
+    [featured]
+  );
+
+  const hottestSlides = useMemo(() => {
+    const source = hottest.length ? hottest : visibleDrops;
+    return [...source]
+      .filter((drop) => !drop.mature)
+      .sort((a, b) => b.currentContributions - a.currentContributions || b.contributorCount - a.contributorCount || b.burnRate - a.burnRate)
+      .slice(0, 10);
+  }, [hottest, visibleDrops]);
+
+  const latestSlides = useMemo(
+    () => [...visibleDrops].sort((a, b) => b.createdAt - a.createdAt).slice(0, 10),
+    [visibleDrops]
+  );
 
   const creators = useMemo(() => {
     const creatorsMap = new Map<string, CreatorPreview>();
@@ -460,17 +524,87 @@ export default function Explore() {
     [sponsoredPromos, activeSponsoredAdId]
   );
 
+  const slides = useMemo(() => ([
+    {
+      id: 'recommended' as const,
+      title: 'Recommended For You',
+      chip: 'Recommended',
+      icon: Sparkles,
+      badge: undefined,
+      drops: recommended,
+      emptyMessage: 'No recommendations yet. Favorite or follow creators to tune this feed.',
+    },
+    {
+      id: 'featured' as const,
+      title: 'Featured',
+      chip: 'Featured',
+      icon: Star,
+      badge: 'Featured',
+      drops: featuredSlides,
+      emptyMessage: 'No featured drops right now.',
+    },
+    {
+      id: 'following' as const,
+      title: 'Following',
+      chip: 'Following',
+      icon: Users,
+      badge: 'Following',
+      drops: following,
+      emptyMessage: 'You are not following any creators with visible drops yet.',
+    },
+    {
+      id: 'hottest' as const,
+      title: 'Hottest Right Now',
+      chip: 'Hottest',
+      icon: TrendingUp,
+      badge: undefined,
+      drops: hottestSlides,
+      emptyMessage: 'No hot drops available right now.',
+    },
+    {
+      id: 'latest' as const,
+      title: 'Latest Drops',
+      chip: 'Latest',
+      icon: Clock,
+      badge: undefined,
+      drops: latestSlides,
+      emptyMessage: 'No recent drops available right now.',
+    },
+  ]), [featuredSlides, following, hottestSlides, latestSlides, recommended]);
+
+  const activeSlideIndex = Math.max(0, slides.findIndex((slide) => slide.id === activeTab));
+
   const hasSearchQuery = search.trim().length > 0;
+
+  const handleTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    touchStartXRef.current = event.changedTouches[0]?.clientX ?? null;
+  };
+
+  const handleTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
+    const startX = touchStartXRef.current;
+    const endX = event.changedTouches[0]?.clientX ?? null;
+    touchStartXRef.current = null;
+    if (startX == null || endX == null) return;
+
+    const deltaX = endX - startX;
+    if (Math.abs(deltaX) < 50) return;
+
+    if (deltaX < 0 && activeSlideIndex < slides.length - 1) {
+      setActiveTab(slides[activeSlideIndex + 1].id);
+    } else if (deltaX > 0 && activeSlideIndex > 0) {
+      setActiveTab(slides[activeSlideIndex - 1].id);
+    }
+  };
 
   const openAdDetailsModal = (ad: SponsoredPromo) => {
     setActiveSponsoredAdId(ad.id);
-    void api.post(`/api/promotions/${ad.id}/impression`, {}).catch(() => {});
+    void api.post(`/api/promotions/${ad.id}/impression`, {}).catch(() => { });
     setAdDetailsModalOpen(true);
   };
 
   const openAdTarget = () => {
     if (!activeSponsoredAd) return;
-    void api.post(`/api/promotions/${activeSponsoredAd.id}/click`, {}).catch(() => {});
+    void api.post(`/api/promotions/${activeSponsoredAd.id}/click`, {}).catch(() => { });
     const target = resolveAdTarget(activeSponsoredAd);
     setAdDetailsModalOpen(false);
     if (/^https?:\/\//i.test(target)) {
@@ -481,9 +615,9 @@ export default function Explore() {
   };
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-4">
       {/* Hero search */}
-      <div className="bg-gradient-to-br from-brand/10 via-surface to-surface rounded-2xl p-6 sm:p-8">
+      <div className="bg-gradient-to-br from-brand/10 via-surface to-surface rounded-2xl p-2 sm:p-6">
         <h1 className="text-2xl sm:text-3xl font-bold text-text mb-1">
           Explore Drops
         </h1>
@@ -504,17 +638,15 @@ export default function Explore() {
         <div className="flex gap-2 mt-3">
           <button
             onClick={() => setSearchTab('drops')}
-            className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full transition ${
-              searchTab === 'drops' ? 'bg-brand text-white' : 'bg-surface-2 text-text-muted hover:text-text'
-            }`}
+            className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full transition ${searchTab === 'drops' ? 'bg-brand text-white' : 'bg-surface-2 text-text-muted hover:text-text'
+              }`}
           >
             <Flame className="w-3.5 h-3.5" /> Drops
           </button>
           <button
             onClick={() => setSearchTab('profiles')}
-            className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full transition ${
-              searchTab === 'profiles' ? 'bg-brand text-white' : 'bg-surface-2 text-text-muted hover:text-text'
-            }`}
+            className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full transition ${searchTab === 'profiles' ? 'bg-brand text-white' : 'bg-surface-2 text-text-muted hover:text-text'
+              }`}
           >
             <Users className="w-3.5 h-3.5" /> Users
           </button>
@@ -546,115 +678,117 @@ export default function Explore() {
         </section>
       ) : (
         <>
-          {/* ── Featured ── */}
-          <section>
-            <SectionHeader icon={Star} title="Featured Drops" />
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {featured.slice(0, 4).map((d) => (
-                <DropCard key={d.id} drop={d} badge="Featured" />
-              ))}
-            </div>
-          </section>
+          <section
+            className="space-y-3"
+            onTouchStart={handleTouchStart}
+            onTouchEnd={handleTouchEnd}
+          >
 
-          {/* TODO: Implement this later */}
-           {/* ── Following ── */}
-          {following.length > 0 && (
-            <section>
-              <SectionHeader icon={Star} title="Drops from Users You Follow" />
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                {following.slice(0, 4).map((d) => (
-                  <DropCard key={d.id} drop={d} badge="Following" />
-                ))}
-              </div>
-            </section>
-          )}
-
-          {/* ── Sponsored ── */}
-          <section>
-            <SectionHeader icon={Megaphone} title="Sponsored" />
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {sponsoredPromos.length === 0 ? (
-                <div className="bg-surface-2 rounded-2xl p-5 text-sm text-text-muted border border-surface-3">
-                  No sponsored drops right now.
-                </div>
-              ) : sponsoredPromos.slice(0, 2).map((p) => {
-                const imageSrc = resolveAssetUrl(p.assetPath, p.mediaUrl);
-                const cardClass = 'bg-gradient-to-r from-brand/10 to-surface-2 rounded-2xl p-5 flex gap-4 items-center hover:from-brand/20 transition no-underline group border border-brand/20 w-full text-left';
-
-                const content = (
-                  <>
-                    <div className="w-20 h-20 bg-surface-3 rounded-xl flex items-center justify-center overflow-hidden shrink-0">
-                      <img
-                        src={imageSrc}
-                        alt={p.title}
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <span className="text-[10px] uppercase font-bold text-brand/70 tracking-wider">Sponsored</span>
-                      <h3 className="text-base font-semibold text-text group-hover:text-brand transition truncate">{p.title}</h3>
-                      <p className="text-xs text-text-muted line-clamp-2 mt-0.5">{p.description || 'Sponsored content'}</p>
-                      <p className="text-[11px] text-brand mt-1 font-semibold">{p.ctaText || 'Learn more'}</p>
-                      <p className="text-[10px] text-text-muted mt-1">by {p.username || 'Sponsor'}</p>
-                    </div>
-                  </>
-                );
-
+             <div className="flex flex-wrap items-center justify-center gap-2 pb-1">
+              {slides.map((slide, index) => {
+                const isActive = slide.id === activeTab;
                 return (
                   <button
-                    key={p.id}
+                    key={slide.id}
                     type="button"
-                    className={cardClass}
-                    onClick={() => openAdDetailsModal(p)}
+                    onClick={() => setActiveTab(slide.id)}
+                    className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-semibold transition ${isActive ? 'bg-brand text-white shadow-lg shadow-brand/25' : 'bg-surface-2 text-text-muted hover:bg-surface-3 hover:text-text'}`}
+                    aria-label={`Go to ${slide.chip}`}
+                    aria-current={isActive ? 'true' : 'false'}
                   >
-                    {content}
+                    <span className={`h-2 w-2 rounded-full ${isActive ? 'bg-white' : 'bg-text-muted'}`} />
+                    <span>{slide.chip}</span>
+                    <span className="text-[10px] opacity-80">{index + 1}/5</span>
                   </button>
                 );
               })}
             </div>
-          </section>
 
-          {/* ── Hottest Right Now ── */}
-          <section>
-            <SectionHeader icon={TrendingUp} title="Hottest Right Now" />
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {hottest.slice(0, 3).map((d) => (
-                <DropCard key={d.id} drop={d} />
-              ))}
+            <div className="overflow-hidden rounded-[28px] border border-surface-3 bg-gradient-to-br from-surface via-surface-2/90 to-surface p-1 sm:py-2">
+              <div
+                className="flex transition-transform duration-300 ease-out"
+                style={{ transform: `translateX(-${activeSlideIndex * 100}%)` }}
+              >
+                {slides.map((slide) => {
+                  const Icon = slide.icon;
+                  return (
+                    <div key={slide.id} className="min-w-full px-1 sm:px-2">
+                      <div className="rounded-2xl bg-surface-2/60 p-4 sm:p-5 border border-surface-3/70 min-h-[28rem]">
+                        <div className="mb-4 flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-xs uppercase tracking-[0.24em] text-text-muted mb-1">Explore</p>
+                            <h2 className="text-xl font-bold text-text flex items-center gap-2">
+                              <Icon className="w-5 h-5 text-brand" />
+                              {slide.title}
+                            </h2>
+                          </div>
+                          <p className="text-xs text-text-muted">{Math.min(slide.drops.length, 10)} drops</p>
+                        </div>
+
+                        {slide.drops.length === 0 ? (
+                          <div className="flex min-h-[20rem] items-center justify-center rounded-2xl border border-dashed border-surface-3 bg-surface/60 px-6 text-center text-sm text-text-muted">
+                            {slide.emptyMessage}
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            {slide.drops.slice(0, 10).map((drop) => (
+                              <DropCard key={`${slide.id}-${drop.id}`} drop={drop} badge={slide.badge} />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-          </section>
 
-          {/* ── Recommended For You ── */}
-          <section>
-            <SectionHeader icon={Sparkles} title="Recommended For You" />
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {recommended.slice(0, 4).map((d) => (
-                <DropCard key={d.id} drop={d} />
-              ))}
-            </div>
-          </section>
-
-          {/* ── Newest Drops ── */}
-          <section>
-            <SectionHeader icon={Clock} title="Just Dropped" />
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {newest.slice(0, 3).map((d) => (
-                <DropCard key={d.id} drop={d} />
-              ))}
-            </div>
-          </section>
-
-          {/* ── Creator Spotlight ── */}
-          {topCreators.length > 0 && (
             <section>
-              <SectionHeader icon={Star} title="Creator Spotlight" />
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {topCreators.map((c) => (
-                  <CreatorSpotlight key={c.id} creator={c} />
-                ))}
+              <SectionHeader icon={Megaphone} title="Sponsored" />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {sponsoredPromos.length === 0 ? (
+                  <div className="bg-surface-2 rounded-2xl p-5 text-sm text-text-muted border border-surface-3">
+                    No sponsored drops right now.
+                  </div>
+                ) : sponsoredPromos.slice(0, 2).map((p) => {
+                  const imageSrc = resolveAssetUrl(p.assetPath, p.mediaUrl);
+                  const cardClass = 'bg-gradient-to-r from-brand/10 to-surface-2 rounded-2xl p-5 flex gap-4 items-center hover:from-brand/20 transition no-underline group border border-brand/20 w-full text-left';
+
+                  const content = (
+                    <>
+                      <div className="w-20 h-20 bg-surface-3 rounded-xl flex items-center justify-center overflow-hidden shrink-0">
+                        <img
+                          src={imageSrc}
+                          alt={p.title}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <span className="text-[10px] uppercase font-bold text-brand/70 tracking-wider">Sponsored</span>
+                        <h3 className="text-base font-semibold text-text group-hover:text-brand transition truncate">{p.title}</h3>
+                        <p className="text-xs text-text-muted line-clamp-2 mt-0.5">{p.description || 'Sponsored content'}</p>
+                        <p className="text-[11px] text-brand mt-1 font-semibold">{p.ctaText || 'Learn more'}</p>
+                        <p className="text-[10px] text-text-muted mt-1">by {p.username || 'Sponsor'}</p>
+                      </div>
+                    </>
+                  );
+
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={cardClass}
+                      onClick={() => openAdDetailsModal(p)}
+                    >
+                      {content}
+                    </button>
+                  );
+                })}
               </div>
             </section>
-          )}
+
+           
+          </section>
         </>
       )}
 

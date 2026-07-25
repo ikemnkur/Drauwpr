@@ -483,6 +483,48 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
     return resolved || raw;
   };
 
+  const isMissingTableError = (err) => err && (err.code === 'ER_NO_SUCH_TABLE' || err.errno === 1146);
+
+  const safeDeleteRows = async (db, sql, params = []) => {
+    try {
+      await db.query(sql, params);
+    } catch (err) {
+      if (isMissingTableError(err)) return;
+      throw err;
+    }
+  };
+
+  const collectDropStorageKeys = (drop) => {
+    const candidates = [drop?.filePath, drop?.thumbnailUrl, drop?.trailerUrl]
+      .map((value) => normalizeObjectKey(value))
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+      .filter((value) => !value.startsWith('uploads/'));
+    return [...new Set(candidates)];
+  };
+
+  const deleteDropStorageObjects = async (drop) => {
+    if (!storage || !BUCKET_NAME) return 0;
+    const keys = collectDropStorageKeys(drop);
+    let deleted = 0;
+
+    for (const key of keys) {
+      try {
+        await storage.send(new DeleteObjectCommand({
+          Bucket: BUCKET_NAME,
+          Key: key,
+        }));
+        deleted += 1;
+      } catch (err) {
+        const code = String(err?.code || err?.name || '');
+        if (code === 'NoSuchKey' || code === 'NotFound') continue;
+        console.warn(`⚠️ Failed to delete storage object ${key}:`, err?.message || err);
+      }
+    }
+
+    return deleted;
+  };
+
   
 
   ensureWalletTransactionTypeCompatibility(pool).catch(() => { });
@@ -935,9 +977,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
 
       if (!drop) return res.status(404).json({ error: 'Drop not found' });
       if (drop.creatorId !== userId) return res.status(403).json({ error: 'Not the creator' });
-      if (!['draft', 'pending'].includes(drop.status)) {
-        return res.status(400).json({ error: 'Can only edit draft or pending drops' });
-      }
+     
 
       const ext = (String(fileName || '').split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '');
       const key = `${DEST_PREFIX}/drops/${drop.creatorId}/${dropId}/thumbnails/${uuidv4()}.${ext}`;
@@ -998,6 +1038,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
 
   /**
    * POST /api/drops
+   * Create a drop
    * Create a new drop. Requires authentication.
    * Body: title, description, fileType, tags[], goalAmount, basePrice,
    *       scheduledDropTime (ISO), expiresAt (ISO), trailerUrl?, thumbnailUrl?
@@ -1007,7 +1048,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
     try {
       const userId = req.user.id;
       const {
-        title, description, fileType, tags,
+        title, description, fileType, tags, mature,
         goalAmount, basePrice,
         scheduledDropTime, expiresAt,
         trailerUrl, thumbnailUrl,
@@ -1042,8 +1083,8 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
          (id, creatorId, title, description, fileType, tags,
           goalAmount, basePrice, scheduledDropTime, expiresAt,
           expiry_behaviour, expiry_threshold, fusetime,
-          trailerUrl, thumbnailUrl, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          trailerUrl, thumbnailUrl, status, mature)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           dropId, userId, title, description || '',
           fileType || 'other', JSON.stringify(tags || []),
@@ -1052,7 +1093,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
           behaviour, threshold,
           fuseTimeMs,
           trailerUrl || null, thumbnailUrl || null,
-          status
+          status, mature ? 1 : 0
         ]
       );
 
@@ -1081,8 +1122,8 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       const [rows] = await pool.query('SELECT creatorId, status FROM drops WHERE id = ?', [dropId]);
       if (!rows.length) return res.status(404).json({ error: 'Drop not found' });
       if (rows[0].creatorId !== userId) return res.status(403).json({ error: 'Not the creator' });
-      if (!['draft', 'pending'].includes(rows[0].status)) {
-        return res.status(400).json({ error: 'Can only edit draft or pending drops' });
+      if (!['active'].includes(rows[0].status)) {
+        return res.status(400).json({ error: 'Can only edit active drops' });
       }
 
       const allowed = [
@@ -1178,6 +1219,206 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       console.error('DELETE /api/drops/:id error:', err);
       res.status(500).json({ error: 'Failed to remove drop' });
     }
+  });
+
+  /**
+   * DELETE /api/drops/:id/cancel
+   * Hard-cancel a drop, refund contributors, reverse ledger effects, delete related data, and remove media objects.
+   */
+  server.delete(PROXY + '/api/drops/:id/cancel', authenticateToken, async (req, res) => {
+    const conn = await pool.getConnection();
+    const dropId = req.params.id;
+    const actorId = req.user.id;
+
+    const refundTotalsByUser = new Map();
+    let dropTitle = '';
+    let dropForStorageDelete = null;
+    let refundedCredits = 0;
+    let creatorReversalCredits = 0;
+
+    try {
+      await conn.beginTransaction();
+
+      const [[drop]] = await conn.query(
+        `SELECT id, creatorId, title, status, filePath, thumbnailUrl, trailerUrl
+         FROM drops
+         WHERE id = ?
+         FOR UPDATE`,
+        [dropId]
+      );
+
+      if (!drop) {
+        await conn.rollback();
+        return res.status(404).json({ error: 'Drop not found' });
+      }
+      if (drop.creatorId !== actorId) {
+        await conn.rollback();
+        return res.status(403).json({ error: 'Not the creator' });
+      }
+      if (drop.status === 'removed') {
+        await conn.rollback();
+        return res.status(400).json({ error: 'Drop is already removed' });
+      }
+      if (drop.status === 'dropped') {
+        await conn.rollback();
+        return res.status(400).json({ error: 'Dropped content cannot be canceled with this endpoint' });
+      }
+
+      dropTitle = String(drop.title || 'Untitled drop');
+      dropForStorageDelete = {
+        filePath: drop.filePath,
+        thumbnailUrl: drop.thumbnailUrl,
+        trailerUrl: drop.trailerUrl,
+      };
+
+      const [contributions] = await conn.query(
+        `SELECT id, userId, amount, penaltyAmount
+         FROM contributions
+         WHERE dropId = ? AND isRefunded = 0
+         FOR UPDATE`,
+        [dropId]
+      );
+
+      for (const contribution of contributions) {
+        const principal = Math.max(0, Number(contribution.amount) || 0);
+        const penalty = Math.max(0, Number(contribution.penaltyAmount) || 0);
+        const refundAmount = principal + penalty;
+
+        if (refundAmount > 0) {
+          await conn.query(
+            'UPDATE userData SET credits = credits + ? WHERE id = ?',
+            [refundAmount, contribution.userId]
+          );
+          const [[refundedUser]] = await conn.query(
+            'SELECT credits FROM userData WHERE id = ? FOR UPDATE',
+            [contribution.userId]
+          );
+
+          await insertWalletTransaction(conn, {
+            id: uuidv4(),
+            userId: contribution.userId,
+            type: 'contribution_refund',
+            amount: refundAmount,
+            balanceAfter: Number(refundedUser?.credits || 0),
+            relatedDropId: dropId,
+            relatedContributionId: contribution.id,
+            description: `Drop canceled: refunded contribution on "${dropTitle}"`,
+          });
+
+          refundedCredits += refundAmount;
+          refundTotalsByUser.set(
+            contribution.userId,
+            (refundTotalsByUser.get(contribution.userId) || 0) + refundAmount
+          );
+        }
+
+        await conn.query(
+          'UPDATE contributions SET isRefunded = 1, refundedAt = NOW() WHERE id = ?',
+          [contribution.id]
+        );
+      }
+
+      const [[creatorEarnings]] = await conn.query(
+        `SELECT COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) AS total
+         FROM walletTransactions
+         WHERE userId = ? AND relatedDropId = ? AND type = 'creator_earning'`,
+        [drop.creatorId, dropId]
+      );
+      const creatorEarningsTotal = Math.max(0, Number(creatorEarnings?.total || 0));
+
+      if (creatorEarningsTotal > 0) {
+        const [[creatorBefore]] = await conn.query(
+          'SELECT credits, totalCreditsEarned FROM userData WHERE id = ? FOR UPDATE',
+          [drop.creatorId]
+        );
+
+        const creatorBalance = Math.max(0, Number(creatorBefore?.credits || 0));
+        const creatorDebit = Math.min(creatorBalance, creatorEarningsTotal);
+        creatorReversalCredits = creatorDebit;
+
+        await conn.query(
+          `UPDATE userData
+           SET credits = credits - ?,
+               totalCreditsEarned = GREATEST(0, totalCreditsEarned - ?)
+           WHERE id = ?`,
+          [creatorDebit, creatorEarningsTotal, drop.creatorId]
+        );
+
+        const [[creatorAfter]] = await conn.query(
+          'SELECT credits FROM userData WHERE id = ? FOR UPDATE',
+          [drop.creatorId]
+        );
+
+        if (creatorDebit > 0) {
+          await insertWalletTransaction(conn, {
+            id: uuidv4(),
+            userId: drop.creatorId,
+            type: 'admin_adjustment',
+            amount: -creatorDebit,
+            balanceAfter: Number(creatorAfter?.credits || 0),
+            relatedDropId: dropId,
+            description: `Drop canceled: reversed creator earnings on "${dropTitle}"`,
+          });
+        }
+      }
+
+      await conn.query(
+        `UPDATE walletTransactions
+         SET description = CONCAT(COALESCE(description, ''), ' [reversed: drop canceled]')
+         WHERE relatedDropId = ?
+           AND (description IS NULL OR description NOT LIKE '%[reversed: drop canceled]%')`,
+        [dropId]
+      );
+
+      await safeDeleteRows(conn,
+        'DELETE FROM dropCommentReactions WHERE commentId IN (SELECT id FROM dropComments WHERE dropId = ?)',
+        [dropId]
+      );
+      await safeDeleteRows(conn, 'DELETE FROM dropComments WHERE dropId = ?', [dropId]);
+      await safeDeleteRows(conn, 'DELETE FROM dropReviews WHERE dropId = ?', [dropId]);
+      await safeDeleteRows(conn, 'DELETE FROM dropFavorites WHERE dropId = ?', [dropId]);
+      await safeDeleteRows(conn, 'DELETE FROM dropFlags WHERE dropId = ?', [dropId]);
+      await safeDeleteRows(conn, 'DELETE FROM postFlags WHERE postId = ?', [dropId]);
+      await safeDeleteRows(conn, 'DELETE FROM dropDownloads WHERE dropId = ?', [dropId]);
+      await safeDeleteRows(conn, 'DELETE FROM momentumLog WHERE dropId = ?', [dropId]);
+      await safeDeleteRows(conn, 'DELETE FROM stallActions WHERE dropId = ?', [dropId]);
+      await safeDeleteRows(conn, 'DELETE FROM notifications WHERE relatedDropId = ?', [dropId]);
+      await safeDeleteRows(conn, 'DELETE FROM contributions WHERE dropId = ?', [dropId]);
+      await conn.query('DELETE FROM drops WHERE id = ?', [dropId]);
+
+      await conn.commit();
+    } catch (err) {
+      await conn.rollback();
+      console.error('DELETE /api/drops/:id/cancel error:', err);
+      return res.status(500).json({ error: 'Failed to cancel and delete drop' });
+    } finally {
+      conn.release();
+    }
+
+    const refundedContributors = refundTotalsByUser.size;
+    const deletedCloudObjects = await deleteDropStorageObjects(dropForStorageDelete);
+
+    Promise.all(Array.from(refundTotalsByUser.entries()).map(([userId, amount]) => createNotif(pool, {
+      userId,
+      type: 'contribution_refunded',
+      title: 'Drop canceled — refund issued',
+      message: `"${dropTitle}" was canceled. ${Number(amount || 0).toLocaleString()} credits were refunded to your wallet.`,
+      priority: 'info',
+      category: 'contribution_refunded',
+      relatedDropId: null,
+      actionUrl: '/history',
+    }))).catch((notifyErr) => {
+      console.error('Drop cancel notifications error:', notifyErr?.message || notifyErr);
+    });
+
+    return res.json({
+      success: true,
+      message: 'Drop deleted and contributor refunds completed',
+      refundedContributors,
+      refundedCredits,
+      creatorReversalCredits,
+      deletedCloudObjects,
+    });
   });
 
 

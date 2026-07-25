@@ -453,9 +453,20 @@ function MyDropRow({ drop }: { drop: Drop }) {
         <Link
           to={`/drop/${drop.id}/edit`}
           onClick={(e) => e.stopPropagation()}
-          className="absolute top-3 right-3 z-20 text-xs text-text-muted hover:text-brand transition no-underline bg-surface-2/90 backdrop-blur px-2 py-1 rounded-full border border-surface-3"
+          className="absolute top-2 right-18 z-20 text-xs text-text-muted hover:text-brand transition no-underline bg-surface-2/90 backdrop-blur px-2 py-1 rounded-full border border-surface-3"
         >
           Edit
+        </Link>
+      )}
+
+      {drop.status !== 'dropped'  && (
+        <Link
+        // top right is offest by 16 to be "18" so edit and delete buttons are aligned side by side
+          to={`/drop/${drop.id}/delete`}
+          onClick={(e) => e.stopPropagation()}
+          className="text-red-500 absolute top-2 right-3 z-20 text-xs text-text-muted hover:text-brand transition no-underline bg-surface-2/90 backdrop-blur px-2 py-1 rounded-full border border-surface-3"
+        >
+          Delete
         </Link>
       )}
     </div>
