@@ -1700,17 +1700,34 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       const newBalance = user.credits - price;
       await conn.query('UPDATE userData SET credits = ? WHERE id = ?', [newBalance, userId]);
 
-      // Extend expiresAt and fuseTime; scheduledDropTime stays fixed as the planned release date.
+      // Before goal is met: extend expiresAt only.
+      // After goal is met: extend fuseTime only.
       const stallMs = stallMinutes * 60_000;
-      const expiresAtBefore = drop.expiresAt;
-      const newExpiresAt = new Date(new Date(drop.expiresAt).getTime() + stallMs);
-      const newFuseTime = currentFuseTimeMs + stallMs;
-      await conn.query(
-        'UPDATE drops SET expiresAt = ?, fusetime = ?, lastMomentumUpdate = NOW() WHERE id = ?',
-        [newExpiresAt, newFuseTime, dropId]
-      );
+      const goalMet = Number(drop.currentContributions || 0) >= Number(drop.goalAmount || 0);
+      const expiresAtBefore = new Date(drop.expiresAt);
+      const expiresAtAfter = goalMet
+        ? expiresAtBefore
+        : new Date(expiresAtBefore.getTime() + stallMs);
+      const newFuseTime = goalMet
+        ? (currentFuseTimeMs + stallMs)
+        : currentFuseTimeMs;
 
-      console.log(`Drop ${dropId} stalled by ${stallMinutes} min. expiresAt: ${expiresAtBefore} → ${newExpiresAt}, fuseTime → ${newFuseTime}`);
+      if (goalMet) {
+        await conn.query(
+          'UPDATE drops SET fusetime = ?, lastMomentumUpdate = NOW() WHERE id = ?',
+          [newFuseTime, dropId]
+        );
+      } else {
+        await conn.query(
+          'UPDATE drops SET expiresAt = ?, lastMomentumUpdate = NOW() WHERE id = ?',
+          [expiresAtAfter, dropId]
+        );
+      }
+
+      console.log(
+        `Drop ${dropId} stalled by ${stallMinutes} min (${goalMet ? 'post-goal:fusetime' : 'pre-goal:expiresAt'}). ` +
+        `expiresAt: ${expiresAtBefore.toISOString()} → ${expiresAtAfter.toISOString()}, fuseTime → ${newFuseTime}`
+      );
 
       // Log wallet transaction
       const txId = uuidv4();
@@ -1729,7 +1746,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       await conn.query(
         `INSERT INTO stallActions (id, dropId, userId, stallMinutes, creditCost, balanceAfter, expiresAtBefore, expiresAtAfter)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [stallId, dropId, userId, stallMinutes, price, newBalance, expiresAtBefore, newExpiresAt]
+        [stallId, dropId, userId, stallMinutes, price, newBalance, expiresAtBefore, expiresAtAfter]
       );
 
       await conn.commit();
@@ -1739,7 +1756,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
         stallMinutes,
         creditCost: price,
         newBalance,
-        expiresAt: newExpiresAt.toISOString(),
+        expiresAt: expiresAtAfter.toISOString(),
         fusetime: newFuseTime,
       });
     } catch (err) {

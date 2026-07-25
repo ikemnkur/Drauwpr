@@ -397,18 +397,14 @@ export default function DropFeature() {
           ? `${API_BASE}${trailerRaw}`
           : `${API_BASE}/${trailerRaw}`)
       : '';
-  const calYear = projectedDropDate.getFullYear();
-  const calMonth = projectedDropDate.getMonth();
-  const calDropDay = projectedDropDate.getDate();
-  const calFirstDay = new Date(calYear, calMonth, 1).getDay();
-  const calDays = new Date(calYear, calMonth + 1, 0).getDate();
-  const calMonthLabel = projectedDropDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-  const todayDate = new Date(nowMs);
-  const isSameMonth = todayDate.getMonth() === calMonth && todayDate.getFullYear() === calYear;
-  const todayDay = isSameMonth ? todayDate.getDate() : -1;
   const expiryDate = new Date(effectiveExpiresAt);
-  const calExpiryDay = expiryDate.getDate();
-  const isExpiryInSameMonth = expiryDate.getMonth() === calMonth && expiryDate.getFullYear() === calYear;
+  const dropMonthStart = new Date(projectedDropDate.getFullYear(), projectedDropDate.getMonth(), 1);
+  const expiryMonthStart = new Date(expiryDate.getFullYear(), expiryDate.getMonth(), 1);
+  const showTwoCalendars = dropMonthStart.getTime() !== expiryMonthStart.getTime();
+  const calendarMonths = showTwoCalendars
+    ? [dropMonthStart, expiryMonthStart].sort((a, b) => a.getTime() - b.getTime())
+    : [dropMonthStart];
+  const todayDate = new Date(nowMs);
 
   return (
     <div className="max-w-5xl mx-auto">
@@ -536,8 +532,8 @@ export default function DropFeature() {
               <AnalogClock
                 remainingSeconds={remainingSeconds}
                 size={180}
-                label={goalNotMet ? 'Countdown to expiry' : 'Time left (to burn) until drop'}
-                notice={goalNotMet ? 'Drop Countdown starts after the goal is 100% met' : undefined}
+                label={goalNotMet ? 'Countdown till Drop Expires' : 'Time left (to burn) until file drops'}
+                notice={goalNotMet ? 'Countdown for the file drop starts after the Goal is 100% met' : "File will drop once the countdown reaches zero"}
               />
               {/* Stall button — only for active/pending drops */}
               {(drop.status === 'active' || drop.status === 'pending') && (
@@ -553,41 +549,63 @@ export default function DropFeature() {
 
 
             {/* Calendar — right of the clock */}
-            <div className="flex flex-col items-center shrink-0 gap-1 border-[2px] border-surface-3 rounded-2xl p-3">
-              <p className="text-[11px] font-semibold text-text-muted uppercase tracking-widest mb-1">{calMonthLabel}</p>
+            <div className="flex flex-col items-center shrink-0 gap-2 border-[2px] border-surface-3 rounded-2xl p-3">
+              <div className="flex flex-wrap justify-center gap-2">
+                {calendarMonths.map((monthStart) => {
+                  const year = monthStart.getFullYear();
+                  const month = monthStart.getMonth();
+                  const firstDay = new Date(year, month, 1).getDay();
+                  const daysInMonth = new Date(year, month + 1, 0).getDate();
+                  const monthLabel = monthStart.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+                  const isTodayMonth = todayDate.getFullYear() === year && todayDate.getMonth() === month;
+                  const todayDay = isTodayMonth ? todayDate.getDate() : -1;
+                  const isDropMonth = projectedDropDate.getFullYear() === year && projectedDropDate.getMonth() === month;
+                  const dropDay = isDropMonth ? projectedDropDate.getDate() : -1;
+                  const isExpiryMonth = expiryDate.getFullYear() === year && expiryDate.getMonth() === month;
+                  const expiryDay = isExpiryMonth ? expiryDate.getDate() : -1;
 
-              <div className="grid grid-cols-7 gap-0.5 text-center">
-                {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
-                  <div key={i} className="w-6 h-6 flex items-center justify-center text-[9px] font-bold text-text-muted">{d}</div>
-                ))}
-                {Array.from({ length: calFirstDay }).map((_, i) => (
-                  <div key={`blank-${i}`} className="w-6 h-6" />
-                ))}
-                {Array.from({ length: calDays }, (_, i) => i + 1).map(day => {
-                  const isDropDay = day === calDropDay;
-                  const isToday = day === todayDay;
-                  const isExpiryDay = isExpiryInSameMonth && day === calExpiryDay;
                   return (
-                    <div
-                      key={day}
-                      className={[
-                        'w-6 h-6 flex items-center justify-center rounded-lg text-[11px] font-mono transition',
-                        isDropDay
-                          ? `bg-brand text-white font-bold ring-2 ring-brand/40 scale-110 ${dropDayPulse ? 'animate-pulse' : ''}`
-                          : isExpiryDay
-                            ? 'bg-red-500 text-white font-bold ring-2 ring-red-500/40'
-                            : isToday
-                              ? 'bg-surface-3 text-text font-semibold'
-                              : 'text-text-muted hover:text-text',
-                      ].join(' ')}
-                    >
-                      {day}
+                    <div key={`${year}-${month}`} className="flex flex-col items-center rounded-xl border border-surface-3/70 px-2 py-2">
+                      <p className="text-[11px] font-semibold text-text-muted uppercase tracking-widest mb-1">{monthLabel}</p>
+                      <div className="grid grid-cols-7 gap-0.5 text-center">
+                        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
+                          <div key={i} className="w-6 h-6 flex items-center justify-center text-[9px] font-bold text-text-muted">{d}</div>
+                        ))}
+                        {Array.from({ length: firstDay }).map((_, i) => (
+                          <div key={`blank-${year}-${month}-${i}`} className="w-6 h-6" />
+                        ))}
+                        {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((day) => {
+                          const isDropDay = day === dropDay;
+                          const isExpiryDay = day === expiryDay;
+                          const isToday = day === todayDay;
+
+                          return (
+                            <div
+                              key={`${year}-${month}-${day}`}
+                              className={[
+                                'w-6 h-6 flex items-center justify-center rounded-lg text-[11px] font-mono transition',
+                                isDropDay && isExpiryDay
+                                  ? `bg-gradient-to-r from-brand to-red-500 text-white font-bold ring-2 ring-brand/40 scale-110 ${dropDayPulse ? 'animate-pulse' : ''}`
+                                  : isDropDay
+                                    ? `bg-brand text-white font-bold ring-2 ring-brand/40 scale-110 ${dropDayPulse ? 'animate-pulse' : ''}`
+                                    : isExpiryDay
+                                      ? 'bg-red-500 text-white font-bold ring-2 ring-red-500/40'
+                                      : isToday
+                                        ? 'bg-surface-3 text-text font-semibold'
+                                        : 'text-text-muted hover:text-text',
+                              ].join(' ')}
+                            >
+                              {day}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   );
                 })}
               </div>
 
-              <div className="mt-2 text-center border-[2px] border-brand/40 rounded-xl px-3 py-1.5">
+              <div className="mt-1 text-center border-[2px] border-brand/40 rounded-xl px-3 py-1.5">
                 <p className="text-xs font-bold text-brand">
                   🔥 {projectedDropDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
                 </p>
