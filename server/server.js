@@ -4878,8 +4878,6 @@ server.post(PROXY + '/api/lookup-transaction', async (req, res) => {
 
   FetchRecentTransactionsCron();
 
-  // wait a few seconds to allow the cron job to possibly update the database
-  // await new Promise((timeout) => setTimeout(timeout, 1000)); // wait 5 seconds for the cron to possibly update the DB
 
 
   // key value pairs: ETH, BTC, LTC, SOL, XRP
@@ -5115,65 +5113,6 @@ async function configureR2BucketCors() {
 
 void configureR2BucketCors();
 
-// // ######################## POST TRANSACTION SCREENSHOT ###############################
-// // todo: change the route below to /transaction-screenshot
-
-// const db = require('./config/db');
-// // const path = require('path');
-// const Busboy = require('busboy'); // v1+ exports a function, not a class
-// const { Storage } = require('@google-cloud/storage');
-// const { setDefaultResultOrder } = require('dns');
-// const { waitForDebugger } = require('inspector');
-
-// const storage = new Storage({
-//   projectId: process.env.GCP_PROJECT_ID || 'servers4sqldb',
-//   keyFilename: process.env.GCP_SA_KEYFILE || 'service-account.json',
-// });
-
-// const BUCKET_NAME = process.env.GCS_BUCKET || 'cloutcoinclub_bucket';
-// const DEST_PREFIX = process.env.GCS_PREFIX || 'storage_folder'; // "folder" inside bucket
-
-// // Configure GCS bucket CORS once at startup so browsers can PUT uploads and GET
-// // signed URLs (video streaming, downloads) without cross-origin blocks.
-// // Origins: explicit app domain in prod, or '*' for local dev.
-// (async () => {
-//   try {
-//     const allowedOrigins = process.env.APP_ORIGIN
-//       ? [process.env.APP_ORIGIN, 'http://localhost:5173', 'http://localhost:3000']
-//       : ['*'];
-
-//     await storage.bucket(BUCKET_NAME).setMetadata({
-//       cors: [
-//         {
-//           origin: allowedOrigins,
-//           method: ['GET', 'PUT', 'POST', 'HEAD', 'OPTIONS', 'DELETE'],
-//           responseHeader: [
-//             'Content-Type',
-//             'Authorization',
-//             'X-Goog-Resumable',
-//             'X-Goog-Date',
-//             'X-Goog-Algorithm',
-//             'X-Goog-Credential',
-//             'X-Goog-Signed-Headers',
-//             'X-Goog-Signature',
-//             'Range',
-//             'Accept-Ranges',
-//             'Content-Range',
-//           ],
-//           maxAgeSeconds: 3600,
-//         },
-//       ],
-//     });
-//     console.log('✅ GCS bucket CORS configured');
-//   } catch (err) {
-//     console.error('⚠️  Failed to set GCS bucket CORS (uploads/downloads may fail in browser):', err.message);
-//   }
-// })();
-
-// function publicUrl(bucket, filepath) {
-//   return `https://storage.googleapis.com/${bucket}/${encodeURI(filepath)}`;
-// }
-
 // Allowed file types (both ext and mime)
 const ALLOWED = /^(jpeg|jpg|png|webp|gif|mp4|webm|mp3|wav)$/i;
 const MIME_TO_EXT = {
@@ -5188,11 +5127,6 @@ const MIME_TO_EXT = {
   'audio/mp3': '.mp3',
   'audio/wav': '.wav',
 };
-
-
-
-
-
 
 // ────────────────────────────── PROFILE PICTURE UPLOAD ─────────────────────────────
 
@@ -5765,47 +5699,6 @@ server.post(PROXY + '/api/profile-banner/:username', authenticateToken, async (r
 });
 
 
-
-// ========================================
-// Billing and Transaction Monitoring Crons
-// ========================================
-
-
-
-
-// // CREATE TABLE
-//   `userData` (
-//     `id` varchar(10) NOT NULL,
-//     `username` varchar(50) DEFAULT NULL,
-//     `email` varchar(100) DEFAULT NULL,
-//     `credits` int DEFAULT NULL,
-//     `passwordHash` varchar(255) DEFAULT NULL,
-//     `accountType` enum('buyer', 'seller') DEFAULT NULL,
-//     `lastLogin` datetime DEFAULT NULL,
-//     `loginStatus` tinyint(1) DEFAULT NULL,
-//     `firstName` varchar(50) DEFAULT NULL,
-//     `lastName` varchar(50) DEFAULT NULL,
-//     `phoneNumber` varchar(20) DEFAULT NULL,
-//     `birthDate` date DEFAULT NULL,
-//     `encryptionKey` varchar(100) DEFAULT NULL,
-//     `reportCount` int DEFAULT NULL,
-//     `isBanned` tinyint(1) DEFAULT NULL,
-//     `banReason` text,
-//     `banDate` datetime DEFAULT NULL,
-//     `banDuration` int DEFAULT NULL,
-//     `createdAt` bigint DEFAULT NULL,
-//     `updatedAt` bigint DEFAULT NULL,
-//     `twoFactorEnabled` tinyint(1) DEFAULT '0',
-//     `twoFactorSecret` varchar(50) DEFAULT NULL,
-//     `recoveryCodes` json DEFAULT NULL,
-//     `profilePicture` varchar(255) DEFAULT NULL,
-//     `bio` text,
-//     `socialLinks` json DEFAULT NULL,
-//     PRIMARY KEY (`id`),
-//     UNIQUE KEY `username` (`username`),
-//     UNIQUE KEY `email` (`email`)
-//   ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci
-
 /**
  * POST /api/profile-picture/:username
  * Accepts a multipart/form-data upload for a user's profile picture.
@@ -5955,6 +5848,10 @@ server.post(PROXY + '/api/profile-picture/:username', authenticateToken, async (
   req.pipe(busboy);
 });
 
+
+// ========================================
+// Billing and Transaction Monitoring Crons
+// ========================================
 
 
 const walletAddressMap = {

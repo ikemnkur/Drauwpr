@@ -1,8 +1,8 @@
 import { Link } from 'react-router-dom';
 import { Flame, Clock, Users, Package, TrendingUp, PlusCircle, Zap, ArrowRight } from 'lucide-react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { useDashboard } from '../hooks/useData';
+import { useDashboard, useEarningsHistory } from '../hooks/useData';
 import type { Drop } from '../types';
 
 
@@ -98,7 +98,59 @@ function StatusBadge({ status }: { status: Drop['status'] }) {
 export default function Dashboard() {
   const { user } = useAuth();
   const { data, loading, error } = useDashboard();
+  const { entries: earningsEntries, totalEarned: earningsTotalEarned } = useEarningsHistory();
   const [view, setView] = useState<DashboardView>('posts');
+  const releasedDrops = (data?.myDrops || []).filter((drop) => drop.status === 'dropped' || drop.status === 'expired');
+
+  const earningsSummary = useMemo(() => {
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const weekMs = 7 * dayMs;
+    const monthMs = 30 * dayMs;
+
+    let day = 0;
+    let week = 0;
+    let month = 0;
+
+    for (const entry of earningsEntries) {
+      const ageMs = now - entry.timestamp;
+      if (ageMs <= dayMs) day += entry.amount;
+      if (ageMs <= weekMs) week += entry.amount;
+      if (ageMs <= monthMs) month += entry.amount;
+    }
+
+    return { day, week, month };
+  }, [earningsEntries]);
+
+  const engagementSummary = useMemo(() => {
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const weekMs = 7 * dayMs;
+    const monthMs = 30 * dayMs;
+
+    const inWindow = (windowMs: number) => releasedDrops.filter((drop) => {
+      const releasedAt = drop.actualDropTime ?? drop.createdAt;
+      return releasedAt != null && now - releasedAt <= windowMs;
+    });
+
+    const summarize = (drops: Drop[]) => {
+      const likes = drops.reduce((sum, drop) => sum + (drop.likeCount || 0), 0);
+      const dislikes = drops.reduce((sum, drop) => sum + (drop.dislikeCount || 0), 0);
+      const comments = drops.reduce((sum, drop) => sum + (drop.reviewCount || 0), 0);
+      const rated = drops.filter((drop) => drop.avgRating != null);
+      const avgQuality = rated.length
+        ? rated.reduce((sum, drop) => sum + Number(drop.avgRating || 0), 0) / rated.length
+        : null;
+      return { likes, dislikes, comments, avgQuality };
+    };
+
+    return {
+      current: summarize(releasedDrops),
+      day: summarize(inWindow(dayMs)),
+      week: summarize(inWindow(weekMs)),
+      month: summarize(inWindow(monthMs)),
+    };
+  }, [releasedDrops]);
 
   if (loading) {
     return (
@@ -118,14 +170,6 @@ export default function Dashboard() {
   const activeCount = myDrops.filter((d) => d.status === 'active').length;
   const expiredCount = myDrops.filter((d) => d.status === 'expired').length;
   const droppedCount = myDrops.filter((d) => d.status === 'dropped').length;
-  const releasedDrops = myDrops.filter((drop) => drop.status === 'dropped' || drop.status === 'expired');
-  const totalLikes = releasedDrops.reduce((sum, drop) => sum + (drop.likeCount || 0), 0);
-  const totalDislikes = releasedDrops.reduce((sum, drop) => sum + (drop.dislikeCount || 0), 0);
-  const totalComments = releasedDrops.reduce((sum, drop) => sum + (drop.reviewCount || 0), 0);
-  const ratedDrops = releasedDrops.filter((drop) => drop.avgRating != null);
-  const avgQualityRating = ratedDrops.length > 0
-    ? ratedDrops.reduce((sum, drop) => sum + Number(drop.avgRating || 0), 0) / ratedDrops.length
-    : null;
 
   
 
@@ -226,7 +270,13 @@ export default function Dashboard() {
             </thead>
             <tbody>
               <MetricRow label="Available" current={(user?.creditBalance ?? 0).toLocaleString()} />
-              <MetricRow label="Earned (Lifetime)" current={stats.totalEarned.toLocaleString()} />
+              <MetricRow
+                label="Earned (Lifetime)"
+                current={earningsTotalEarned.toLocaleString()}
+                day={earningsSummary.day.toLocaleString()}
+                week={earningsSummary.week.toLocaleString()}
+                month={earningsSummary.month.toLocaleString()}
+              />
               <MetricRow label="Burned (Lifetime)" current={stats.totalContributed.toLocaleString()} />
               <MetricRow label="Promo/Ad Campaign Spend" current="--" />
             </tbody>
@@ -253,11 +303,41 @@ export default function Dashboard() {
               </tr>
             </thead>
             <tbody>
-              <MetricRow label="Likes" current={totalLikes.toLocaleString()} />
-              <MetricRow label="Dislikes" current={totalDislikes.toLocaleString()} />
-              <MetricRow label="Comments" current={totalComments.toLocaleString()} />
-              <MetricRow label="Favorites" current={stats.totalFavorites.toLocaleString()} />
-              <MetricRow label="Avg Quality Score" current={avgQualityRating == null ? '--' : `${avgQualityRating.toFixed(1)}%`} />
+              <MetricRow
+                label="Likes"
+                current={engagementSummary.current.likes.toLocaleString()}
+                day={engagementSummary.day.likes.toLocaleString()}
+                week={engagementSummary.week.likes.toLocaleString()}
+                month={engagementSummary.month.likes.toLocaleString()}
+              />
+              <MetricRow
+                label="Dislikes"
+                current={engagementSummary.current.dislikes.toLocaleString()}
+                day={engagementSummary.day.dislikes.toLocaleString()}
+                week={engagementSummary.week.dislikes.toLocaleString()}
+                month={engagementSummary.month.dislikes.toLocaleString()}
+              />
+              <MetricRow
+                label="Comments"
+                current={engagementSummary.current.comments.toLocaleString()}
+                day={engagementSummary.day.comments.toLocaleString()}
+                week={engagementSummary.week.comments.toLocaleString()}
+                month={engagementSummary.month.comments.toLocaleString()}
+              />
+              <MetricRow
+                label="Favorites"
+                current={stats.totalFavorites.toLocaleString()}
+                day={stats.totalFavorites.toLocaleString()}
+                week={stats.totalFavorites.toLocaleString()}
+                month={stats.totalFavorites.toLocaleString()}
+              />
+              <MetricRow
+                label="Avg Quality Score"
+                current={engagementSummary.current.avgQuality == null ? '--' : `${engagementSummary.current.avgQuality.toFixed(1)}%`}
+                day={engagementSummary.day.avgQuality == null ? '0.0%' : `${engagementSummary.day.avgQuality.toFixed(1)}%`}
+                week={engagementSummary.week.avgQuality == null ? '0.0%' : `${engagementSummary.week.avgQuality.toFixed(1)}%`}
+                month={engagementSummary.month.avgQuality == null ? '0.0%' : `${engagementSummary.month.avgQuality.toFixed(1)}%`}
+              />
             </tbody>
           </table>
         </div>

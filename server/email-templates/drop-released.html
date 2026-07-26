@@ -34,6 +34,29 @@
               <p style="margin: 0 0 25px 0; color: #e2e8f0; font-size: 16px; line-height: 1.6;">
                 Great news — <strong style="color: #ffffff;">{{DROP_TITLE}}</strong> by <strong>{{CREATOR_NAME}}</strong> has been released! The community burned through the countdown and the file is now available for download.
               </p>
+
+              <!-- Drop + creator preview -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom: 20px; border: 1px solid #35354d; border-radius: 10px; overflow: hidden; background-color: #111827;">
+                <tr>
+                  <td>
+                    <img src="{{DROP_THUMBNAIL_URL}}" alt="{{DROP_TITLE}} thumbnail" style="display:block; width:100%; max-height:220px; object-fit:cover;" />
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding: 14px 16px;">
+                    <table role="presentation" cellspacing="0" cellpadding="0">
+                      <tr>
+                        <td style="vertical-align: middle;">
+                          <img src="{{CREATOR_AVATAR_URL}}" alt="{{CREATOR_NAME}}" width="40" height="40" style="display:block; border-radius:999px; border:1px solid #475569; object-fit:cover;" />
+                        </td>
+                        <td style="padding-left:10px; vertical-align: middle; color:#e2e8f0; font-size:14px;">
+                          Created by <strong style="color:#ffffff;">{{CREATOR_NAME}}</strong>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
               
               <!-- Stats Box -->
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #111827; border-radius: 8px; border: 1px solid #35354d; margin-bottom: 25px;">

@@ -260,7 +260,7 @@ export default function History() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-2xl font-bold text-text flex items-center gap-2">
           <HistoryIcon className="w-6 h-6 text-brand" />
-          Payment History
+          Transaction History
         </h1>
         <div className="flex gap-2">
           <button

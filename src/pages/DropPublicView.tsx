@@ -106,7 +106,7 @@ export default function DropPublicView() {
             )}
             <h1 className="text-2xl md:text-3xl font-extrabold text-white mb-2">{drop.title}</h1>
             <div className="flex items-center gap-3 text-sm text-[#94a3b8] flex-wrap">
-              <div className="flex items-center gap-2">
+              {/* <div className="flex items-center gap-2">
                 <div className="w-7 h-7 rounded-full bg-[#2a2a3e] border border-[#35354d] flex items-center justify-center text-xs font-bold text-orange-400 overflow-hidden shrink-0">
                   {creatorAvatar
                     ? <img src={creatorAvatar} alt={drop.creatorName} className="w-full h-full object-cover" />
@@ -114,7 +114,19 @@ export default function DropPublicView() {
                   }
                 </div>
                 <span className="text-white font-medium">{drop.creatorName}</span>
-              </div>
+              </div> */}
+              <Link
+                to={`/user/${drop.creatorId}`}
+                className="flex items-center gap-2 hover:text-brand transition no-underline"
+              >
+                <div className="w-7 h-7 rounded-full bg-surface-3 border border-surface-3 flex items-center justify-center text-xs font-bold text-brand overflow-hidden shrink-0">
+                  {drop.creatorAvatar
+                    ? <img src={drop.creatorAvatar} alt={drop.creatorName} className="w-full h-full object-cover" />
+                    : drop.creatorName[0].toUpperCase()
+                  }
+                </div>
+                <span>{drop.creatorName}</span>
+              </Link>
               <span className="flex items-center gap-1"><HardDrive className="w-4 h-4" /> {drop.fileSize}</span>
               <span className="flex items-center gap-1"><Tag className="w-4 h-4" /> {drop.fileType}</span>
             </div>

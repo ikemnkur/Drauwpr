@@ -14,6 +14,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
+const emailService = require('./email-service');
 
 const {
   DeleteObjectCommand,
@@ -329,6 +330,7 @@ async function ensureUserFlagsTable(db) {
 // ──────────────────────────────────────────────────────────────
 module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY = '', gcs = {}) {
   const { storage, BUCKET_NAME, DEST_PREFIX, publicUrl, getSignedUrl } = gcs;
+  const frontendBaseUrl = String(process.env.FRONTEND_URL || 'https://drauwper.com').replace(/\/+$/, '');
 
   const signUrl = getSignedUrl || presignUrl;
   const toPublicUrl = (objectPath) => {
@@ -2959,7 +2961,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
     try {
       const [activeDrops] = await pool.query(
         `SELECT id, burnRate, created_at, expiresAt, scheduledDropTime, fusetime, lastMomentumUpdate, status,
-                creatorId, title
+                creatorId, title, thumbnailUrl, basePrice, goalAmount, currentContributions, totalDownloads
          FROM drops WHERE status = 'active'`
       );
 
@@ -2999,19 +3001,89 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
         if (newStatus === 'dropped' && drop.status === 'active') {
           await pool.query('UPDATE drops SET actualDropTime = NOW(), fusetime = 0 WHERE id = ?', [drop.id]);
 
+          const [contributors] = await pool.query(
+            `SELECT c.userId, COALESCE(SUM(c.amount), 0) AS contributedAmount,
+                    u.email, u.username
+             FROM contributions c
+             JOIN userData u ON u.id = c.userId
+             WHERE c.dropId = ? AND c.isRefunded = 0
+             GROUP BY c.userId, u.email, u.username`,
+            [drop.id]
+          );
+
+          const [[creatorProfile]] = await pool.query(
+            'SELECT username, profilePicture FROM userData WHERE id = ? LIMIT 1',
+            [drop.creatorId]
+          );
+
+          const creatorName = String(creatorProfile?.username || 'Unknown Creator');
+          const totalContributions = contributors.reduce((sum, row) => sum + Number(row.contributedAmount || 0), 0);
+          const contributorCount = contributors.length;
+
+          const dropThumbnailUrl = resolveDropAssetUrl(drop.thumbnailUrl)
+            || `https://picsum.photos/seed/${drop.id}/1200/630`;
+
+          const rawCreatorAvatar = String(creatorProfile?.profilePicture || '').trim();
+          let creatorAvatarUrl = `https://i.pravatar.cc/200?u=${encodeURIComponent(String(drop.creatorId || 'creator'))}`;
+          if (rawCreatorAvatar) {
+            if (/^https?:\/\//i.test(rawCreatorAvatar)) {
+              creatorAvatarUrl = rawCreatorAvatar;
+            } else if (rawCreatorAvatar.startsWith('/')) {
+              creatorAvatarUrl = `${frontendBaseUrl}${rawCreatorAvatar}`;
+            } else {
+              const avatarObjectKey = normalizeObjectKey(rawCreatorAvatar);
+              creatorAvatarUrl = toPublicUrl(avatarObjectKey) || `${frontendBaseUrl}/${avatarObjectKey}`;
+            }
+          }
+
           // Notify all contributors that the drop is now available
-          pool.query('SELECT DISTINCT userId FROM contributions WHERE dropId = ? AND isRefunded = 0', [drop.id])
-            .then(([rows]) => Promise.all(rows.map((r) => createNotif(pool, {
-              userId: r.userId,
-              type: 'drop_released',
-              title: '\uD83C\uDF89 Drop released!',
-              message: `"${drop.title}" has been released and is now available to download.`,
-              priority: 'success',
-              category: 'drop_released',
-              relatedDropId: drop.id,
-              actionUrl: `/drop/${drop.id}/download`,
-            }))))
-            .catch((e) => console.error('Drop-released notif error:', e.message));
+          await Promise.allSettled(contributors.map((row) => createNotif(pool, {
+            userId: row.userId,
+            type: 'drop_released',
+            title: '\uD83C\uDF89 Drop released!',
+            message: `"${drop.title}" has been released and is now available to download.`,
+            priority: 'success',
+            category: 'drop_released',
+            relatedDropId: drop.id,
+            actionUrl: `/drop/${drop.id}/download`,
+          })));
+
+          // Send release email to contributors with personalized pricing details.
+          await Promise.allSettled(
+            contributors
+              .filter((row) => String(row.email || '').trim())
+              .map(async (row) => {
+                const userContribution = Number(row.contributedAmount || 0);
+                const pricing = computeDownloadPricing({
+                  basePrice: Number(drop.basePrice || 0),
+                  goalAmount: Number(drop.goalAmount || 0),
+                  contributedAmount: userContribution,
+                  actualDropTime: new Date(),
+                  totalDownloads: Number(drop.totalDownloads || 0),
+                });
+                const discountedPrice = row.userId === drop.creatorId ? 0 : pricing.finalPrice;
+
+                await emailService.sendTemplatedEmail({
+                  to: String(row.email).trim(),
+                  subject: `Drop released: ${drop.title}`,
+                  templateFile: 'drop-released.html',
+                  variables: {
+                    YEAR: new Date().getFullYear(),
+                    USERNAME: row.username || 'there',
+                    DROP_TITLE: drop.title,
+                    CREATOR_NAME: creatorName,
+                    CONTRIBUTOR_COUNT: contributorCount.toLocaleString(),
+                    TOTAL_CONTRIBUTIONS: totalContributions.toLocaleString(),
+                    USER_CONTRIBUTION: `${userContribution.toLocaleString()} credits`,
+                    DISCOUNTED_PRICE: Number(discountedPrice || 0).toLocaleString(),
+                    BASE_PRICE: Number(drop.basePrice || 0).toLocaleString(),
+                    DOWNLOAD_LINK: `${frontendBaseUrl}/drop/${drop.id}/download`,
+                    DROP_THUMBNAIL_URL: dropThumbnailUrl,
+                    CREATOR_AVATAR_URL: creatorAvatarUrl,
+                  },
+                });
+              })
+          );
         }
 
         // High burn rate warning (>= 3x) — notify creator at most once per 10-minute window
@@ -3508,9 +3580,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
         const [[drop]] = await pool.query('SELECT creatorId, status FROM drops WHERE id = ?', [dropId]);
         if (!drop) return res.status(404).json({ error: 'Drop not found' });
         if (drop.creatorId !== userId) return res.status(403).json({ error: 'Not the creator' });
-        if (!['draft', 'pending'].includes(drop.status)) {
-          return res.status(400).json({ error: 'Can only upload trailers for draft or pending drops' });
-        }
+      
         if (!req.file) return res.status(400).json({ error: 'No trailer file provided' });
 
         const [[userRow]] = await pool.query(
