@@ -10,11 +10,13 @@
  */
 
 const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const emailService = require('./email-service');
+const webpush = require('web-push');
 
 const {
   DeleteObjectCommand,
@@ -300,7 +302,16 @@ async function ensurePostFlagsTable(db) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
   `);
 
-  await db.query(`ALTER TABLE dropFlags ADD COLUMN IF NOT EXISTS description TEXT NOT NULL AFTER reason`);
+  const [descriptionCols] = await db.query(
+    `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'dropFlags'
+       AND COLUMN_NAME = 'description'`
+  );
+
+  if (!descriptionCols?.length) {
+    await db.query('ALTER TABLE dropFlags ADD COLUMN description TEXT NOT NULL AFTER reason');
+  }
 }
 
 
@@ -331,6 +342,16 @@ async function ensureUserFlagsTable(db) {
 module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY = '', gcs = {}) {
   const { storage, BUCKET_NAME, DEST_PREFIX, publicUrl, getSignedUrl } = gcs;
   const frontendBaseUrl = String(process.env.FRONTEND_URL || 'https://drauwper.com').replace(/\/+$/, '');
+  const pushPublicKey = String(process.env.VAPID_PUBLIC_KEY || '').trim();
+  const pushPrivateKey = String(process.env.VAPID_PRIVATE_KEY || '').trim();
+  const pushSubject = String(process.env.VAPID_SUBJECT || 'mailto:notifications@drauwper.com').trim();
+  const pushConfigured = Boolean(pushPublicKey && pushPrivateKey);
+
+  if (pushConfigured) {
+    webpush.setVapidDetails(pushSubject, pushPublicKey, pushPrivateKey);
+  } else {
+    console.warn('⚠️ Web push is disabled: VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY not configured.');
+  }
 
   const signUrl = getSignedUrl || presignUrl;
   const toPublicUrl = (objectPath) => {
@@ -527,6 +548,93 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
     return deleted;
   };
 
+  async function ensurePushSubscriptionsTable(db) {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS pushSubscriptions (
+        id VARCHAR(36) NOT NULL,
+        userId VARCHAR(64) NOT NULL,
+        endpoint VARCHAR(1024) NOT NULL,
+        endpointHash CHAR(64) NOT NULL,
+        p256dh VARCHAR(255) NOT NULL,
+        auth VARCHAR(255) NOT NULL,
+        userAgent VARCHAR(255) DEFAULT NULL,
+        createdAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updatedAt TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_push_endpoint_hash (endpointHash),
+        KEY idx_push_user (userId)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+    `);
+
+    const [hashCols] = await db.query(
+      `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'pushSubscriptions'
+         AND COLUMN_NAME = 'endpointHash'`
+    );
+
+    if (!hashCols?.length) {
+      await db.query('ALTER TABLE pushSubscriptions ADD COLUMN endpointHash CHAR(64) DEFAULT NULL AFTER endpoint');
+    }
+
+    await db.query(`
+      UPDATE pushSubscriptions
+      SET endpointHash = SHA2(endpoint, 256)
+      WHERE endpointHash IS NULL OR endpointHash = ''
+    `);
+
+    await db.query('ALTER TABLE pushSubscriptions MODIFY COLUMN endpointHash CHAR(64) NOT NULL');
+
+    const [indexes] = await db.query(
+      `SELECT INDEX_NAME FROM information_schema.STATISTICS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'pushSubscriptions'`
+    );
+
+    const indexNames = new Set((indexes || []).map((row) => row.INDEX_NAME));
+
+    if (indexNames.has('uq_push_endpoint')) {
+      await db.query('ALTER TABLE pushSubscriptions DROP INDEX uq_push_endpoint');
+    }
+
+    if (!indexNames.has('uq_push_endpoint_hash')) {
+      await db.query('ALTER TABLE pushSubscriptions ADD UNIQUE KEY uq_push_endpoint_hash (endpointHash)');
+    }
+  }
+
+  async function sendPushToUsers(userIds, payload) {
+    if (!pushConfigured) return;
+    const uniqueUserIds = [...new Set((userIds || []).map((id) => String(id || '').trim()).filter(Boolean))];
+    if (!uniqueUserIds.length) return;
+
+    const placeholders = uniqueUserIds.map(() => '?').join(', ');
+    const [subs] = await pool.query(
+      `SELECT id, userId, endpoint, p256dh, auth
+       FROM pushSubscriptions
+       WHERE userId IN (${placeholders})`,
+      uniqueUserIds
+    );
+
+    await Promise.allSettled((subs || []).map(async (sub) => {
+      const subscription = {
+        endpoint: sub.endpoint,
+        keys: {
+          p256dh: sub.p256dh,
+          auth: sub.auth,
+        },
+      };
+
+      try {
+        await webpush.sendNotification(subscription, JSON.stringify(payload));
+      } catch (err) {
+        const statusCode = Number(err?.statusCode || 0);
+        if (statusCode === 404 || statusCode === 410) {
+          await pool.query('DELETE FROM pushSubscriptions WHERE id = ?', [sub.id]);
+        }
+      }
+    }));
+  }
+
   
 
   ensureWalletTransactionTypeCompatibility(pool).catch(() => { });
@@ -568,6 +676,9 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
   });
   ensureUserFlagsTable(pool).catch((err) => {
     console.warn('⚠️ Failed to ensure user flags table:', err.message || err);
+  });
+  ensurePushSubscriptionsTable(pool).catch((err) => {
+    console.warn('⚠️ Failed to ensure pushSubscriptions table:', err.message || err);
   });
 
   const UNVERIFIED_INTERACTION_LIMIT = 5;
@@ -3019,6 +3130,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
           const creatorName = String(creatorProfile?.username || 'Unknown Creator');
           const totalContributions = contributors.reduce((sum, row) => sum + Number(row.contributedAmount || 0), 0);
           const contributorCount = contributors.length;
+          const contributorIds = contributors.map((row) => String(row.userId || '').trim()).filter(Boolean);
 
           const dropThumbnailUrl = resolveDropAssetUrl(drop.thumbnailUrl)
             || `https://picsum.photos/seed/${drop.id}/1200/630`;
@@ -3047,6 +3159,16 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
             relatedDropId: drop.id,
             actionUrl: `/drop/${drop.id}/download`,
           })));
+
+          await sendPushToUsers(contributorIds, {
+            title: 'Drop released!',
+            body: `"${drop.title}" by ${creatorName} is now available to download.`,
+            icon: creatorAvatarUrl,
+            image: dropThumbnailUrl,
+            badge: `${frontendBaseUrl}/DrauwperIcon.png`,
+            url: `${frontendBaseUrl}/drop/${drop.id}/download`,
+            tag: `drop-released-${drop.id}`,
+          });
 
           // Send release email to contributors with personalized pricing details.
           await Promise.allSettled(
@@ -3656,6 +3778,58 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
   // ============================================================
   //  NOTIFICATIONS
   // ============================================================
+
+  /** GET /api/push/public-key — VAPID public key for browser subscriptions */
+  server.get(PROXY + '/api/push/public-key', (_req, res) => {
+    if (!pushConfigured) return res.json({ publicKey: '' });
+    return res.json({ publicKey: pushPublicKey });
+  });
+
+  /** POST /api/push/subscribe — store/update browser push subscription */
+  server.post(PROXY + '/api/push/subscribe', authenticateToken, async (req, res) => {
+    try {
+      if (!pushConfigured) return res.status(503).json({ error: 'Push notifications are not configured' });
+
+      const userId = String(req.user?.id || '').trim();
+      const endpoint = String(req.body?.subscription?.endpoint || '').trim();
+      const endpointHash = crypto.createHash('sha256').update(endpoint).digest('hex');
+      const p256dh = String(req.body?.subscription?.keys?.p256dh || '').trim();
+      const auth = String(req.body?.subscription?.keys?.auth || '').trim();
+      const userAgent = String(req.headers['user-agent'] || '').slice(0, 255);
+
+      if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+      if (!endpoint || !p256dh || !auth) {
+        return res.status(400).json({ error: 'Invalid subscription payload' });
+      }
+
+      await pool.query(
+        `INSERT INTO pushSubscriptions (id, userId, endpoint, endpointHash, p256dh, auth, userAgent)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE userId = VALUES(userId), endpoint = VALUES(endpoint), p256dh = VALUES(p256dh), auth = VALUES(auth), userAgent = VALUES(userAgent), updatedAt = CURRENT_TIMESTAMP`,
+        [uuidv4(), userId, endpoint, endpointHash, p256dh, auth, userAgent]
+      );
+
+      res.json({ success: true });
+    } catch (err) {
+      console.error('POST /api/push/subscribe error:', err);
+      res.status(500).json({ error: 'Failed to save push subscription' });
+    }
+  });
+
+  /** DELETE /api/push/subscribe — remove browser push subscription */
+  server.delete(PROXY + '/api/push/subscribe', authenticateToken, async (req, res) => {
+    try {
+      const userId = String(req.user?.id || '').trim();
+      const endpoint = String(req.body?.endpoint || '').trim();
+      if (!userId || !endpoint) return res.status(400).json({ error: 'endpoint is required' });
+
+      await pool.query('DELETE FROM pushSubscriptions WHERE userId = ? AND endpoint = ?', [userId, endpoint]);
+      res.json({ success: true });
+    } catch (err) {
+      console.error('DELETE /api/push/subscribe error:', err);
+      res.status(500).json({ error: 'Failed to remove push subscription' });
+    }
+  });
 
   /** GET /api/notifications/me — paginated, newest first */
   server.get(PROXY + '/api/notifications/me', authenticateToken, async (req, res) => {

@@ -1,5 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { registerSW } from 'virtual:pwa-register';
 import './index.css';
 import App from './App';
 import { ToastProvider } from './context/ToastContext';
@@ -13,6 +14,8 @@ import { ToastProvider } from './context/ToastContext';
 //   document.documentElement.dataset.theme = 'light';
 //   window.localStorage.setItem(THEME_STORAGE_KEY, 'light');
 // }
+
+registerSW({ immediate: true });
 
 
 createRoot(document.getElementById('root')!).render(

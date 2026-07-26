@@ -22,6 +22,23 @@ type CreatorPreview = {
 
 type FavoriteDropsResponse = ServerDrop[];
 
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
+}
+
+const INSTALL_PROMPT_STORAGE_KEY = 'drauwper-install-prompt-next-at';
+const INSTALL_PROMPT_INTERVAL_MS = 15 * 60 * 1000;
+
+function urlBase64ToUint8Array(base64String: string): ArrayBuffer {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray.buffer;
+}
+
 /* ── Drop Card (reused across sections) ── */
 function DropCard({ drop, badge }: { drop: Drop; badge?: string }) {
   const remaining = Math.max(0, (drop.scheduledDropTime - Date.now()) / 1000);
@@ -264,7 +281,153 @@ export default function Explore() {
   const [adDetailsModalOpen, setAdDetailsModalOpen] = useState(false);
   const [followedCreatorIds, setFollowedCreatorIds] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<ExploreTabId>('recommended');
+  const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [showInstallPrompt, setShowInstallPrompt] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushError, setPushError] = useState('');
   const touchStartXRef = useRef<number | null>(null);
+
+  const isInstalled = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    const standalone = window.matchMedia('(display-mode: standalone)').matches;
+    const iosStandalone = Boolean((window.navigator as Navigator & { standalone?: boolean }).standalone);
+    return standalone || iosStandalone;
+  }, []);
+
+  const isPromptDue = () => {
+    const nextAt = Number(localStorage.getItem(INSTALL_PROMPT_STORAGE_KEY) || '0');
+    return Number.isNaN(nextAt) || Date.now() >= nextAt;
+  };
+
+  const snoozeInstallPrompt = () => {
+    localStorage.setItem(INSTALL_PROMPT_STORAGE_KEY, String(Date.now() + INSTALL_PROMPT_INTERVAL_MS));
+    setShowInstallPrompt(false);
+  };
+
+  const handleInstallClick = async () => {
+    if (!deferredInstallPrompt) return;
+    try {
+      await deferredInstallPrompt.prompt();
+      const choiceResult = await deferredInstallPrompt.userChoice;
+      setDeferredInstallPrompt(null);
+      if (choiceResult.outcome !== 'accepted') {
+        snoozeInstallPrompt();
+      } else {
+        setShowInstallPrompt(false);
+      }
+    } catch {
+      snoozeInstallPrompt();
+    }
+  };
+
+  const enablePushNotifications = async () => {
+    if (!user?.id) {
+      setPushError('Sign in to enable push notifications.');
+      return;
+    }
+
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+      setPushError('Push notifications are not supported on this device/browser.');
+      return;
+    }
+
+    setPushBusy(true);
+    setPushError('');
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        setPushError('Notification permission was not granted.');
+        setPushBusy(false);
+        return;
+      }
+
+      const { publicKey } = await api.get<{ publicKey: string }>('/api/push/public-key');
+      if (!publicKey) {
+        setPushError('Push notifications are not configured yet.');
+        setPushBusy(false);
+        return;
+      }
+
+      const registration = await navigator.serviceWorker.ready;
+      const existing = await registration.pushManager.getSubscription();
+      const subscription = existing || await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey),
+      });
+
+      await api.post('/api/push/subscribe', { subscription });
+      setPushEnabled(true);
+    } catch {
+      setPushError('Unable to enable push notifications.');
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    const onBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      const installEvent = event as BeforeInstallPromptEvent;
+      setDeferredInstallPrompt(installEvent);
+      if (!isInstalled && isPromptDue()) {
+        setShowInstallPrompt(true);
+      }
+    };
+
+    const onAppInstalled = () => {
+      setShowInstallPrompt(false);
+      setDeferredInstallPrompt(null);
+    };
+
+    window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt as EventListener);
+    window.addEventListener('appinstalled', onAppInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt as EventListener);
+      window.removeEventListener('appinstalled', onAppInstalled);
+    };
+  }, [isInstalled]);
+
+  useEffect(() => {
+    if (isInstalled) {
+      setShowInstallPrompt(false);
+      return;
+    }
+
+    if (isPromptDue()) {
+      setShowInstallPrompt(true);
+    }
+
+    const timer = window.setInterval(() => {
+      if (!isInstalled && isPromptDue()) {
+        setShowInstallPrompt(true);
+      }
+    }, 60 * 1000);
+
+    return () => window.clearInterval(timer);
+  }, [isInstalled]);
+
+  useEffect(() => {
+    if (isInstalled || !deferredInstallPrompt) {
+      setShowInstallPrompt(false);
+      return;
+    }
+    if (isPromptDue()) {
+      setShowInstallPrompt(true);
+    }
+  }, [deferredInstallPrompt, isInstalled]);
+
+  useEffect(() => {
+    if (!user?.id || !('serviceWorker' in navigator)) return;
+    navigator.serviceWorker.ready
+      .then((registration) => registration.pushManager.getSubscription())
+      .then((subscription) => {
+        setPushEnabled(Boolean(subscription));
+      })
+      .catch(() => {
+        setPushEnabled(false);
+      });
+  }, [user?.id]);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -634,6 +797,43 @@ export default function Explore() {
             className="w-full bg-surface-2 border border-surface-3 rounded-xl pl-9 pr-4 py-2.5 text-sm text-text placeholder:text-text-muted focus:outline-none focus:border-brand"
           />
         </div>
+
+        {showInstallPrompt && (
+          <div className="mt-4 rounded-xl border border-brand/30 bg-brand/10 p-4">
+            <p className="text-sm font-semibold text-text">Install Drauwper App</p>
+            <p className="mt-1 text-xs text-text-muted">
+              Add Drauwper to your device for a faster, app-like experience and release notifications.
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleInstallClick}
+                disabled={!deferredInstallPrompt}
+                className="rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand/90"
+              >
+                {deferredInstallPrompt ? 'Install App' : 'Use Browser Install Menu'}
+              </button>
+              <button
+                type="button"
+                onClick={snoozeInstallPrompt}
+                className="rounded-lg border border-surface-3 px-3 py-1.5 text-xs font-semibold text-text-muted hover:text-text"
+              >
+                Remind me later
+              </button>
+              {user?.id && (
+                <button
+                  type="button"
+                  onClick={enablePushNotifications}
+                  disabled={pushBusy || pushEnabled}
+                  className="rounded-lg border border-brand/40 px-3 py-1.5 text-xs font-semibold text-brand disabled:opacity-60"
+                >
+                  {pushEnabled ? 'Notifications Enabled' : pushBusy ? 'Enabling…' : 'Enable Notifications'}
+                </button>
+              )}
+            </div>
+            {pushError && <p className="mt-2 text-xs text-danger">{pushError}</p>}
+          </div>
+        )}
         {/* Mode tabs */}
         <div className="flex gap-2 mt-3">
           <button

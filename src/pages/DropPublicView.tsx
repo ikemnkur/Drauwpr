@@ -82,10 +82,6 @@ export default function DropPublicView() {
     ? (/^https?:\/\//i.test(drop.thumbnailUrl) ? drop.thumbnailUrl : `${API_BASE}${drop.thumbnailUrl}`)
     : `https://picsum.photos/seed/${drop.id}/1280/400`;
 
-  const creatorAvatar = drop.creatorAvatar
-    ? (/^https?:\/\//i.test(drop.creatorAvatar) ? drop.creatorAvatar : `${API_BASE}${drop.creatorAvatar}`)
-    : null;
-
   return (
     <div className="min-h-screen bg-[#111827] text-[#e2e8f0]">
       <div className="w-full h-52 overflow-hidden">

@@ -116,8 +116,8 @@ export default function DropPublicInfo() {
                 className="flex items-center gap-2 hover:text-brand transition no-underline"
               >
                 <div className="w-7 h-7 rounded-full bg-surface-3 border border-surface-3 flex items-center justify-center text-xs font-bold text-brand overflow-hidden shrink-0">
-                  {drop.creatorAvatar
-                    ? <img src={drop.creatorAvatar} alt={drop.creatorName} className="w-full h-full object-cover" />
+                  {creatorAvatar
+                    ? <img src={creatorAvatar}  alt={drop.creatorName} className="w-full h-full object-cover" />
                     : drop.creatorName[0].toUpperCase()
                   }
                 </div>
