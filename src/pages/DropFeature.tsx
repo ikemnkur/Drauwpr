@@ -791,11 +791,11 @@ export default function DropFeature() {
             {/* Copy link */}
             <div className="flex items-center gap-2">
               <div className="flex-1 bg-surface border border-surface-3 rounded-xl px-3 py-2 text-xs text-text-muted truncate font-mono select-all">
-                {`${window.location.origin}/drop/${drop.id}/view`}
+                {`${window.location.origin}/drop/${drop?.id ?? ''}/view`}
               </div>
               <button
                 onClick={async () => {
-                  const url = `${window.location.origin}/drop/${drop.id}/view`;
+                  const url = `${window.location.origin}/drop/${drop?.id ?? ''}/view`;
                   try { await navigator.clipboard.writeText(url); }
                   catch { const el = document.createElement('textarea'); el.value = url; el.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(el); el.select(); document.execCommand('copy'); document.body.removeChild(el); }
                   setCopiedInline(true);
@@ -815,8 +815,8 @@ export default function DropFeature() {
 
             {/* Social buttons */}
             {(() => {
-              const url = `${window.location.origin}/drop/${drop.id}/view`;
-              const text = `Check out "${drop.title}" on Drauwper 🔥`;
+              const url = `${window.location.origin}/drop/${drop?.id ?? ''}/view`;
+              const text = `Check out "${drop?.title ?? 'this drop'}" on Drauwper 🔥`;
               return (
                 <div className="grid grid-cols-2 gap-2">
                   <a href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`} target="_blank" rel="noopener noreferrer"
