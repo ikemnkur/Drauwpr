@@ -1160,14 +1160,14 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       const dropId = String(req.params.id || '').trim();
       if (!dropId) return res.status(400).json({ error: 'Invalid drop id' });
 
-      const viewColumn = await resolveDropViewsColumnName(pool);
-      if (!viewColumn) {
-        return res.status(500).json({ error: 'Drops view counter column is not configured' });
-      }
+      // const viewColumn = await resolveDropViewsColumnName(pool);
+      // if (!viewColumn) {
+      //   return res.status(500).json({ error: 'Drops view counter column is not configured' });
+      // }
 
       const [updateResult] = await pool.query(
         `UPDATE drops
-         SET ${viewColumn} = COALESCE(${viewColumn}, 0) + 1
+         SET views = COALESCE(views, 0) + 1
          WHERE id = ?`,
         [dropId]
       );
@@ -1177,7 +1177,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       }
 
       const [[row]] = await pool.query(
-        `SELECT COALESCE(${viewColumn}, 0) AS views FROM drops WHERE id = ? LIMIT 1`,
+        `SELECT COALESCE(views, 0) AS views FROM drops WHERE id = ? LIMIT 1`,
         [dropId]
       );
 
