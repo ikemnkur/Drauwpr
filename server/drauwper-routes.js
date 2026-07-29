@@ -487,13 +487,31 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
 
   const normalizeDropMediaFields = (row) => {
     if (!row || typeof row !== 'object') return row;
+    const rawViews = row.views ?? row.view;
+    const parsedViews = Number(rawViews);
     return {
       ...row,
+      views: Number.isFinite(parsedViews) ? parsedViews : 0,
       fusetime: resolveFuseTimeMs(row),
       thumbnailUrl: resolveDropAssetUrl(row.thumbnailUrl),
       trailerUrl: resolveDropAssetUrl(row.trailerUrl),
     };
   };
+
+  async function resolveDropViewsColumnName(db) {
+    const [cols] = await db.query(
+      `SELECT COLUMN_NAME
+       FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'drops'
+         AND COLUMN_NAME IN ('views', 'view')`
+    );
+
+    const names = new Set((cols || []).map((col) => String(col.COLUMN_NAME || '').toLowerCase()));
+    if (names.has('views')) return 'views';
+    if (names.has('view')) return 'view';
+    return null;
+  }
 
   const resolveThumbnailUrl = (req, postId, thumbnailValue) => {
     const value = String(thumbnailValue || '').trim();
@@ -1137,6 +1155,39 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
    * GET /api/drops/:id
    * Single drop with creator info.
    */
+  server.post(PROXY + '/api/drops/:id/view', async (req, res) => {
+    try {
+      const dropId = String(req.params.id || '').trim();
+      if (!dropId) return res.status(400).json({ error: 'Invalid drop id' });
+
+      const viewColumn = await resolveDropViewsColumnName(pool);
+      if (!viewColumn) {
+        return res.status(500).json({ error: 'Drops view counter column is not configured' });
+      }
+
+      const [updateResult] = await pool.query(
+        `UPDATE drops
+         SET ${viewColumn} = COALESCE(${viewColumn}, 0) + 1
+         WHERE id = ?`,
+        [dropId]
+      );
+
+      if (!updateResult?.affectedRows) {
+        return res.status(404).json({ error: 'Drop not found' });
+      }
+
+      const [[row]] = await pool.query(
+        `SELECT COALESCE(${viewColumn}, 0) AS views FROM drops WHERE id = ? LIMIT 1`,
+        [dropId]
+      );
+
+      return res.json({ success: true, views: Number(row?.views || 0) });
+    } catch (err) {
+      console.error('POST /api/drops/:id/view error:', err);
+      return res.status(500).json({ error: 'Failed to track drop view' });
+    }
+  });
+
   server.get(PROXY + '/api/drops/:id', async (req, res) => {
     try {
 

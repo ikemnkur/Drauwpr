@@ -43,6 +43,7 @@ export interface ServerDrop {
   likeCount: number;
   dislikeCount: number;
   views?: number;
+  view?: number;
   status: Drop['status'];
   isPublic: number | boolean;
   mature?: number | boolean;
@@ -102,7 +103,7 @@ export function mapDrop(d: ServerDrop): Drop & { myContribution?: number } {
     reviewCount: d.reviewCount ?? 0,
     likeCount: d.likeCount ?? 0,
     dislikeCount: d.dislikeCount ?? 0,
-    views: d.views ?? 0,
+    views: d.views ?? d.view ?? 0,
     flagCount: d.flagCount ?? 0,
     mature: Boolean(d.mature ?? 0),
     status: d.status,

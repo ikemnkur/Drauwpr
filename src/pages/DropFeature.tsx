@@ -66,6 +66,7 @@ export default function DropFeature() {
   const [copiedInline, setCopiedInline] = useState(false);
   const [stallExpiresAt, setStallExpiresAt] = useState<number | null>(null);
   const [viewCount, setViewCount] = useState(0);
+  const viewDropIdRef = useRef<string | null>(null);
 
 
   const localDrop = drops.find((d) => d.id === id);
@@ -170,7 +171,18 @@ export default function DropFeature() {
   }, [drop, stallExpiresAt]);
 
   useEffect(() => {
-    setViewCount(Number(drop?.views || 0));
+    if (!drop?.id) return;
+
+    const serverViews = Number((drop as Drop & { view?: number }).views ?? (drop as Drop & { view?: number }).view ?? 0);
+
+    setViewCount((prev) => {
+      if (viewDropIdRef.current !== drop.id) {
+        return serverViews;
+      }
+      return Math.max(prev, serverViews);
+    });
+
+    viewDropIdRef.current = drop.id;
   }, [drop?.id, drop?.views]);
 
   useEffect(() => {
@@ -552,7 +564,17 @@ export default function DropFeature() {
 
               </button>
             </div>
+            
           </div>
+          <br />
+            <button
+            type="button"
+            onClick={() => setShowDownloadInfoModal(true)}
+            className="w-full py-3 rounded-2xl bg-surface-3 border border-surface-3 text-text-muted font-semibold text-sm cursor-pointer hover:border-surface hover:text-text transition"
+            aria-label="Download information"
+          >
+            Download Now
+          </button>
         </div>
       </div>
 
@@ -736,20 +758,12 @@ export default function DropFeature() {
 
 
 
-          {/* Contributors */}
-          <ContributorList contributors={contributors} />
+
         </div>
 
         {/* Right: Contribute form */}
         <div className="space-y-4">
-          <button
-            type="button"
-            onClick={() => setShowDownloadInfoModal(true)}
-            className="w-full py-3 rounded-2xl bg-surface-3 border border-surface-3 text-text-muted font-semibold text-sm cursor-pointer hover:border-surface hover:text-text transition"
-            aria-label="Download information"
-          >
-            Download Now
-          </button>
+        
 
           {/* Hide contribute form when drop is expired without reaching goal */}
           {drop.status !== 'expired' && !(Date.now() > (stallExpiresAt ?? drop.expiresAt) && drop.currentContributions < drop.goalAmount) ? (
@@ -764,8 +778,11 @@ export default function DropFeature() {
             </div>
           )}
 
+                    {/* Contributors */}
+          <ContributorList contributors={contributors} />
+
           {/* Share box */}
-          <div className="bg-surface-2 border border-surface-3 rounded-2xl p-4 space-y-3">
+          {false && (<div className="bg-surface-2 border border-surface-3 rounded-2xl p-4 space-y-3">
             <div className="flex items-center gap-2">
               <Share2 className="w-4 h-4 text-brand" />
               <p className="text-sm font-semibold text-text">Share this Drop</p>
@@ -821,7 +838,7 @@ export default function DropFeature() {
                 </div>
               );
             })()}
-          </div>
+          </div>)}
 
           {sponsoredAd && (
             (() => {
