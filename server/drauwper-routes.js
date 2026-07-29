@@ -284,6 +284,24 @@ async function ensurePromoSubmissionMetricsColumns(db) {
   }
 }
 
+async function ensureDropDiscountsColumn(db) {
+  try {
+    const [cols] = await db.query(
+      `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'drops'
+         AND COLUMN_NAME = 'discountsDisabled'`
+    );
+
+    if (!cols?.length) {
+      await db.query('ALTER TABLE drops ADD COLUMN discountsDisabled TINYINT(1) NOT NULL DEFAULT 0 AFTER totalRevenue');
+    }
+  } catch (err) {
+    if (err && (err.code === 'ER_NO_SUCH_TABLE' || err.errno === 1146)) return;
+    throw err;
+  }
+}
+
 async function ensurePostFlagsTable(db) {
   await db.query(`
     CREATE TABLE IF NOT EXISTS dropFlags (
@@ -679,6 +697,9 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
   });
   ensurePushSubscriptionsTable(pool).catch((err) => {
     console.warn('⚠️ Failed to ensure pushSubscriptions table:', err.message || err);
+  });
+  ensureDropDiscountsColumn(pool).catch((err) => {
+    console.warn('⚠️ Failed to ensure drops discount controls:', err.message || err);
   });
 
   const UNVERIFIED_INTERACTION_LIMIT = 5;
@@ -1933,7 +1954,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
 
       const [[drop]] = await pool.query(
         `SELECT id, creatorId, basePrice, goalAmount, actualDropTime, totalDownloads,
-                status
+                status, discountsDisabled
          FROM drops WHERE id = ?`,
         [dropId]
       );
@@ -1982,13 +2003,22 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
 
       // Calculate preview for users who haven't downloaded yet
       const basePrice = drop.basePrice;
-      const pricing = computeDownloadPricing({
-        basePrice,
-        goalAmount: drop.goalAmount,
-        contributedAmount,
-        actualDropTime: drop.actualDropTime,
-        totalDownloads: drop.totalDownloads,
-      });
+      const discountsDisabled = Number(drop.discountsDisabled || 0) === 1;
+      const pricing = discountsDisabled
+        ? {
+          contributorDiscountPct: 0,
+          timeDecayDiscountPct: 0,
+          volumeDecayDiscountPct: 0,
+          totalDiscountPct: 0,
+          finalPrice: Math.max(0, Math.floor(Number(basePrice) || 0)),
+        }
+        : computeDownloadPricing({
+          basePrice,
+          goalAmount: drop.goalAmount,
+          contributedAmount,
+          actualDropTime: drop.actualDropTime,
+          totalDownloads: drop.totalDownloads,
+        });
       const finalPrice = isCreator ? 0 : pricing.finalPrice;
 
       res.json({
@@ -2086,19 +2116,27 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
 
       // Calculate price with discounts
       let price = drop.basePrice;
+      const discountsDisabled = Number(drop.discountsDisabled || 0) === 1;
 
       // Contributor discount + time + volume discount from unified pricing model
       const [[contrib]] = await conn.query(
         'SELECT COALESCE(SUM(amount),0) AS contributed FROM contributions WHERE dropId = ? AND userId = ? AND isRefunded = 0',
         [dropId, userId]
       );
-      const pricing = computeDownloadPricing({
-        basePrice: drop.basePrice,
-        goalAmount: drop.goalAmount,
-        contributedAmount: contrib.contributed,
-        actualDropTime: drop.actualDropTime,
-        totalDownloads: drop.totalDownloads,
-      });
+      const pricing = discountsDisabled
+        ? {
+          contributorDiscountPct: 0,
+          timeDecayDiscountPct: 0,
+          volumeDecayDiscountPct: 0,
+          finalPrice: Math.max(0, Math.floor(Number(drop.basePrice) || 0)),
+        }
+        : computeDownloadPricing({
+          basePrice: drop.basePrice,
+          goalAmount: drop.goalAmount,
+          contributedAmount: contrib.contributed,
+          actualDropTime: drop.actualDropTime,
+          totalDownloads: drop.totalDownloads,
+        });
 
       const contributorDiscount = pricing.contributorDiscountPct;
       const timeDecayDiscount = pricing.timeDecayDiscountPct;
@@ -3073,7 +3111,7 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
       const [activeDrops] = await pool.query(
         `SELECT id, burnRate, created_at, expiresAt, scheduledDropTime, fusetime, lastMomentumUpdate, status,
                 creatorId, title, thumbnailUrl, basePrice, goalAmount, currentContributions, totalDownloads
-         FROM drops WHERE status = 'active'`
+        FROM drops WHERE status = 'active' AND currentContributions >= goalAmount`
       );
 
       let updated = 0;
@@ -3256,52 +3294,100 @@ module.exports = function drauwperRoutes(server, pool, authenticateToken, PROXY 
         });
       }
 
-      // Also check for expired drops (past expiresAt with status pending)
-      const [expired] = await pool.query(
-        `UPDATE drops SET status = 'expired' WHERE status = 'pending' AND expiresAt < NOW()`
+      let expiredRefunded = 0;
+      let droppedOnExpiry = 0;
+
+      const [expiredCandidates] = await pool.query(
+        `SELECT id, title, status, expiry_behaviour, expiry_threshold,
+                goalAmount, currentContributions
+         FROM drops
+         WHERE status IN ('pending', 'active')
+           AND expiresAt < NOW()`
       );
 
-      // Refund contributions for newly expired drops
-      if (expired.changedRows > 0) {
-        const [expiredDrops] = await pool.query(
-          `SELECT d.id, d.title FROM drops d WHERE d.status = 'expired' AND d.id IN (
-             SELECT DISTINCT dropId FROM contributions WHERE isRefunded = 0
-           )`
-        );
-        for (const d of expiredDrops) {
-          const [contribs] = await pool.query(
-            'SELECT id, userId, amount FROM contributions WHERE dropId = ? AND isRefunded = 0',
-            [d.id]
+      for (const drop of expiredCandidates) {
+        const goalAmount = Math.max(0, Number(drop.goalAmount) || 0);
+        const currentContributions = Math.max(0, Number(drop.currentContributions) || 0);
+        const goalMet = goalAmount > 0 && currentContributions >= goalAmount;
+        if (goalMet) continue;
+
+        const expiryBehaviour = String(drop.expiry_behaviour || 'refund').toLowerCase() === 'keep'
+          ? 'keep'
+          : 'refund';
+        const thresholdRaw = Number(drop.expiry_threshold);
+        const threshold = Number.isFinite(thresholdRaw)
+          ? Math.min(1, Math.max(0, thresholdRaw))
+          : 0;
+        const canForceDrop = expiryBehaviour !== 'refund'
+          && threshold > 0
+          && currentContributions >= goalAmount * threshold;
+
+        if (canForceDrop) {
+          const [dropUpdate] = await pool.query(
+            `UPDATE drops
+             SET status = 'dropped',
+                 actualDropTime = COALESCE(actualDropTime, NOW()),
+                 fusetime = 0,
+                 burnRate = 1,
+                 discountsDisabled = 1,
+                 lastMomentumUpdate = NOW()
+             WHERE id = ? AND status IN ('pending', 'active')`,
+            [drop.id]
           );
-          for (const c of contribs) {
-            await pool.query('UPDATE userData SET credits = credits + ? WHERE id = ?', [c.amount, c.userId]);
-            await pool.query('UPDATE contributions SET isRefunded = 1, refundedAt = NOW() WHERE id = ?', [c.id]);
-            const [[refundedUser]] = await pool.query('SELECT credits FROM userData WHERE id = ?', [c.userId]);
-            await insertWalletTransaction(pool, {
-              id: uuidv4(),
-              userId: c.userId,
-              type: 'contribution_refund',
-              amount: c.amount,
-              balanceAfter: refundedUser.credits,
-              relatedDropId: d.id,
-              relatedContributionId: c.id,
-              description: `"${d.title}" expired — credits refunded`,
-            });
-            createNotif(pool, {
-              userId: c.userId,
-              type: 'contribution_refunded',
-              title: 'Credits refunded',
-              message: `"${d.title}" expired without meeting its goal. ${c.amount.toLocaleString()} credits have been returned to your balance.`,
-              priority: 'info',
-              category: 'contribution_refunded',
-              relatedDropId: d.id,
-              actionUrl: `/drop/${d.id}`,
-            }).catch(() => { });
+
+          if (dropUpdate.changedRows > 0) {
+            droppedOnExpiry += 1;
           }
+          continue;
+        }
+
+        const [expireUpdate] = await pool.query(
+          `UPDATE drops
+           SET status = 'expired', burnRate = 1, fusetime = 0, lastMomentumUpdate = NOW()
+           WHERE id = ? AND status IN ('pending', 'active')`,
+          [drop.id]
+        );
+
+        if (!expireUpdate.changedRows) continue;
+
+        expiredRefunded += 1;
+        const [contribs] = await pool.query(
+          'SELECT id, userId, amount, penaltyAmount FROM contributions WHERE dropId = ? AND isRefunded = 0',
+          [drop.id]
+        );
+
+        for (const c of contribs) {
+          const refundAmount = Math.max(0, Number(c.amount) || 0) + Math.max(0, Number(c.penaltyAmount) || 0);
+          if (refundAmount > 0) {
+            await pool.query('UPDATE userData SET credits = credits + ? WHERE id = ?', [refundAmount, c.userId]);
+          }
+
+          await pool.query('UPDATE contributions SET isRefunded = 1, refundedAt = NOW() WHERE id = ?', [c.id]);
+          const [[refundedUser]] = await pool.query('SELECT credits FROM userData WHERE id = ?', [c.userId]);
+          await insertWalletTransaction(pool, {
+            id: uuidv4(),
+            userId: c.userId,
+            type: 'contribution_refund',
+            amount: refundAmount,
+            balanceAfter: refundedUser.credits,
+            relatedDropId: drop.id,
+            relatedContributionId: c.id,
+            description: `"${drop.title}" expired — credits refunded`,
+          });
+          createNotif(pool, {
+            userId: c.userId,
+            type: 'contribution_refunded',
+            title: 'Credits refunded',
+            message: `"${drop.title}" expired without meeting its goal. ${refundAmount.toLocaleString()} credits have been returned to your balance.`,
+            priority: 'info',
+            category: 'contribution_refunded',
+            relatedDropId: drop.id,
+            actionUrl: `/drop/${drop.id}`,
+          }).catch(() => { });
         }
       }
 
-      res.json({ updated, expiredRefunded: expired.changedRows || 0 });
+      res.json({ updated, expiredRefunded, droppedOnExpiry });
     } catch (err) {
       console.error('POST /api/engine/decay-tick error:', err);
       res.status(500).json({ error: 'Decay tick failed' });

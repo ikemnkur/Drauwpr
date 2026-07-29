@@ -149,7 +149,7 @@ export default function UserProfile() {
   const reportHref = `/help?report=1&targetId=${encodeURIComponent(profile.id)}&targetUsername=${encodeURIComponent(profile.username)}`;
 
   return (
-    <div className="max-w-4xl mx-auto py-8 px-4 space-y-6">
+    <div className="max-w-4xl mx-auto py-0 px-4 space-y-3">
       {/* Back link */}
       <Link to="/dashboard" className="inline-flex items-center gap-1 text-sm text-text-muted hover:text-text transition no-underline">
         <ArrowLeft className="w-4 h-4" />

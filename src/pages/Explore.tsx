@@ -280,6 +280,8 @@ export default function Explore() {
   const [activeSponsoredAdId, setActiveSponsoredAdId] = useState<string | null>(null);
   const [adDetailsModalOpen, setAdDetailsModalOpen] = useState(false);
   const [followedCreatorIds, setFollowedCreatorIds] = useState<string[]>([]);
+  const [profileSearchResults, setProfileSearchResults] = useState<CreatorPreview[]>([]);
+  const [profileSearchLoading, setProfileSearchLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<ExploreTabId>('recommended');
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
@@ -558,6 +560,56 @@ export default function Explore() {
     setFollowing(activeFollowing);
   }, [followedCreatorIds, drops, featured, hottest, newest]);
 
+  useEffect(() => {
+    const q = search.trim();
+    if (searchTab !== 'profiles' || !q) {
+      setProfileSearchResults([]);
+      setProfileSearchLoading(false);
+      return;
+    }
+
+    const mode = q[0];
+    const term = (mode === '@' || mode === '#') ? q.slice(1).trim() : q;
+    if (term.length < 2) {
+      setProfileSearchResults([]);
+      setProfileSearchLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setProfileSearchLoading(true);
+
+    const timer = window.setTimeout(() => {
+      api.get<Array<{
+        id: string;
+        username?: string;
+        profilePicture?: string | null;
+        totalDropsCreated?: number | null;
+      }>>(`/api/users/search?q=${encodeURIComponent(term)}`)
+        .then((rows) => {
+          if (cancelled) return;
+          setProfileSearchResults((rows || []).map((user) => ({
+            id: user.id,
+            username: String(user.username || '').trim() || 'Unknown',
+            avatar: String(user.profilePicture || '').trim(),
+            postCount: Number(user.totalDropsCreated || 0),
+            tags: [],
+          })));
+        })
+        .catch(() => {
+          if (!cancelled) setProfileSearchResults([]);
+        })
+        .finally(() => {
+          if (!cancelled) setProfileSearchLoading(false);
+        });
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [search, searchTab]);
+
   const visibleDrops = useMemo(
     () => drops.filter((d) => d.isPublic && !['removed', 'draft', 'hidden'].includes(d.status)),
     [drops]
@@ -667,20 +719,7 @@ export default function Explore() {
     );
   }, [drops, search]);
 
-  const filteredProfiles = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return creators;
-
-    const mode = q[0];
-    const term = (mode === '@' || mode === '#') ? q.slice(1).trim() : q;
-    if (!term) return creators;
-
-    if (mode === '#') {
-      return creators.filter((creator) => creator.tags.some((tag) => tag.toLowerCase().replace(/^#/, '').includes(term)));
-    }
-
-    return creators.filter((creator) => creator.username.toLowerCase().includes(term));
-  }, [creators, search]);
+  const profilesToDisplay = search.trim() ? profileSearchResults : creators;
 
   const activeSponsoredAd = useMemo(
     () => sponsoredPromos.find((promo) => promo.id === activeSponsoredAdId) || null,
@@ -857,11 +896,13 @@ export default function Explore() {
       {searchTab === 'profiles' ? (
         <section>
           <SectionHeader icon={Users} title={hasSearchQuery ? `Users matching "${search}"` : 'User Profiles'} />
-          {filteredProfiles.length === 0 ? (
+          {profileSearchLoading ? (
+            <p className="text-text-muted text-sm text-center py-10">Searching users…</p>
+          ) : profilesToDisplay.length === 0 ? (
             <p className="text-text-muted text-sm text-center py-10">No users found.</p>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {filteredProfiles.slice(0, 18).map((creator) => <ProfileCard key={creator.id} creator={creator} />)}
+              {profilesToDisplay.slice(0, 18).map((creator) => <ProfileCard key={creator.id} creator={creator} />)}
             </div>
           )}
         </section>

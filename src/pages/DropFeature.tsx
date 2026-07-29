@@ -14,7 +14,7 @@ import ShareModal from '../components/ShareModal';
 import DropCelebrationModal from '../components/DropCelebrationModal';
 import XIcon from '@mui/icons-material/X';
 import FacebookIcon from '@mui/icons-material/Facebook';
-import { Tag, HardDrive, ChevronDown, ChevronUp, Film, Image, Timer, Share2, Link2, Check, MessageCircle, Send, AlertTriangle, Calendar } from 'lucide-react';
+import { Tag, HardDrive, ChevronDown, ChevronUp, Film, Image, Timer, Share2, Link2, Check, MessageCircle, Send, AlertTriangle, Calendar, Eye } from 'lucide-react';
 import ExpirationGauge from '../components/ExpirationGauge';
 import { useFuseCountdown } from '../hooks/useFuseCountdown';
 
@@ -56,6 +56,7 @@ export default function DropFeature() {
   const [showTrailer, setShowTrailer] = useState(true);
   const [showStallModal, setShowStallModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
+  const [showDownloadInfoModal, setShowDownloadInfoModal] = useState(false);
   const [showCelebration, setShowCelebration] = useState(false);
   const [showExpiredModal, setShowExpiredModal] = useState(false);
   const celebrationFired = useRef(false);
@@ -64,6 +65,7 @@ export default function DropFeature() {
   const [dropDayPulse, setDropDayPulse] = useState(false);
   const [copiedInline, setCopiedInline] = useState(false);
   const [stallExpiresAt, setStallExpiresAt] = useState<number | null>(null);
+  const [viewCount, setViewCount] = useState(0);
 
 
   const localDrop = drops.find((d) => d.id === id);
@@ -166,6 +168,30 @@ export default function DropFeature() {
       (Date.now() > (stallExpiresAt ?? drop.expiresAt) && drop.currentContributions < drop.goalAmount);
     if (isExpired) setShowExpiredModal(true);
   }, [drop, stallExpiresAt]);
+
+  useEffect(() => {
+    setViewCount(Number(drop?.views || 0));
+  }, [drop?.id, drop?.views]);
+
+  useEffect(() => {
+    if (!id) return;
+
+    const sessionKey = `drop-viewed:${id}`;
+    if (sessionStorage.getItem(sessionKey)) return;
+
+    sessionStorage.setItem(sessionKey, '1');
+    api.post<{ views?: number }>(`/api/drops/${id}/view`, {})
+      .then((res) => {
+        if (typeof res?.views === 'number') {
+          setViewCount(res.views);
+        } else {
+          setViewCount((prev) => prev + 1);
+        }
+      })
+      .catch(() => {
+        // no-op: counter failure should not interrupt page usage
+      });
+  }, [id]);
 
   // Show celebration modal when the drop is about to be released
   // 1. contribution goal has been met
@@ -381,6 +407,9 @@ export default function DropFeature() {
     // ? Math.floor(drop.currentContributions / uniqueContributorCount)
     ? Math.floor(drop.currentContributions / drop.contributorCount)
     : 0;
+  const goalProgressPct = Math.min(100, (drop.currentContributions / Math.max(1, drop.goalAmount)) * 100);
+  const unlockThresholdPct = Math.round(Math.max(0, Math.min(1, drop.expiryThreshold ?? 1)) * 100);
+  const unlockHours = Math.max(1, Math.ceil((goalNotMet ? baseFuseTimeMs : fuseTimeMs) / 3_600_000));
 
   const projectedDropDate = new Date(nowMs + (fuseTimeMs / Math.max(1, drop.burnRate)));
   const bannerRaw = String(drop.thumbnailUrl || '').trim();
@@ -402,6 +431,7 @@ export default function DropFeature() {
           ? `${API_BASE}${trailerRaw}`
           : `${API_BASE}/${trailerRaw}`)
       : '';
+  const hasTrailer = Boolean(trailerEmbedUrl || trailerDirectUrl);
   const expiryDate = new Date(effectiveExpiresAt);
   const dropMonthStart = new Date(projectedDropDate.getFullYear(), projectedDropDate.getMonth(), 1);
   const expiryMonthStart = new Date(expiryDate.getFullYear(), expiryDate.getMonth(), 1);
@@ -415,7 +445,7 @@ export default function DropFeature() {
     <div className="max-w-5xl mx-auto">
 
       {/* ── Banner ── */}
-      {bannerUrl && (
+      {bannerUrl && !hasTrailer && (
         <div className="mb-4">
           <button
             onClick={() => setShowBanner((v) => !v)}
@@ -491,6 +521,7 @@ export default function DropFeature() {
             </Link>
             <span className="flex items-center gap-1"><HardDrive className="w-4 h-4" /> {drop.fileSize}</span>
             <span className="flex items-center gap-1"><Tag className="w-4 h-4" /> {drop.fileType}</span>
+            <span className="flex items-center gap-1"><Eye className="w-4 h-4" /> {viewCount.toLocaleString()} views</span>
             {/* Date Created */}
             <span className="flex items-center gap-1"><Calendar className="w-4 h-4" /> {new Date(drop.createdAt).toLocaleDateString()}</span>
 
@@ -711,9 +742,20 @@ export default function DropFeature() {
 
         {/* Right: Contribute form */}
         <div className="space-y-4">
+          <button
+            type="button"
+            onClick={() => setShowDownloadInfoModal(true)}
+            className="w-full py-3 rounded-2xl bg-surface-3 border border-surface-3 text-text-muted font-semibold text-sm cursor-pointer hover:border-surface hover:text-text transition"
+            aria-label="Download information"
+          >
+            Download Now
+          </button>
+
           {/* Hide contribute form when drop is expired without reaching goal */}
           {drop.status !== 'expired' && !(Date.now() > (stallExpiresAt ?? drop.expiresAt) && drop.currentContributions < drop.goalAmount) ? (
-            <ContributeForm dropId={drop.id} onContributed={handleContributed} />
+            <div data-contribute-form-anchor>
+              <ContributeForm dropId={drop.id} onContributed={handleContributed} />
+            </div>
           ) : (
             <div className="bg-surface-2 border border-red-500/20 rounded-2xl p-5 text-center space-y-2">
               <AlertTriangle className="w-8 h-8 text-red-400 mx-auto" />
@@ -903,6 +945,52 @@ export default function DropFeature() {
           dropUrl={`${window.location.origin}/drop/${drop.id}/view`}
           onClose={() => setShowShareModal(false)}
         />
+      )}
+
+      {showDownloadInfoModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4">
+          <div className="bg-[#1e1e2e] border border-surface-3 rounded-3xl w-full max-w-md shadow-2xl overflow-hidden">
+            <div className="h-1.5 w-full bg-gradient-to-r from-brand via-cyan-400 to-brand" />
+            <div className="px-6 py-6 space-y-4">
+              <h3 className="text-lg font-bold text-white">How to unlock this download</h3>
+              <p className="text-sm text-[#cbd5e1]">
+                This download should drop/unlock in <span className="font-semibold text-white">{unlockHours} hour{unlockHours === 1 ? '' : 's'}</span> after the donation goal reaches <span className="font-semibold text-white">{unlockThresholdPct}%</span>. It can be sped up by contributing more credits to speed up the countdown.
+              </p>
+              <p className="text-sm text-[#94a3b8]">
+                Current progress: <span className="font-semibold text-white">{goalProgressPct.toFixed(1)}%</span> goal met. 
+              </p>
+
+               <p className="text-sm text-[#94a3b8]">
+                The Drop will expire and be canceled if the donation goal is not met within the specified time. Time remaining: <span className="font-semibold text-white">{Math.round(totalMinutesLeft*10/60)/10} hours</span>.
+              </p>
+              <p className="text-sm text-[#cbd5e1]">
+                Become a contributor today to speed up and unlock the drop.
+              </p>
+              <div className="pt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowDownloadInfoModal(false);
+                    const contributeEl = document.querySelector('[data-contribute-form-anchor]');
+                    if (contributeEl instanceof HTMLElement) {
+                      contributeEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-brand/20 border border-brand/40 text-brand font-semibold text-sm hover:bg-brand/30 transition"
+                >
+                  Contribute now
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowDownloadInfoModal(false)}
+                  className="flex-1 py-2.5 rounded-xl bg-surface-3 border border-surface-3 text-text-muted hover:text-text transition"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Stall Modal */}
