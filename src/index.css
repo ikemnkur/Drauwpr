@@ -50,3 +50,28 @@ body {
 .pulse-glow {
   animation: pulse-glow 2s ease-in-out infinite;
 }
+
+@keyframes download-cta-pulse {
+  0% {
+    background-color: #35354d;
+    border-color: #35354d;
+    color: #94a3b8;
+    box-shadow: 0 0 0 rgba(249, 115, 22, 0);
+  }
+  50% {
+    background-color: rgba(249, 115, 22, 0.18);
+    border-color: rgba(249, 115, 22, 0.8);
+    color: #ffd7b2;
+    box-shadow: 0 0 20px rgba(249, 115, 22, 0.45), 0 0 36px rgba(249, 115, 22, 0.25);
+  }
+  100% {
+    background-color: #35354d;
+    border-color: #35354d;
+    color: #94a3b8;
+    box-shadow: 0 0 0 rgba(249, 115, 22, 0);
+  }
+}
+
+.download-cta-pulse {
+  animation: download-cta-pulse 3s ease-in-out infinite;
+}

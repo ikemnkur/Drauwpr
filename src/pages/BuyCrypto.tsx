@@ -18,6 +18,41 @@ const MIN_USD = 2.5;
 const MAX_USD = 250;
 const STEP = 0.5;
 
+type ChainSymbol = 'BTC' | 'ETH' | 'LTC' | 'SOL';
+
+type CryptoAddressBook = Record<ChainSymbol, string[]>;
+
+interface AccountSettingsResponse {
+  cryptoAddresses?: Partial<Record<ChainSymbol, string | string[]>>;
+}
+
+const EMPTY_ADDRESS_BOOK: CryptoAddressBook = {
+  BTC: [],
+  ETH: [],
+  LTC: [],
+  SOL: [],
+};
+
+function normalizeAddressEntries(raw: unknown): string[] {
+  const values = Array.isArray(raw)
+    ? raw
+    : String(raw || '')
+      .split(/[,\n]/)
+      .map((item) => item.trim());
+
+  return [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))];
+}
+
+function parseCryptoAddressBook(raw: AccountSettingsResponse['cryptoAddresses']): CryptoAddressBook {
+  if (!raw || typeof raw !== 'object') return EMPTY_ADDRESS_BOOK;
+  return {
+    BTC: normalizeAddressEntries(raw.BTC),
+    ETH: normalizeAddressEntries(raw.ETH),
+    LTC: normalizeAddressEntries(raw.LTC),
+    SOL: normalizeAddressEntries(raw.SOL),
+  };
+}
+
 // ─── Credit Scale ────────────────────────────────────────────────────────────
 // Key milestones: $2.50 → 2,000 | $10 → 10,000 | $95 → 100,000
 // Piecewise linear between anchors, then continues at $95 rate beyond.
@@ -52,7 +87,11 @@ export default function BuyCrypto() {
   const { user, refreshUser } = useAuth();
   const navigate = useNavigate();
 
+  const [addressBook, setAddressBook] = useState<CryptoAddressBook>(EMPTY_ADDRESS_BOOK);
   const [walletAddress, setWalletAddress] = useState('');
+  const [addressLoading, setAddressLoading] = useState(false);
+  const [redirectingToSettings, setRedirectingToSettings] = useState(false);
+  const [showMissingAddressModal, setShowMissingAddressModal] = useState(false);
 
   const [amount, setAmount] = useState(10);
   const [currencyIdx, setCurrencyIdx] = useState(0);
@@ -99,10 +138,64 @@ export default function BuyCrypto() {
     if (user) fetchHistory();
   }, [user, fetchHistory]);
 
+  useEffect(() => {
+    if (!user) return;
+
+    let cancelled = false;
+
+    const loadAddressBook = async () => {
+      setAddressLoading(true);
+      try {
+        const settings = await api.post<AccountSettingsResponse>('/api/account/settings', { email: user.email });
+        if (cancelled) return;
+
+        const parsed = parseCryptoAddressBook(settings.cryptoAddresses);
+        setAddressBook(parsed);
+
+        const hasAnySavedAddress = Object.values(parsed).some((list) => list.length > 0);
+        if (!hasAnySavedAddress) {
+          setShowMissingAddressModal(true);
+        }
+      } catch {
+        if (cancelled) return;
+        setSubmitResult({
+          success: false,
+          message: 'Could not load your saved wallet addresses. Please retry or open Account Settings > Crypto.',
+        });
+      } finally {
+        if (!cancelled) setAddressLoading(false);
+      }
+    };
+
+    loadAddressBook();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [navigate, user]);
+
+  const redirectToCryptoSettings = useCallback(() => {
+    if (redirectingToSettings) return;
+    setRedirectingToSettings(true);
+    setShowMissingAddressModal(false);
+    navigate('/account/settings?section=Crypto');
+  }, [navigate, redirectingToSettings]);
+
   const currency = CURRENCIES[currencyIdx];
+  const walletOptions = addressBook[currency.symbol as ChainSymbol] || [];
   const credits = creditsForDollars(amount);
   const bonus = bonusPercent(amount);
   const cryptoAmount = cryptoRate && cryptoRate > 0 ? (amount / cryptoRate).toFixed(6) : null;
+
+  useEffect(() => {
+    if (!walletOptions.length) {
+      setWalletAddress('');
+      return;
+    }
+    if (!walletOptions.includes(walletAddress)) {
+      setWalletAddress(walletOptions[0]);
+    }
+  }, [currency.symbol, walletAddress, walletOptions]);
 
   // Fetch live rate via server proxy (avoids CoinGecko CORS / rate-limit)
   const fetchRate = useCallback(async () => {
@@ -139,7 +232,7 @@ export default function BuyCrypto() {
   };
 
   const handleSubmit = async () => {
-    if (!user || !txHash.trim()) return;
+    if (!user || !txHash.trim() || !walletAddress.trim()) return;
     setSubmitting(true);
     setSubmitResult(null);
 
@@ -397,14 +490,18 @@ export default function BuyCrypto() {
         </div>
 
         <div>
-          <label className="text-xs text-text-muted mb-1 block">Wallet Address (required)</label>
-          <input
-            type="text"
+          <label className="text-xs text-text-muted mb-1 block">Sending Wallet Address (required)</label>
+          <select
             value={walletAddress}
             onChange={(e) => setWalletAddress(e.target.value)}
-            placeholder="0x....."
+            disabled={addressLoading || walletOptions.length === 0 || redirectingToSettings}
             className="w-full bg-surface-3 border border-surface-3 rounded-xl px-4 py-2.5 text-sm font-mono text-text focus:outline-none focus:border-brand placeholder:text-text-muted/50"
-          />
+          >
+            <option value="">Select your saved {currency.symbol} address</option>
+            {walletOptions.map((addr) => (
+              <option key={addr} value={addr}>{addr}</option>
+            ))}
+          </select>
         </div>
         {/* 
         <div>
@@ -450,7 +547,7 @@ export default function BuyCrypto() {
 
       <button
         onClick={handleSubmit}
-        disabled={submitting || !txHash.trim()}
+        disabled={submitting || !txHash.trim() || !walletAddress.trim() || addressLoading || redirectingToSettings}
         className="w-full py-3 rounded-xl bg-orange-500 text-white font-bold text-sm hover:bg-orange-600 transition-colors disabled:opacity-40 flex items-center justify-center gap-2"
       >
         {submitting ? (
@@ -566,6 +663,39 @@ export default function BuyCrypto() {
           </div>
         )}
       </div>
+
+      {showMissingAddressModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4"
+          onClick={redirectToCryptoSettings}
+        >
+          <div
+            className="w-full max-w-md bg-surface-2 border border-amber-400/40 rounded-2xl p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-bold text-text">Wallet Setup Required</h2>
+            <p className="text-sm text-text-muted mt-2">
+              To protect against spoofed crypto orders, you must register at least one wallet address in Account Settings under the Crypto section.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={redirectToCryptoSettings}
+                className="px-4 py-2 rounded-lg bg-brand text-white font-semibold text-sm hover:bg-brand-dark transition-colors"
+              >
+                OK
+              </button>
+              <button
+                type="button"
+                onClick={redirectToCryptoSettings}
+                className="px-4 py-2 rounded-lg bg-surface-3 text-text-muted text-sm hover:text-text transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

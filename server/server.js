@@ -709,6 +709,8 @@ const DEFAULT_EMAIL_NOTIFICATION_PREFS = {
   activity: true,
 };
 
+const CRYPTO_ADDRESS_KEYS = ['BTC', 'LTC', 'ETH', 'SOL'];
+
 const ACCOUNT_TYPE_VALUES = new Set(['personal', 'creator', 'business', 'private']);
 let accountSettingsColumnsEnsured = false;
 const pendingPhoneOtps = new Map();
@@ -733,6 +735,82 @@ function parseEmailNotificationPrefs(raw) {
   }
 }
 
+function parseCryptoAddresses(raw) {
+  const records = parseCryptoAddressRecords(raw);
+  return {
+    BTC: records.BTC.address,
+    LTC: records.LTC.address,
+    ETH: records.ETH.address,
+    SOL: records.SOL.address,
+  };
+}
+
+function parseCryptoAddressRecords(raw) {
+  const empty = {
+    BTC: { address: '', registeredAt: null },
+    LTC: { address: '', registeredAt: null },
+    ETH: { address: '', registeredAt: null },
+    SOL: { address: '', registeredAt: null },
+  };
+
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {});
+
+    const normalizeRecord = (value) => {
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const address = String(value.address || '').trim();
+        const registeredAtRaw = String(value.registeredAt || value.registered_at || '').trim();
+        return {
+          address,
+          registeredAt: registeredAtRaw || null,
+        };
+      }
+
+      return {
+        address: String(value || '').trim(),
+        registeredAt: null,
+      };
+    };
+
+    return {
+      BTC: normalizeRecord(parsed.BTC),
+      LTC: normalizeRecord(parsed.LTC),
+      ETH: normalizeRecord(parsed.ETH),
+      SOL: normalizeRecord(parsed.SOL),
+    };
+  } catch {
+    return empty;
+  }
+}
+
+function sanitizeCryptoAddress(value) {
+  return String(value || '').trim();
+}
+
+function validateCryptoAddress(symbol, address) {
+  if (!address) return null;
+  if (address.length < 20 || address.length > 128) {
+    return `${symbol} address must be between 20 and 128 characters`;
+  }
+  if (!/^[A-Za-z0-9]+$/.test(address)) {
+    return `${symbol} address can only contain letters and numbers`;
+  }
+  return null;
+}
+
+function cryptoAddressesEqual(symbol, left, right) {
+  const a = String(left || '').trim();
+  const b = String(right || '').trim();
+  if (!a || !b) return false;
+
+  // ETH addresses are case-insensitive (checksum casing should not affect ownership checks).
+  if (String(symbol || '').toUpperCase() === 'ETH') {
+    return a.toLowerCase() === b.toLowerCase();
+  }
+
+  return a === b;
+}
+
 async function ensureAccountSettingsColumns() {
   if (accountSettingsColumnsEnsured) return;
 
@@ -740,7 +818,7 @@ async function ensureAccountSettingsColumns() {
     `SELECT COLUMN_NAME FROM information_schema.COLUMNS
      WHERE TABLE_SCHEMA = DATABASE()
        AND TABLE_NAME = 'userData'
-       AND COLUMN_NAME IN ('accountType', 'smsAlertsEnabled', 'phoneVerified', 'emailNotifications')`
+       AND COLUMN_NAME IN ('accountType', 'smsAlertsEnabled', 'phoneVerified', 'emailNotifications', 'CryptoAddresses')`
   );
 
   const existing = new Set((rows || []).map((r) => r.COLUMN_NAME));
@@ -750,6 +828,7 @@ async function ensureAccountSettingsColumns() {
   if (!existing.has('smsAlertsEnabled')) alters.push('ADD COLUMN smsAlertsEnabled TINYINT(1) NOT NULL DEFAULT 0');
   if (!existing.has('phoneVerified')) alters.push('ADD COLUMN phoneVerified TINYINT(1) NOT NULL DEFAULT 0');
   if (!existing.has('emailNotifications')) alters.push('ADD COLUMN emailNotifications TEXT DEFAULT NULL');
+  if (!existing.has('CryptoAddresses')) alters.push('ADD COLUMN CryptoAddresses TEXT DEFAULT NULL');
 
   if (alters.length > 0) {
     await knex.raw(`ALTER TABLE userData ${alters.join(', ')}`);
@@ -903,21 +982,142 @@ server.post(PROXY + '/api/account/settings', authenticateToken, async (req, res)
 
     const row = await knex('userData')
       .where('id', userId)
-      .select('accountType', 'accountPlan', 'phoneNumber', 'smsAlertsEnabled', 'twoFactorEnabled', 'emailNotifications')
+      .select('accountType', 'accountPlan', 'phoneNumber', 'smsAlertsEnabled', 'twoFactorEnabled', 'emailNotifications', 'CryptoAddresses')
       .first();
 
     if (!row) return res.status(404).json({ message: 'User not found' });
 
+    const cryptoRecords = parseCryptoAddressRecords(row.CryptoAddresses);
     return res.json({
       phoneNumber: row.phoneNumber || '',
       smsAlertsEnabled: Boolean(row.smsAlertsEnabled),
       accountType: row.accountType || row.accountPlan || 'personal',
       twoFactorEnabled: Boolean(row.twoFactorEnabled),
       emailNotifications: parseEmailNotificationPrefs(row.emailNotifications),
+      cryptoAddresses: {
+        BTC: cryptoRecords.BTC.address,
+        LTC: cryptoRecords.LTC.address,
+        ETH: cryptoRecords.ETH.address,
+        SOL: cryptoRecords.SOL.address,
+      },
+      cryptoAddressRegistrations: {
+        BTC: cryptoRecords.BTC.registeredAt,
+        LTC: cryptoRecords.LTC.registeredAt,
+        ETH: cryptoRecords.ETH.registeredAt,
+        SOL: cryptoRecords.SOL.registeredAt,
+      },
     });
   } catch (error) {
     console.error('POST /api/account/settings error:', error);
     return res.status(500).json({ message: 'Failed to load account settings' });
+  }
+});
+
+server.post(PROXY + '/api/account/crypto-addresses', authenticateToken, async (req, res) => {
+  try {
+    await ensureAccountSettingsColumns();
+
+    const userId = String(req.user?.id || '').trim();
+    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+
+    const payload = req.body?.cryptoAddresses || req.body?.addresses || {};
+    const currentRow = await knex('userData')
+      .where('id', userId)
+      .select('CryptoAddresses')
+      .first();
+
+    const currentRecords = parseCryptoAddressRecords(currentRow?.CryptoAddresses);
+    const nowIso = new Date().toISOString();
+
+    const normalized = {
+      BTC: sanitizeCryptoAddress(payload.BTC),
+      LTC: sanitizeCryptoAddress(payload.LTC),
+      ETH: sanitizeCryptoAddress(payload.ETH),
+      SOL: sanitizeCryptoAddress(payload.SOL),
+    };
+
+    const validationError = CRYPTO_ADDRESS_KEYS
+      .map((symbol) => validateCryptoAddress(symbol, normalized[symbol]))
+      .find(Boolean);
+    if (validationError) {
+      return res.status(400).json({ message: validationError });
+    }
+
+    const rows = await knex('userData')
+      .whereNot('id', userId)
+      .whereNotNull('CryptoAddresses')
+      .where('CryptoAddresses', '<>', '')
+      .select('id', 'username', 'CryptoAddresses');
+
+    for (const row of rows) {
+      const existing = parseCryptoAddresses(row.CryptoAddresses);
+      for (const symbol of CRYPTO_ADDRESS_KEYS) {
+        if (normalized[symbol] && cryptoAddressesEqual(symbol, normalized[symbol], existing[symbol])) {
+          return res.status(409).json({
+            message: `${symbol} address is already claimed by another account`,
+            symbol,
+          });
+        }
+      }
+    }
+
+    const addressRecords = {
+      BTC: {
+        address: normalized.BTC,
+        registeredAt: normalized.BTC
+          ? (normalized.BTC !== currentRecords.BTC.address || !currentRecords.BTC.registeredAt
+            ? nowIso
+            : currentRecords.BTC.registeredAt)
+          : null,
+      },
+      LTC: {
+        address: normalized.LTC,
+        registeredAt: normalized.LTC
+          ? (normalized.LTC !== currentRecords.LTC.address || !currentRecords.LTC.registeredAt
+            ? nowIso
+            : currentRecords.LTC.registeredAt)
+          : null,
+      },
+      ETH: {
+        address: normalized.ETH,
+        registeredAt: normalized.ETH
+          ? (normalized.ETH !== currentRecords.ETH.address || !currentRecords.ETH.registeredAt
+            ? nowIso
+            : currentRecords.ETH.registeredAt)
+          : null,
+      },
+      SOL: {
+        address: normalized.SOL,
+        registeredAt: normalized.SOL
+          ? (normalized.SOL !== currentRecords.SOL.address || !currentRecords.SOL.registeredAt
+            ? nowIso
+            : currentRecords.SOL.registeredAt)
+          : null,
+      },
+    };
+
+    await knex('userData')
+      .where('id', userId)
+      .update({ CryptoAddresses: JSON.stringify(addressRecords) });
+
+    return res.json({
+      success: true,
+      cryptoAddresses: {
+        BTC: addressRecords.BTC.address,
+        LTC: addressRecords.LTC.address,
+        ETH: addressRecords.ETH.address,
+        SOL: addressRecords.SOL.address,
+      },
+      cryptoAddressRegistrations: {
+        BTC: addressRecords.BTC.registeredAt,
+        LTC: addressRecords.LTC.registeredAt,
+        ETH: addressRecords.ETH.registeredAt,
+        SOL: addressRecords.SOL.registeredAt,
+      },
+    });
+  } catch (error) {
+    console.error('POST /api/account/crypto-addresses error:', error);
+    return res.status(500).json({ message: 'Failed to save crypto addresses' });
   }
 });
 
@@ -4209,6 +4409,40 @@ server.post(PROXY + '/api/purchases/:username', authenticateToken, async (req, r
     const [userRow] = await knex('userData').where('username', username).select('id').limit(1);
     if (!userRow) return res.status(404).json({ error: 'User not found' });
     const userId = userRow.id;
+
+    // Wallet ownership guard: submitted wallet must be a registered wallet for this chain,
+    // and must not belong to a different user.
+    const submittedWallet = sanitizeCryptoAddress(walletAddress || sendingAddress || '');
+    if (!submittedWallet) {
+      return res.status(400).json({ error: 'Wallet address is required' });
+    }
+
+    const registeredWalletRows = await knex('userData')
+      .whereNotNull('CryptoAddresses')
+      .where('CryptoAddresses', '<>', '')
+      .select('id', 'username', 'CryptoAddresses');
+
+    let matchedWalletOwner = null;
+    for (const row of registeredWalletRows) {
+      const addresses = parseCryptoAddresses(row.CryptoAddresses);
+      const registeredForChain = addresses[sym] || '';
+      if (cryptoAddressesEqual(sym, submittedWallet, registeredForChain)) {
+        matchedWalletOwner = row;
+        break;
+      }
+    }
+
+    if (matchedWalletOwner && matchedWalletOwner.id !== userId) {
+      return res.status(409).json({
+        error: `${sym} wallet is registered to another user and cannot be used for this order.`,
+      });
+    }
+
+    if (!matchedWalletOwner) {
+      return res.status(400).json({
+        error: `This ${sym} wallet is not registered to your account. Add it in Account Settings > Crypto before submitting an order.`,
+      });
+    }
 
     // ── Duplicate guard ─────────────────────────────────────────────────────
     const [existingTx] = await knex('CreditPurchases').where('txHash', transactionId).select('id', 'status').limit(1);

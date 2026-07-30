@@ -824,7 +824,7 @@ export default function Explore() {
           Explore Drops
         </h1>
         <p className="text-sm text-text-muted mb-5">
-          Discover files worth burning for. Fund the countdown, unlock the drop.
+          Discover burn hot files dropped by creators you follow. Speed up the fuse by burning credits. And watch the countdown race to 0 to unlock the drop.
         </p>
         <div className="relative max-w-lg">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />

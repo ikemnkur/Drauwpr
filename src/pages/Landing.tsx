@@ -1,5 +1,7 @@
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import { useEffect } from 'react';
 import { Flame, Clock, Download, Users, ArrowRight, Zap, Shield, TrendingUp } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 
 const steps = [
   {
@@ -49,7 +51,23 @@ const stats = [
   { value: '99.9%', label: 'Uptime' },
 ];
 
+
 export default function Landing() {
+  const navigate = useNavigate();
+  const { isAuthenticated, isLoading } = useAuth();
+
+
+  // wait 10 seconds before redirecting to the explore page if the user is already logged in
+  useEffect(() => {
+    if (isLoading || !isAuthenticated) return;
+
+    const timer = setTimeout(() => {
+      navigate('/explore');
+    }, 10000);
+
+    return () => clearTimeout(timer);
+  }, [isAuthenticated, isLoading, navigate]);
+
   return (
     <div className="min-h-screen bg-[#111827] text-[#e2e8f0]">
       {/* Nav */}

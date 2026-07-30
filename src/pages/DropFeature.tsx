@@ -99,8 +99,8 @@ export default function DropFeature() {
     drop?.burnRate ?? 1,
     Boolean(drop && goalMet && drop.status !== 'dropped' && drop.status !== 'expired')
   );
-  
-  const isReleased = fuseTimeMs <= 0;
+
+  const isReleased = fuseTimeMs < 300;
 
   // const isCelebrationReady =
   //   !!drop &&
@@ -424,6 +424,7 @@ export default function DropFeature() {
   const unlockHours = Math.max(1, Math.ceil((goalNotMet ? baseFuseTimeMs : fuseTimeMs) / 3_600_000));
 
   const projectedDropDate = new Date(nowMs + (fuseTimeMs / Math.max(1, drop.burnRate)));
+  const createdDate = new Date(drop.createdAt);
   const bannerRaw = String(drop.thumbnailUrl || '').trim();
   const bannerUrl = bannerRaw
     ? (/^https?:\/\//i.test(bannerRaw)
@@ -564,13 +565,13 @@ export default function DropFeature() {
 
               </button>
             </div>
-            
+
           </div>
           <br />
-            <button
+          <button
             type="button"
             onClick={() => setShowDownloadInfoModal(true)}
-            className="w-full py-3 rounded-2xl bg-surface-3 border border-surface-3 text-text-muted font-semibold text-sm cursor-pointer hover:border-surface hover:text-text transition"
+            className="w-full py-3 rounded-2xl bg-surface-3 border border-surface-3 text-text-muted font-semibold text-sm cursor-pointer hover:border-surface hover:text-text transition download-cta-pulse"
             aria-label="Download information"
           >
             Download Now
@@ -619,6 +620,8 @@ export default function DropFeature() {
                   const todayDay = isTodayMonth ? todayDate.getDate() : -1;
                   const isDropMonth = projectedDropDate.getFullYear() === year && projectedDropDate.getMonth() === month;
                   const dropDay = isDropMonth ? projectedDropDate.getDate() : -1;
+                  const isCreatedMonth = createdDate.getFullYear() === year && createdDate.getMonth() === month;
+                  const createdDay = isCreatedMonth ? createdDate.getDate() : -1;
                   const isExpiryMonth = expiryDate.getFullYear() === year && expiryDate.getMonth() === month;
                   const expiryDay = isExpiryMonth ? expiryDate.getDate() : -1;
 
@@ -634,6 +637,7 @@ export default function DropFeature() {
                         ))}
                         {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((day) => {
                           const isDropDay = day === dropDay;
+                          const isCreatedDay = day === createdDay;
                           const isExpiryDay = day === expiryDay;
                           const isToday = day === todayDay;
 
@@ -641,7 +645,7 @@ export default function DropFeature() {
                             <div
                               key={`${year}-${month}-${day}`}
                               className={[
-                                'w-6 h-6 flex items-center justify-center rounded-lg text-[11px] font-mono transition',
+                                'w-6 h-6 relative flex items-center justify-center rounded-lg text-[11px] font-mono transition',
                                 isDropDay && isExpiryDay
                                   ? `bg-gradient-to-r from-brand to-red-500 text-white font-bold ring-2 ring-brand/40 scale-110 ${dropDayPulse ? 'animate-pulse' : ''}`
                                   : isDropDay
@@ -654,6 +658,12 @@ export default function DropFeature() {
                               ].join(' ')}
                             >
                               {day}
+                              {isCreatedDay && (
+                                <span
+                                  className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full bg-purple-400 ring-1 ring-purple-300/60"
+                                  title="Created date"
+                                />
+                              )}
                             </div>
                           );
                         })}
@@ -664,13 +674,20 @@ export default function DropFeature() {
               </div>
 
               <div style={{ display: "flex", gap: "1rem" }}>
-
+                <div className="mt-2 text-center border-2 border-purple-500/40 rounded-xl px-3 py-1.5">
+                  <p className="text-xs font-bold text-purple-300">
+                    🟣 {createdDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                  </p>
+                  <p className="text-[10px] text-[#94a3b8] mt-0.5">
+                    created on
+                  </p>
+                </div>
                 <div className="mt-2 text-center border-2 border-orange-500/40 rounded-xl px-3 py-1.5">
                   <p className="text-xs font-bold text-orange-400">
                     🔥 {dropDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
                   </p>
                   <p className="text-[10px] text-[#94a3b8] mt-0.5">
-                    {isReleased ? 'drop date' : 'possible drop on'}
+                    {isReleased ? 'scheduled drop date' : 'possible drop on'}
                   </p>
                 </div>
                 <div className="mt-2 text-center border-2 border-red-500/40 rounded-xl px-3 py-1.5">
@@ -678,9 +695,10 @@ export default function DropFeature() {
                     💀 {dropExpiryDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
                   </p>
                   <p className="text-[10px] text-[#94a3b8] mt-0.5">
-                    {isReleased ? 'expired on' : 'possible deadline'}
+                    {isReleased ? 'expired on' : 'expires on'}
                   </p>
                 </div>
+
               </div>
             </div>
           </div>
@@ -763,7 +781,7 @@ export default function DropFeature() {
 
         {/* Right: Contribute form */}
         <div className="space-y-4">
-        
+
 
           {/* Hide contribute form when drop is expired without reaching goal */}
           {drop.status !== 'expired' && !(Date.now() > (stallExpiresAt ?? drop.expiresAt) && drop.currentContributions < drop.goalAmount) ? (
@@ -778,7 +796,7 @@ export default function DropFeature() {
             </div>
           )}
 
-                    {/* Contributors */}
+          {/* Contributors */}
           <ContributorList contributors={contributors} />
 
           {/* Share box */}
@@ -974,11 +992,11 @@ export default function DropFeature() {
                 This download should drop/unlock in <span className="font-semibold text-white">{unlockHours} hour{unlockHours === 1 ? '' : 's'}</span> after the donation goal reaches <span className="font-semibold text-white">{unlockThresholdPct}%</span>. It can be sped up by contributing more credits to speed up the countdown.
               </p>
               <p className="text-sm text-[#94a3b8]">
-                Current progress: <span className="font-semibold text-white">{goalProgressPct.toFixed(1)}%</span> goal met. 
+                Current progress: <span className="font-semibold text-white">{goalProgressPct.toFixed(1)}%</span> goal met.
               </p>
 
-               <p className="text-sm text-[#94a3b8]">
-                The Drop will expire and be canceled if the donation goal is not met within the specified time. Time remaining: <span className="font-semibold text-white">{Math.round(totalMinutesLeft*10/60)/10} hours</span>.
+              <p className="text-sm text-[#94a3b8]">
+                The Drop will expire and be canceled if the donation goal is not met within the specified time. Time remaining: <span className="font-semibold text-white">{Math.round(totalMinutesLeft * 10 / 60) / 10} hours</span>.
               </p>
               <p className="text-sm text-[#cbd5e1]">
                 Become a contributor today to speed up and unlock the drop.

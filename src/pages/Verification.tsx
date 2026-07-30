@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   ShieldCheck, Camera, Upload, CreditCard, ArrowLeft, Smartphone,
   CheckCircle, AlertCircle, Loader2, QrCode, CheckCircle2, Copy, Check,
@@ -13,6 +13,12 @@ import { useAuth } from '../context/AuthContext';
 
 type TaskId = 'email' | 'phone' | 'docs' | 'payment';
 type Chain = 'BTC' | 'ETH' | 'LTC' | 'SOL';
+
+type CryptoAddressBook = Record<Chain, string[]>;
+
+interface AccountSettingsResponse {
+  cryptoAddresses?: Partial<Record<Chain, string | string[]>>;
+}
 
 interface CryptoAmounts {
   BTC: { amount1: string; amount2: string };
@@ -56,6 +62,33 @@ const TASKS: { id: TaskId; label: string; icon: typeof Camera }[] = [
   { id: 'payment', label: 'Crypto', icon: CreditCard },
 ];
 
+const EMPTY_ADDRESS_BOOK: CryptoAddressBook = {
+  BTC: [],
+  ETH: [],
+  LTC: [],
+  SOL: [],
+};
+
+function normalizeAddressEntries(raw: unknown): string[] {
+  const values = Array.isArray(raw)
+    ? raw
+    : String(raw || '')
+      .split(/[,\n]/)
+      .map((item) => item.trim());
+
+  return [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))];
+}
+
+function parseCryptoAddressBook(raw: AccountSettingsResponse['cryptoAddresses']): CryptoAddressBook {
+  if (!raw || typeof raw !== 'object') return EMPTY_ADDRESS_BOOK;
+  return {
+    BTC: normalizeAddressEntries(raw.BTC),
+    ETH: normalizeAddressEntries(raw.ETH),
+    LTC: normalizeAddressEntries(raw.LTC),
+    SOL: normalizeAddressEntries(raw.SOL),
+  };
+}
+
 function validateEmail(value: string) {
   const i = value.indexOf('@');
   return i > 0 && value.lastIndexOf('.') > i && !value.endsWith('.') && !value.endsWith('@');
@@ -66,6 +99,7 @@ function validateEmail(value: string) {
 export default function Verification() {
   const { user, refreshUser } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
 
   const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const taskFromUrl = (queryParams.get('task') as TaskId | null) || null;
@@ -114,9 +148,14 @@ export default function Verification() {
   const [currencyIdx, setCurrencyIdx] = useState(0);
   const [copied, setCopied] = useState(false);
   const [showQr, setShowQr] = useState(false);
+  const [addressBook, setAddressBook] = useState<CryptoAddressBook>(EMPTY_ADDRESS_BOOK);
+  const [addressLoading, setAddressLoading] = useState(false);
+  const [showMissingAddressModal, setShowMissingAddressModal] = useState(false);
+  const [redirectingToSettings, setRedirectingToSettings] = useState(false);
 
   const currency = CURRENCIES[currencyIdx];
   const chain = currency.symbol as Chain;
+  const walletOptions = addressBook[chain] || [];
 
   const allDone = emailVerified && phoneVerified && docsUploaded && paymentVerified;
 
@@ -157,6 +196,57 @@ export default function Verification() {
   useEffect(() => {
     if (!email && user?.email) setEmail(user.email);
   }, [email, user]);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+
+    const loadAddressBook = async () => {
+      setAddressLoading(true);
+      try {
+        const settings = await api.post<AccountSettingsResponse>('/api/account/settings', { email: user.email });
+        if (cancelled) return;
+
+        const parsed = parseCryptoAddressBook(settings.cryptoAddresses);
+        setAddressBook(parsed);
+
+        const hasAnySavedAddress = Object.values(parsed).some((list) => list.length > 0);
+        if (!hasAnySavedAddress) {
+          setShowMissingAddressModal(true);
+        }
+      } catch {
+        if (!cancelled) {
+          setError('Could not load your saved wallet addresses. Please retry or update Account Settings > Crypto.');
+        }
+      } finally {
+        if (!cancelled) setAddressLoading(false);
+      }
+    };
+
+    loadAddressBook();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  useEffect(() => {
+    if (!walletOptions.length) {
+      setWalletAddress('');
+      return;
+    }
+
+    if (!walletOptions.includes(walletAddress)) {
+      setWalletAddress(walletOptions[0]);
+    }
+  }, [chain, walletAddress, walletOptions]);
+
+  const redirectToCryptoSettings = useCallback(() => {
+    if (redirectingToSettings) return;
+    setRedirectingToSettings(true);
+    setShowMissingAddressModal(false);
+    navigate('/account/settings?section=Crypto');
+  }, [navigate, redirectingToSettings]);
 
   const handleVerifyEmail = useCallback(async (overrideEmail?: string, overrideCode?: string) => {
     const emailVal = (overrideEmail ?? email).trim();
@@ -711,13 +801,22 @@ export default function Verification() {
           {/* User's wallet address */}
           <div>
             <label className="text-sm text-text-muted block mb-1">Your {CHAIN_LABELS[chain]} Wallet Address</label>
-            <input
-              type="text"
+            <select
               value={walletAddress}
               onChange={(e) => setWalletAddress(e.target.value)}
-              placeholder={`Enter your ${chain} address`}
+              disabled={addressLoading || walletOptions.length === 0 || redirectingToSettings}
               className="w-full bg-surface-3 border border-surface-3 rounded-xl px-4 py-2.5 text-sm text-text font-mono focus:outline-none focus:border-brand"
-            />
+            >
+              <option value="">Select your saved {chain} wallet</option>
+              {walletOptions.map((addr) => (
+                <option key={addr} value={addr}>{addr}</option>
+              ))}
+            </select>
+            {walletOptions.length === 0 && !addressLoading && (
+              <p className="text-xs text-amber-400 mt-1">
+                No saved {chain} wallet found. Add one in Account Settings &gt; Crypto.
+              </p>
+            )}
           </div>
 
           {/* Transaction hash 1 */}
@@ -746,13 +845,46 @@ export default function Verification() {
 
           <button
             onClick={handleVerifyPayment}
-            disabled={!walletAddress.trim() || !txHash.trim() || !txHash2.trim() || verifying || paymentVerified}
+            disabled={!walletAddress.trim() || !txHash.trim() || !txHash2.trim() || verifying || paymentVerified || addressLoading || redirectingToSettings}
             className="w-full py-3 rounded-xl bg-brand text-white font-bold text-sm hover:bg-brand-dark transition-colors disabled:opacity-40 flex items-center justify-center gap-2"
           >
             {verifying ? <><Loader2 className="w-4 h-4 animate-spin" /> Verifying…</>
               : paymentVerified ? <><CheckCircle className="w-4 h-4" /> Verified</>
               : <><ShieldCheck className="w-4 h-4" /> Submit Payment Proof</>}
           </button>
+        </div>
+      )}
+
+      {showMissingAddressModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4"
+          onClick={redirectToCryptoSettings}
+        >
+          <div
+            className="w-full max-w-md bg-surface-2 border border-amber-400/40 rounded-2xl p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-bold text-text">Wallet Setup Required</h2>
+            <p className="text-sm text-text-muted mt-2">
+              To continue micro-payment verification, register at least one crypto wallet address in Account Settings under the Crypto section.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={redirectToCryptoSettings}
+                className="px-4 py-2 rounded-lg bg-brand text-white font-semibold text-sm hover:bg-brand-dark transition-colors"
+              >
+                OK
+              </button>
+              <button
+                type="button"
+                onClick={redirectToCryptoSettings}
+                className="px-4 py-2 rounded-lg bg-surface-3 text-text-muted text-sm hover:text-text transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

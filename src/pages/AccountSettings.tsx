@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import {
   ArrowLeft, User, ShieldCheck, Smartphone, Bell, KeyRound, Trash2,
   Loader2, Check, AlertCircle, QrCode, Copy, Eye, EyeOff, Sun, Moon,
@@ -9,7 +9,7 @@ import { api, ApiError } from '../lib/api';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type SectionId = 'profile' | 'appearance' | 'security' | 'phone' | 'notifications' | 'password' | 'danger';
+type SectionId = 'profile' | 'appearance' | 'security' | 'phone' | 'notifications' | 'password' | 'Crypto' | 'danger';
 type ThemeMode = 'light' | 'dark';
 
 type AccountType = 'business' | 'creator' | 'personal' | 'private';
@@ -20,6 +20,14 @@ interface SettingsResponse {
   accountType?: AccountType;
   twoFactorEnabled?: boolean;
   emailNotifications?: EmailNotifications;
+  cryptoAddresses?: CryptoAddresses;
+}
+
+interface CryptoAddresses {
+  BTC: string;
+  LTC: string;
+  ETH: string;
+  SOL: string;
 }
 
 interface EmailNotifications {
@@ -41,6 +49,7 @@ const SECTIONS: { id: SectionId; label: string; icon: typeof User }[] = [
   { id: 'phone', label: 'Phone & SMS', icon: Smartphone },
   { id: 'notifications', label: 'Email Notifications', icon: Bell },
   { id: 'password', label: 'Password', icon: KeyRound },
+  { id: 'Crypto', label: 'Crypto', icon: QrCode },
   { id: 'danger', label: 'Delete Account', icon: Trash2 },
 ];
 
@@ -57,7 +66,16 @@ const ACCOUNT_TYPES: { value: AccountType; label: string; desc: string }[] = [
 
 export default function AccountSettings() {
   const { user, logout } = useAuth();
-  const [active, setActive] = useState<SectionId>('profile');
+  const location = useLocation();
+
+  const sectionFromUrl = (() => {
+    const params = new URLSearchParams(location.search);
+    const requested = String(params.get('section') || '').trim();
+    const match = SECTIONS.find((s) => s.id.toLowerCase() === requested.toLowerCase());
+    return (match?.id || 'profile') as SectionId;
+  })();
+
+  const [active, setActive] = useState<SectionId>(sectionFromUrl);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<Toast | null>(null);
 
@@ -77,6 +95,10 @@ export default function AccountSettings() {
       .catch(() => showToast({ type: 'error', message: 'Failed to load settings' }))
       .finally(() => setLoading(false));
   }, [user, showToast]);
+
+  useEffect(() => {
+    setActive(sectionFromUrl);
+  }, [sectionFromUrl]);
 
   if (loading) {
     return (
@@ -135,6 +157,7 @@ export default function AccountSettings() {
           {active === 'phone' && <PhoneSection settings={settings} onToast={showToast} />}
           {active === 'notifications' && <NotificationsSection settings={settings} onToast={showToast} />}
           {active === 'password' && <PasswordSection onToast={showToast} />}
+          {active === 'Crypto' && <CryptoSection settings={settings} onToast={showToast} />}
           {active === 'danger' && <DangerSection onToast={showToast} onDeleted={logout} />}
         </div>
       </div>
@@ -675,6 +698,103 @@ function PasswordSection({ onToast }: { onToast: (t: Toast) => void }) {
     </form>
   );
 }
+
+// ─── Section: Crypto ─────────────────────────────────────────────────────────
+
+function CryptoSection({ settings, onToast }: { settings: SettingsResponse | null; onToast: (t: Toast) => void }) {
+  const [saving, setSaving] = useState(false);
+  const [addresses, setAddresses] = useState<CryptoAddresses>({
+    BTC: '',
+    LTC: '',
+    ETH: '',
+    SOL: '',
+  });
+
+  useEffect(() => {
+    const source = settings?.cryptoAddresses;
+    setAddresses({
+      BTC: String(source?.BTC || '').trim(),
+      LTC: String(source?.LTC || '').trim(),
+      ETH: String(source?.ETH || '').trim(),
+      SOL: String(source?.SOL || '').trim(),
+    });
+  }, [settings?.cryptoAddresses]);
+
+  const onChange = (key: keyof CryptoAddresses) => (value: string) => {
+    setAddresses((prev) => ({
+      ...prev,
+      [key]: value.replace(/\s+/g, ''),
+    }));
+  };
+
+  const saveAddresses = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await api.post('/api/account/crypto-addresses', { cryptoAddresses: addresses });
+      onToast({ type: 'success', message: 'Crypto addresses saved' });
+    } catch (err) {
+      onToast({ type: 'error', message: err instanceof ApiError ? err.message : 'Could not save addresses' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form onSubmit={saveAddresses}>
+      <Card title="Crypto Wallet Addresses" desc="Register payout/source addresses to prevent spoofed crypto payment claims.">
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+          <p className="text-sm font-medium text-amber-300">Fraud protection</p>
+          <p className="text-xs text-amber-100/80 mt-1">
+            These addresses are used as identity anchors during manual crypto order verification.
+            If an address is already claimed by another account, saving is blocked.
+          </p>
+        </div>
+
+        <div className="grid sm:grid-cols-2 gap-3">
+          <AddressField label="BTC" placeholder="bc1..." value={addresses.BTC} onChange={onChange('BTC')} />
+          <AddressField label="LTC" placeholder="ltc1..." value={addresses.LTC} onChange={onChange('LTC')} />
+          <AddressField label="ETH" placeholder="0x..." value={addresses.ETH} onChange={onChange('ETH')} />
+          <AddressField label="SOL" placeholder="Base58 wallet address" value={addresses.SOL} onChange={onChange('SOL')} />
+        </div>
+
+        <p className="text-xs text-text-muted">
+          Tip: only store addresses you directly control. Leave a field empty if you do not use that network.
+        </p>
+
+        <SaveButton loading={saving}>Save Wallet Addresses</SaveButton>
+      </Card>
+    </form>
+  );
+}
+
+function AddressField({
+  label,
+  value,
+  placeholder,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="block text-xs text-text-muted mb-1">{label} Address</span>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        autoComplete="off"
+        spellCheck={false}
+        className="w-full bg-surface-3 border border-surface-3 rounded-lg px-3 py-2.5 text-sm text-text focus:outline-none focus:border-brand"
+      />
+    </label>
+  );
+}
+
 
 // ─── Section: Danger Zone ────────────────────────────────────────────────────
 

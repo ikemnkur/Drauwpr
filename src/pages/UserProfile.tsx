@@ -1,6 +1,6 @@
 import { useParams, Link } from 'react-router-dom';
 import { SocialIcon } from 'react-social-icons';
-import { Heart, Star, Users, Package, CreditCard, Calendar, ArrowLeft, Flame, Globe, Pencil } from 'lucide-react';
+import { Heart, Star, Users, Package, CreditCard, Calendar, ArrowLeft, Flame, Globe, Pencil, Search, ChevronDown, ChevronUp } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { useAuth } from '../context/AuthContext';
@@ -60,6 +60,8 @@ export default function UserProfile() {
   const [following, setFollowing] = useState(false);
   const [followerCount, setFollowerCount] = useState(0);
   const [followLoading, setFollowLoading] = useState(false);
+  const [showUserStats, setShowUserStats] = useState(false);
+  const [dropQuery, setDropQuery] = useState('');
 
   useEffect(() => {
     if (!id) return;
@@ -126,8 +128,20 @@ export default function UserProfile() {
     );
   }
 
-  const activeDrops = userDrops.filter((d) => d.status === 'active' || d.status === 'pending');
-  const pastDrops = userDrops.filter((d) => d.status === 'dropped' || d.status === 'expired');
+  const dropQueryNorm = dropQuery.trim().toLowerCase();
+  const filteredDrops = userDrops.filter((d) => {
+    if (!dropQueryNorm) return true;
+    const tagsJoined = (d.tags || []).join(' ').toLowerCase();
+    return (
+      String(d.title || '').toLowerCase().includes(dropQueryNorm)
+      || String(d.description || '').toLowerCase().includes(dropQueryNorm)
+      || String(d.status || '').toLowerCase().includes(dropQueryNorm)
+      || tagsJoined.includes(dropQueryNorm)
+    );
+  });
+
+  const activeDrops = filteredDrops.filter((d) => d.status === 'active' || d.status === 'pending');
+  const pastDrops = filteredDrops.filter((d) => d.status === 'dropped' || d.status === 'expired');
   const releasedDrops = userDrops.filter((d) => d.status === 'dropped');
   const totalDrops = userDrops.length;
   const qualityRating = releasedDrops.length > 0
@@ -283,94 +297,119 @@ export default function UserProfile() {
 
       {/* Stats Table */}
       <div className="bg-surface rounded-2xl border border-surface-3 overflow-hidden">
-        <table className="w-full">
-          <tbody>
-            <tr className="border-b border-surface-3/80">
-              <td className="px-4 py-4 align-top">
-                <div className="flex items-start gap-3">
-                  <Star className={`mt-0.5 w-5 h-5 shrink-0 ${qualityColor}`} />
-                  <div>
-                    <p className="text-sm font-semibold text-text">Quality Rating</p>
-                    <p className="text-xs text-text-muted">Average quality rating from released/dropped drops</p>
+        <button
+          type="button"
+          onClick={() => setShowUserStats((prev) => !prev)}
+          className="w-full px-4 py-3 text-left flex items-center justify-between hover:bg-surface-2 transition"
+        >
+          <span className="text-sm font-semibold text-text">{showUserStats ? 'Hide User Stats' : 'Show User Stats'}</span>
+          {showUserStats ? <ChevronUp className="w-4 h-4 text-text-muted" /> : <ChevronDown className="w-4 h-4 text-text-muted" />}
+        </button>
+        {showUserStats && (
+          <table className="w-full border-t border-surface-3">
+            <tbody>
+              <tr className="border-b border-surface-3/80">
+                <td className="px-4 py-4 align-top">
+                  <div className="flex items-start gap-3">
+                    <Star className={`mt-0.5 w-5 h-5 shrink-0 ${qualityColor}`} />
+                    <div>
+                      <p className="text-sm font-semibold text-text">Quality Rating</p>
+                      <p className="text-xs text-text-muted">Average quality rating from released/dropped drops</p>
+                    </div>
                   </div>
-                </div>
-              </td>
-              <td className={`px-4 py-4 align-top text-right text-lg font-bold whitespace-nowrap ${qualityColor}`}>
-                {qualityRating == null ? '--' : `${qualityRating.toFixed(1)}%`}
-              </td>
-            </tr>
-            <tr className="border-b border-surface-3/80">
-              <td className="px-4 py-4 align-top">
-                <div className="flex items-start gap-3">
-                  <Users className="mt-0.5 w-5 h-5 shrink-0 text-brand" />
-                  <div>
-                    <p className="text-sm font-semibold text-text">Followers</p>
-                    <p className="text-xs text-text-muted">People following this creator</p>
+                </td>
+                <td className={`px-4 py-4 align-top text-right text-lg font-bold whitespace-nowrap ${qualityColor}`}>
+                  {qualityRating == null ? '--' : `${qualityRating.toFixed(1)}%`}
+                </td>
+              </tr>
+              <tr className="border-b border-surface-3/80">
+                <td className="px-4 py-4 align-top">
+                  <div className="flex items-start gap-3">
+                    <Users className="mt-0.5 w-5 h-5 shrink-0 text-brand" />
+                    <div>
+                      <p className="text-sm font-semibold text-text">Followers</p>
+                      <p className="text-xs text-text-muted">People following this creator</p>
+                    </div>
                   </div>
-                </div>
-              </td>
-              <td className="px-4 py-4 align-top text-right text-lg font-bold text-text whitespace-nowrap">
-                {followerCount.toLocaleString()}
-              </td>
-            </tr>
-            <tr className="border-b border-surface-3/80">
-              <td className="px-4 py-4 align-top">
-                <div className="flex items-start gap-3">
-                  <Package className="mt-0.5 w-5 h-5 shrink-0 text-brand" />
-                  <div>
-                    <p className="text-sm font-semibold text-text">Drops</p>
-                    <p className="text-xs text-text-muted">Total drops published by this creator</p>
+                </td>
+                <td className="px-4 py-4 align-top text-right text-lg font-bold text-text whitespace-nowrap">
+                  {followerCount.toLocaleString()}
+                </td>
+              </tr>
+              <tr className="border-b border-surface-3/80">
+                <td className="px-4 py-4 align-top">
+                  <div className="flex items-start gap-3">
+                    <Package className="mt-0.5 w-5 h-5 shrink-0 text-brand" />
+                    <div>
+                      <p className="text-sm font-semibold text-text">Drops</p>
+                      <p className="text-xs text-text-muted">Total drops published by this creator</p>
+                    </div>
                   </div>
-                </div>
-              </td>
-              <td className="px-4 py-4 align-top text-right text-lg font-bold text-text whitespace-nowrap">
-                {totalDrops.toLocaleString()}
-              </td>
-            </tr>
-            <tr className="border-b border-surface-3/80">
-              <td className="px-4 py-4 align-top">
-                <div className="flex items-start gap-3">
-                  <CreditCard className="mt-0.5 w-5 h-5 shrink-0 text-green-500" />
-                  <div>
-                    <p className="text-sm font-semibold text-text">Credits Earned</p>
-                    <p className="text-xs text-text-muted">Total credits earned across drops</p>
+                </td>
+                <td className="px-4 py-4 align-top text-right text-lg font-bold text-text whitespace-nowrap">
+                  {totalDrops.toLocaleString()}
+                </td>
+              </tr>
+              <tr className="border-b border-surface-3/80">
+                <td className="px-4 py-4 align-top">
+                  <div className="flex items-start gap-3">
+                    <CreditCard className="mt-0.5 w-5 h-5 shrink-0 text-green-500" />
+                    <div>
+                      <p className="text-sm font-semibold text-text">Credits Earned</p>
+                      <p className="text-xs text-text-muted">Total credits earned across drops</p>
+                    </div>
                   </div>
-                </div>
-              </td>
-              <td className="px-4 py-4 align-top text-right text-lg font-bold text-text whitespace-nowrap">
-                {(profile.totalCreditsEarned / 1000).toFixed(0)}K
-              </td>
-            </tr>
-            <tr className="border-b border-surface-3/80">
-              <td className="px-4 py-4 align-top">
-                <div className="flex items-start gap-3">
-                  <Heart className="mt-0.5 w-5 h-5 shrink-0 text-red-400" />
-                  <div>
-                    <p className="text-sm font-semibold text-text">Likes Received</p>
-                    <p className="text-xs text-text-muted">Last 60 days across this creator&apos;s drops</p>
+                </td>
+                <td className="px-4 py-4 align-top text-right text-lg font-bold text-text whitespace-nowrap">
+                  {(profile.totalCreditsEarned / 1000).toFixed(0)}K
+                </td>
+              </tr>
+              <tr className="border-b border-surface-3/80">
+                <td className="px-4 py-4 align-top">
+                  <div className="flex items-start gap-3">
+                    <Heart className="mt-0.5 w-5 h-5 shrink-0 text-red-400" />
+                    <div>
+                      <p className="text-sm font-semibold text-text">Likes Received</p>
+                      <p className="text-xs text-text-muted">Last 60 days across this creator&apos;s drops</p>
+                    </div>
                   </div>
-                </div>
-              </td>
-              <td className="px-4 py-4 align-top text-right text-lg font-bold text-text whitespace-nowrap">
-                {(profile.likesReceived60d ?? 0).toLocaleString()}
-              </td>
-            </tr>
-            <tr>
-              <td className="px-4 py-4 align-top">
-                <div className="flex items-start gap-3">
-                  <Heart className="mt-0.5 w-5 h-5 shrink-0 text-slate-400" />
-                  <div>
-                    <p className="text-sm font-semibold text-text">Dislikes Received</p>
-                    <p className="text-xs text-text-muted">Last 60 days across this creator&apos;s drops</p>
+                </td>
+                <td className="px-4 py-4 align-top text-right text-lg font-bold text-text whitespace-nowrap">
+                  {(profile.likesReceived60d ?? 0).toLocaleString()}
+                </td>
+              </tr>
+              <tr>
+                <td className="px-4 py-4 align-top">
+                  <div className="flex items-start gap-3">
+                    <Heart className="mt-0.5 w-5 h-5 shrink-0 text-slate-400" />
+                    <div>
+                      <p className="text-sm font-semibold text-text">Dislikes Received</p>
+                      <p className="text-xs text-text-muted">Last 60 days across this creator&apos;s drops</p>
+                    </div>
                   </div>
-                </div>
-              </td>
-              <td className="px-4 py-4 align-top text-right text-lg font-bold text-text whitespace-nowrap">
-                {(profile.dislikesReceived60d ?? 0).toLocaleString()}
-              </td>
-            </tr>
-          </tbody>
-        </table>
+                </td>
+                <td className="px-4 py-4 align-top text-right text-lg font-bold text-text whitespace-nowrap">
+                  {(profile.dislikesReceived60d ?? 0).toLocaleString()}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Drop Search */}
+      <div className="bg-surface rounded-2xl border border-surface-3 p-4">
+        <label className="text-xs text-text-muted mb-2 block">Search this creator&apos;s drops</label>
+        <div className="relative">
+          <Search className="w-4 h-4 text-text-muted absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={dropQuery}
+            onChange={(e) => setDropQuery(e.target.value)}
+            placeholder="Search by title, description, tag, or status"
+            className="w-full bg-surface-2 border border-surface-3 rounded-xl pl-10 pr-3 py-2.5 text-sm text-text focus:outline-none focus:border-brand"
+          />
+        </div>
       </div>
 
       {/* Active Drops */}
@@ -404,10 +443,12 @@ export default function UserProfile() {
       )}
 
       {/* No drops */}
-      {userDrops.length === 0 && (
+      {filteredDrops.length === 0 && (
         <div className="bg-surface rounded-xl border border-surface-3 p-8 text-center">
           <Package className="w-8 h-8 text-text-muted mx-auto mb-3" />
-          <p className="text-text-muted">This user hasn't created any drops yet.</p>
+          <p className="text-text-muted">
+            {dropQueryNorm ? 'No drops match your search.' : "This user hasn't created any drops yet."}
+          </p>
         </div>
       )}
 
